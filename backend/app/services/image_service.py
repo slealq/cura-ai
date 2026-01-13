@@ -1,0 +1,218 @@
+"""Image service for managing image operations."""
+import logging
+from datetime import datetime
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session, joinedload
+
+from app.models import Image, ImageMetadata, ImageSource, ImageStatus
+from app.services.storage import get_storage_service
+
+logger = logging.getLogger(__name__)
+
+
+class ImageService:
+    """Service for image CRUD and management operations."""
+
+    def __init__(self, db: Session):
+        self.db = db
+        self.storage = get_storage_service()
+
+    async def ingest_image(
+        self,
+        file_data: bytes,
+        filename: str,
+        source: ImageSource,
+        original_uri: str | None = None,
+    ) -> Image:
+        """
+        Ingest a new image into the system.
+
+        Args:
+            file_data: Raw image bytes
+            filename: Original filename
+            source: Image source type
+            original_uri: Original file URI if applicable
+
+        Returns:
+            Created Image model
+        """
+        # Compute hashes for deduplication
+        file_hash = self.storage.compute_file_hash(file_data)
+
+        # Check for duplicate
+        existing = self.db.query(Image).filter(Image.file_hash == file_hash).first()
+        if existing:
+            logger.info(f"Duplicate image detected: {filename} (hash: {file_hash[:16]}...)")
+            return existing
+
+        # Generate unique object key and save
+        object_key = self.storage.generate_object_key(filename)
+        mime_type = self.storage.get_mime_type(file_data)
+        width, height = self.storage.get_image_dimensions(file_data)
+
+        # Save image
+        await self.storage.save_image(file_data, object_key, mime_type)
+
+        # Generate thumbnails
+        thumbnails = await self.storage.generate_thumbnails(file_data, object_key)
+
+        # Compute perceptual hash
+        perceptual_hash = self.storage.compute_perceptual_hash(file_data)
+
+        # Create database record
+        image = Image(
+            source=source,
+            original_uri=original_uri,
+            object_key=object_key,
+            original_filename=filename,
+            file_hash=file_hash,
+            perceptual_hash=perceptual_hash,
+            width=width,
+            height=height,
+            file_size=len(file_data),
+            mime_type=mime_type,
+            thumbnail_uri_small=thumbnails.get("200"),
+            thumbnail_uri_medium=thumbnails.get("400"),
+            thumbnail_uri_large=thumbnails.get("800"),
+            status=ImageStatus.INGESTED,
+            ingested_at=datetime.utcnow(),
+        )
+
+        self.db.add(image)
+        self.db.commit()
+        self.db.refresh(image)
+
+        logger.info(f"Ingested image: {filename} -> {object_key}")
+        return image
+
+    def get_image(self, image_id: int) -> Image | None:
+        """Get image by ID."""
+        return self.db.query(Image).options(
+            joinedload(Image.image_metadata)
+        ).filter(Image.id == image_id).first()
+
+    def get_images(
+        self,
+        status: ImageStatus | None = None,
+        source: ImageSource | None = None,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> list[Image]:
+        """Get paginated list of images."""
+        query = self.db.query(Image).options(joinedload(Image.image_metadata))
+
+        if status:
+            query = query.filter(Image.status == status)
+        if source:
+            query = query.filter(Image.source == source)
+
+        return query.order_by(Image.created_at.desc()).offset(skip).limit(limit).all()
+
+    def get_images_by_ids(self, image_ids: list[int]) -> list[Image]:
+        """Get images by list of IDs."""
+        return self.db.query(Image).options(
+            joinedload(Image.image_metadata)
+        ).filter(Image.id.in_(image_ids)).all()
+
+    def get_images_for_clustering(self) -> list[Image]:
+        """Get all images with embeddings for clustering."""
+        return (
+            self.db.query(Image)
+            .options(joinedload(Image.image_metadata))
+            .filter(Image.status == ImageStatus.EMBEDDED)
+            .all()
+        )
+
+    def update_status(
+        self,
+        image_id: int,
+        status: ImageStatus,
+        error_message: str | None = None,
+    ) -> Image | None:
+        """Update image processing status."""
+        image = self.db.query(Image).filter(Image.id == image_id).first()
+        if image:
+            image.status = status
+            if error_message:
+                image.error_message = error_message
+                image.retry_count += 1
+            self.db.commit()
+            self.db.refresh(image)
+        return image
+
+    def save_metadata(
+        self,
+        image_id: int,
+        tags: dict[str, list[str]] | None = None,
+        dominant_colors: list[dict] | None = None,
+        caption_short: str | None = None,
+        description_long: str | None = None,
+        embedding: list[float] | None = None,
+        tagging_model: str | None = None,
+        caption_model: str | None = None,
+        embedding_model: str | None = None,
+        tagging_prompt_version: str | None = None,
+    ) -> ImageMetadata | None:
+        """Save or update image metadata."""
+        metadata = self.db.query(ImageMetadata).filter(
+            ImageMetadata.image_id == image_id
+        ).first()
+
+        if not metadata:
+            metadata = ImageMetadata(image_id=image_id)
+            self.db.add(metadata)
+
+        if tags is not None:
+            metadata.tags = tags
+        if dominant_colors is not None:
+            metadata.dominant_colors = dominant_colors
+        if caption_short is not None:
+            metadata.caption_short = caption_short
+        if description_long is not None:
+            metadata.description_long = description_long
+        if embedding is not None:
+            metadata.embedding = embedding
+        if tagging_model is not None:
+            metadata.tagging_model = tagging_model
+        if caption_model is not None:
+            metadata.caption_model = caption_model
+        if embedding_model is not None:
+            metadata.embedding_model = embedding_model
+        if tagging_prompt_version is not None:
+            metadata.tagging_prompt_version = tagging_prompt_version
+
+        self.db.commit()
+        self.db.refresh(metadata)
+        return metadata
+
+    def count_images(
+        self,
+        status: ImageStatus | None = None,
+    ) -> int:
+        """Count images with optional status filter."""
+        query = self.db.query(Image)
+        if status:
+            query = query.filter(Image.status == status)
+        return query.count()
+
+    async def get_image_data(self, image_id: int) -> bytes | None:
+        """Get raw image data for processing."""
+        image = self.get_image(image_id)
+        if not image:
+            return None
+        return await self.storage.get_image(image.object_key)
+
+    def delete_image(self, image_id: int) -> bool:
+        """Delete an image and its metadata."""
+        image = self.db.query(Image).filter(Image.id == image_id).first()
+        if image:
+            self.db.delete(image)
+            self.db.commit()
+            return True
+        return False
+
+
+def get_image_service(db: Session) -> ImageService:
+    """Get image service instance."""
+    return ImageService(db)

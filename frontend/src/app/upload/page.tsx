@@ -1,0 +1,194 @@
+'use client';
+
+import { useState, useCallback } from 'react';
+import { useDropzone } from 'react-dropzone';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { Upload, X, Check, AlertCircle, Loader2 } from 'lucide-react';
+import { imagesApi } from '@/lib/api';
+import { cn, formatFileSize } from '@/lib/utils';
+
+interface FileWithPreview extends File {
+  preview?: string;
+}
+
+export default function UploadPage() {
+  const queryClient = useQueryClient();
+  const [files, setFiles] = useState<FileWithPreview[]>([]);
+
+  const uploadMutation = useMutation({
+    mutationFn: (files: File[]) => imagesApi.upload(files),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['images'] });
+      queryClient.invalidateQueries({ queryKey: ['stats'] });
+      setFiles([]);
+    },
+  });
+
+  const onDrop = useCallback((acceptedFiles: File[]) => {
+    const newFiles = acceptedFiles.map((file) =>
+      Object.assign(file, {
+        preview: URL.createObjectURL(file),
+      })
+    );
+    setFiles((prev) => [...prev, ...newFiles]);
+  }, []);
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: {
+      'image/*': ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'],
+    },
+  });
+
+  const removeFile = (index: number) => {
+    setFiles((prev) => {
+      const file = prev[index];
+      if (file.preview) {
+        URL.revokeObjectURL(file.preview);
+      }
+      return prev.filter((_, i) => i !== index);
+    });
+  };
+
+  const handleUpload = () => {
+    if (files.length > 0) {
+      uploadMutation.mutate(files);
+    }
+  };
+
+  return (
+    <div className="max-w-4xl mx-auto space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold">Upload Images</h1>
+        <p className="text-muted-foreground mt-1">
+          Upload design inspiration images to process and cluster
+        </p>
+      </div>
+
+      {/* Dropzone */}
+      <div
+        {...getRootProps()}
+        className={cn(
+          'border-2 border-dashed rounded-xl p-12 text-center cursor-pointer transition-colors',
+          isDragActive
+            ? 'border-primary bg-primary/5'
+            : 'border-border hover:border-primary/50 hover:bg-muted/50'
+        )}
+      >
+        <input {...getInputProps()} />
+        <Upload className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+        {isDragActive ? (
+          <p className="text-lg font-medium">Drop the images here</p>
+        ) : (
+          <>
+            <p className="text-lg font-medium">
+              Drag & drop images here, or click to select
+            </p>
+            <p className="text-sm text-muted-foreground mt-2">
+              Supports PNG, JPG, GIF, WebP, BMP
+            </p>
+          </>
+        )}
+      </div>
+
+      {/* File List */}
+      {files.length > 0 && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold">{files.length} files selected</h2>
+            <button
+              onClick={() => setFiles([])}
+              className="text-sm text-muted-foreground hover:text-foreground"
+            >
+              Clear all
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {files.map((file, index) => (
+              <div
+                key={`${file.name}-${index}`}
+                className="relative group bg-muted rounded-lg overflow-hidden"
+              >
+                {file.preview && (
+                  <img
+                    src={file.preview}
+                    alt={file.name}
+                    className="w-full aspect-square object-cover"
+                  />
+                )}
+                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors" />
+                <button
+                  onClick={() => removeFile(index)}
+                  className="absolute top-2 right-2 p-1 bg-white/90 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+                <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/80 to-transparent">
+                  <p className="text-white text-xs truncate">{file.name}</p>
+                  <p className="text-white/70 text-xs">
+                    {formatFileSize(file.size)}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <button
+            onClick={handleUpload}
+            disabled={uploadMutation.isPending}
+            className={cn(
+              'w-full py-3 rounded-lg font-medium transition-colors',
+              'bg-primary text-primary-foreground hover:bg-primary/90',
+              'disabled:opacity-50 disabled:cursor-not-allowed'
+            )}
+          >
+            {uploadMutation.isPending ? (
+              <span className="flex items-center justify-center gap-2">
+                <Loader2 className="h-5 w-5 animate-spin" />
+                Uploading...
+              </span>
+            ) : (
+              `Upload ${files.length} ${files.length === 1 ? 'Image' : 'Images'}`
+            )}
+          </button>
+        </div>
+      )}
+
+      {/* Upload Results */}
+      {uploadMutation.isSuccess && (
+        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+          <div className="flex items-start gap-3">
+            <Check className="h-5 w-5 text-green-600 mt-0.5" />
+            <div>
+              <h3 className="font-medium text-green-800">Upload Complete</h3>
+              <p className="text-sm text-green-700 mt-1">
+                {uploadMutation.data.uploaded.length} images uploaded and queued
+                for processing.
+              </p>
+              {uploadMutation.data.failed.length > 0 && (
+                <p className="text-sm text-red-600 mt-1">
+                  {uploadMutation.data.failed.length} images failed to upload.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {uploadMutation.isError && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-red-600 mt-0.5" />
+            <div>
+              <h3 className="font-medium text-red-800">Upload Failed</h3>
+              <p className="text-sm text-red-700 mt-1">
+                Something went wrong. Please try again.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
