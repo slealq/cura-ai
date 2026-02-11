@@ -1,7 +1,6 @@
 export interface ImageMetadata {
-  tags: Record<string, string[]>;
+  tags: string[];
   dominant_colors: Array<{ hex: string; weight: number }>;
-  caption_short: string | null;
   description_long: string | null;
   tagging_model: string | null;
   caption_model: string | null;
@@ -40,7 +39,7 @@ export interface Cluster {
   size: number;
   summary_title: string | null;
   summary_description: string | null;
-  common_tags: Record<string, string[]>;
+  common_tags: string[];
   representative_image_ids: number[];
   display_name: string | null;
   is_pinned: boolean;
@@ -72,6 +71,16 @@ export interface Job {
   started_at: string | null;
   completed_at: string | null;
   result: Record<string, unknown> | null;
+  image_id: number | null;
+  image_filename: string | null;
+  image_thumbnail: string | null;
+}
+
+export interface StepResponse {
+  status: string;
+  image_id: number;
+  step: string;
+  job_id: number;
 }
 
 export interface JobListResponse {
@@ -93,19 +102,6 @@ export interface PipelineStats {
   total_clusters: number;
 }
 
-export interface TagFilterOptions {
-  style: string[];
-  subject: string[];
-  medium: string[];
-  mood: string[];
-  color_palette: string[];
-  lighting: string[];
-  materials: string[];
-  composition: string[];
-  typography: string[];
-  era_reference: string[];
-}
-
 export interface SearchResponse {
   images: Image[];
   query: string;
@@ -123,4 +119,38 @@ export interface BatchUploadResponse {
   uploaded: UploadResponse[];
   failed: Array<{ filename: string; error: string }>;
   job_id: number | null;
+}
+
+export interface LogEntry {
+  id: number;
+  level: 'debug' | 'info' | 'warning' | 'error';
+  category: 'api_call' | 'task' | 'pipeline' | 'system';
+  image_id: number | null;
+  job_id: number | null;
+  task_name: string | null;
+  message: string;
+  provider: string | null;
+  model: string | null;
+  operation: string | null;
+  duration_ms: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  success: boolean | null;
+  extra: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface LogListResponse {
+  items: LogEntry[];
+  total: number;
+  skip: number;
+  limit: number;
+}
+
+export interface LogStats {
+  total_logs: number;
+  api_calls: number;
+  errors: number;
+  total_tokens: number;
+  avg_duration_ms: number | null;
 }

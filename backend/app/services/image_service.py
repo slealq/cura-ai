@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import Image, ImageMetadata, ImageSource, ImageStatus
+from app.models.image import STATUS_ORDER
 from app.services.storage import get_storage_service
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,7 @@ class ImageService:
     def get_images(
         self,
         status: ImageStatus | None = None,
+        min_status: ImageStatus | None = None,
         source: ImageSource | None = None,
         skip: int = 0,
         limit: int = 100,
@@ -104,6 +106,10 @@ class ImageService:
 
         if status:
             query = query.filter(Image.status == status)
+        elif min_status:
+            min_rank = STATUS_ORDER.get(min_status, 0)
+            eligible = [s for s, rank in STATUS_ORDER.items() if rank >= min_rank]
+            query = query.filter(Image.status.in_(eligible))
         if source:
             query = query.filter(Image.source == source)
 
@@ -144,9 +150,8 @@ class ImageService:
     def save_metadata(
         self,
         image_id: int,
-        tags: dict[str, list[str]] | None = None,
+        tags: list[str] | None = None,
         dominant_colors: list[dict] | None = None,
-        caption_short: str | None = None,
         description_long: str | None = None,
         embedding: list[float] | None = None,
         tagging_model: str | None = None,
@@ -167,8 +172,6 @@ class ImageService:
             metadata.tags = tags
         if dominant_colors is not None:
             metadata.dominant_colors = dominant_colors
-        if caption_short is not None:
-            metadata.caption_short = caption_short
         if description_long is not None:
             metadata.description_long = description_long
         if embedding is not None:
@@ -189,11 +192,16 @@ class ImageService:
     def count_images(
         self,
         status: ImageStatus | None = None,
+        min_status: ImageStatus | None = None,
     ) -> int:
         """Count images with optional status filter."""
         query = self.db.query(Image)
         if status:
             query = query.filter(Image.status == status)
+        elif min_status:
+            min_rank = STATUS_ORDER.get(min_status, 0)
+            eligible = [s for s, rank in STATUS_ORDER.items() if rank >= min_rank]
+            query = query.filter(Image.status.in_(eligible))
         return query.count()
 
     async def get_image_data(self, image_id: int) -> bytes | None:

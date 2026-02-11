@@ -1,20 +1,23 @@
-"""OpenAI provider implementation for tagging, captioning, and embedding."""
+"""OpenAI provider implementation for tagging, description, and embedding."""
 import base64
 import json
 import logging
+import time
 from typing import Any
 
 from openai import AsyncOpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.core.config import get_settings
+from app.models.pipeline_log import LogCategory, LogLevel
+from app.services.log_service import write_log
 from app.providers.base import (
-    BaseCaptioner,
     BaseClusterSummarizer,
+    BaseDescriber,
     BaseEmbedder,
     BaseTagger,
-    CaptionResult,
     ClusterSummaryResult,
+    DescriptionResult,
     EmbeddingResult,
     TaggingResult,
 )
@@ -23,50 +26,54 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 # Prompt version for reproducibility
-TAGGING_PROMPT_VERSION = "v1.0.0"
-CAPTION_PROMPT_VERSION = "v1.0.0"
+TAGGING_PROMPT_VERSION = "v2.0.0"
+DESCRIPTION_PROMPT_VERSION = "v2.0.0"
 
-TAGGING_PROMPT = """Analyze this design/inspiration image and return a JSON object with structured tags.
+TAGGING_PROMPT = """Analyze this image and return a JSON object with a flat list of tags for categorization purposes.
 
-Return ONLY a valid JSON object with these exact keys. Each value should be an array of relevant tags (lowercase, hyphenated for multi-word).
+Return ONLY a valid JSON object with a single key "tags" containing an array of relevant tags (lowercase, hyphenated for multi-word).
+
+Tags should categorize the image across these dimensions:
+- Framing: full-body, upper-body, lower-body, feet-close-up, face-close-up, hands-close-up, medium-shot, wide-shot
+- People: single-woman, single-man, multiple-people, couple, group
+- Clothing: nude, semi-nude, clothed, lingerie, swimwear, dress, casual, formal, heels, barefoot
+- Body features: soles-visible, toenails-visible, fingernails-visible, tattoos, piercings
+- Activity: standing, sitting, lying-down, walking, posing, kneeling, bending-over
+- Setting: indoor, outdoor, studio, bedroom, bathroom, beach, nature, urban
+- Content: portrait, candid, artistic, professional, selfie, mirror
+
+Only include tags that are clearly present or relevant.
 
 {
-  "style": ["minimal", "editorial", "brutalist", "organic", "geometric", "vintage", "modern", "luxurious", "playful", "industrial"],
-  "subject": ["portrait", "landscape", "product", "interior", "architecture", "food", "fashion", "abstract", "typography", "pattern"],
-  "medium": ["photo", "3d-render", "illustration", "collage", "painting", "vector", "mixed-media", "digital-art"],
-  "mood": ["calm", "energetic", "premium", "cozy", "dramatic", "whimsical", "serious", "dreamy", "bold"],
-  "color_palette": ["warm", "cool", "neutral", "vibrant", "muted", "monochrome", "pastel", "earth-tones", "high-contrast"],
-  "lighting": ["natural", "studio", "soft", "harsh", "dramatic", "ambient", "backlit", "golden-hour"],
-  "materials": ["wood", "metal", "glass", "fabric", "paper", "concrete", "ceramic", "leather", "natural-fibers"],
-  "composition": ["centered", "rule-of-thirds", "symmetrical", "asymmetrical", "negative-space", "layered", "grid", "diagonal"],
-  "typography": ["none", "serif", "sans-serif", "script", "display", "hand-lettered", "mixed"],
-  "era_reference": ["contemporary", "retro", "mid-century", "art-deco", "victorian", "futuristic", "timeless"]
-}
+  "tags": ["tag-1", "tag-2", "tag-3"]
+}"""
 
-Only include tags that are clearly present or relevant. Leave arrays empty if a category doesn't apply. Be consistent with the controlled vocabulary above."""
+DESCRIPTION_PROMPT = """Analyze this image and provide a detailed description organized by sections. The goal is that if someone uses this description to generate an image via AI, the result should match the original image as closely as possible.
 
-CAPTION_PROMPT = """Analyze this design/inspiration image and provide:
+Sections to cover (include all that are relevant):
 
-1. **caption_short**: A single sentence (max 20 words) describing what's shown. Plain language, no marketing speak.
+**Subject**: Person(s) - clothing, pose, position of hands and legs, action, body position and orientation.
 
-2. **description_long**: 3-6 bullet points focusing on design-relevant observations:
-   - Composition and layout
-   - Color palette and relationships
-   - Materials and textures visible
-   - Lighting quality and direction
-   - Typography if present
-   - Overall mood/aesthetic
-   - Potential use cases (web, print, branding, etc.)
+**Face & Hair**: Hair style, color, length. Facial expression, makeup, notable features.
 
-Format the description as markdown bullet points. Be specific and observational rather than interpretive. Use consistent design vocabulary.
+**Body Details**: Nails (fingers/toes) - colors, shape, length. Accessories, jewelry, tattoos.
+
+**Camera**: Camera angle, distance, perspective relative to subject. Framing (close-up, medium shot, full body).
+
+**Background**: Setting description, colors, objects, depth of field.
+
+**Lighting**: Quality, direction, color temperature, shadows.
+
+**Special Focus**: If the image emphasizes feet, describe feet in detail - toenails, nail colors, nail shapes, sole visibility, toe positioning. If adult content, describe what is visible, body positioning, and physical details explicitly.
+
+Be specific, observational, and thorough. Write in plain descriptive language. The description should be long and detailed enough to reproduce the image.
 
 Return as JSON:
 {
-  "caption_short": "...",
-  "description_long": "- bullet 1\\n- bullet 2\\n..."
+  "description": "## Subject\\n...\\n\\n## Face & Hair\\n...\\n\\n## Camera\\n..."
 }"""
 
-CLUSTER_SUMMARY_PROMPT = """You're summarizing a cluster of {size} similar design inspiration images.
+CLUSTER_SUMMARY_PROMPT = """You're summarizing a cluster of {size} similar images.
 
 Common tags in this cluster:
 {tags}
@@ -75,12 +82,11 @@ Sample descriptions from images in this cluster:
 {descriptions}
 
 Create:
-1. **summary_title**: A concise title (3-7 words) capturing the essence of this group. Use design terminology. Examples: "Minimalist Product Photography, Warm Tones", "Bold Editorial Typography, High Contrast"
+1. **summary_title**: A concise title (3-7 words) capturing the essence of this group.
 
 2. **summary_description**: 2-4 bullet points describing:
-   - The unifying visual style/aesthetic
-   - Common elements or techniques
-   - Typical use cases or applications
+   - The unifying visual style/content
+   - Common elements or features
    - What makes this group distinctive
 
 Return as JSON:
@@ -98,36 +104,66 @@ class OpenAITagger(BaseTagger):
         self.model = settings.openai_vision_model
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    async def tag_image(self, image_data: bytes, mime_type: str) -> TaggingResult:
+    async def tag_image(
+        self, image_data: bytes, mime_type: str, tag_guidance: str | None = None
+    ) -> TaggingResult:
         """Tag an image using OpenAI vision model."""
         base64_image = base64.b64encode(image_data).decode("utf-8")
 
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": TAGGING_PROMPT},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:{mime_type};base64,{base64_image}",
-                                "detail": "high",
+        # Build prompt with optional guidance
+        prompt = TAGGING_PROMPT
+        if tag_guidance:
+            prompt = f"{prompt}\n\nAdditional guidance: {tag_guidance}\n\nPlease incorporate this guidance when selecting tags."
+
+        start = time.monotonic()
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{mime_type};base64,{base64_image}",
+                                    "detail": "high",
+                                },
                             },
-                        },
-                    ],
-                }
-            ],
-            max_tokens=1000,
-            response_format={"type": "json_object"},
-        )
+                        ],
+                    }
+                ],
+                max_tokens=1000,
+                response_format={"type": "json_object"},
+            )
+            elapsed = (time.monotonic() - start) * 1000
+            usage = response.usage
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"OpenAI tagging completed ({self.model})",
+                provider="openai", model=self.model, operation="tag",
+                duration_ms=round(elapsed, 1),
+                input_tokens=usage.prompt_tokens if usage else None,
+                output_tokens=usage.completion_tokens if usage else None,
+                success=True,
+            )
+        except Exception as e:
+            elapsed = (time.monotonic() - start) * 1000
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"OpenAI tagging failed: {e}",
+                level=LogLevel.ERROR, provider="openai", model=self.model,
+                operation="tag", duration_ms=round(elapsed, 1), success=False,
+                extra={"error": str(e)},
+            )
+            raise
 
         content = response.choices[0].message.content
-        tags = json.loads(content) if content else {}
+        result = json.loads(content) if content else {}
 
         # Clean and validate tags
-        cleaned_tags = self._clean_tags(tags)
+        cleaned_tags = self._clean_tags(result)
 
         return TaggingResult(
             tags=cleaned_tags,
@@ -136,66 +172,90 @@ class OpenAITagger(BaseTagger):
             raw_response={"content": content, "usage": response.usage.model_dump() if response.usage else None},
         )
 
-    def _clean_tags(self, tags: dict[str, Any]) -> dict[str, list[str]]:
-        """Clean and validate tags structure."""
-        expected_keys = [
-            "style", "subject", "medium", "mood", "color_palette",
-            "lighting", "materials", "composition", "typography", "era_reference"
-        ]
-        cleaned = {}
-        for key in expected_keys:
-            value = tags.get(key, [])
-            if isinstance(value, list):
-                cleaned[key] = [str(v).lower().strip() for v in value if v]
-            elif isinstance(value, str):
-                cleaned[key] = [value.lower().strip()] if value else []
-            else:
-                cleaned[key] = []
-        return cleaned
+    def _clean_tags(self, raw: dict | list) -> list[str]:
+        """Clean and validate tags into a flat list."""
+        if isinstance(raw, dict):
+            tags = raw.get("tags", [])
+        elif isinstance(raw, list):
+            tags = raw
+        else:
+            tags = []
+        if not isinstance(tags, list):
+            tags = []
+        return [str(t).lower().strip() for t in tags if t]
 
     def get_model_name(self) -> str:
         return self.model
 
 
-class OpenAICaptioner(BaseCaptioner):
-    """OpenAI vision-based image captioner."""
+class OpenAIDescriber(BaseDescriber):
+    """OpenAI vision-based image describer."""
 
     def __init__(self):
         self.client = AsyncOpenAI(api_key=settings.openai_api_key)
         self.model = settings.openai_vision_model
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    async def caption_image(self, image_data: bytes, mime_type: str) -> CaptionResult:
-        """Generate caption and description for an image."""
+    async def describe_image(
+        self, image_data: bytes, mime_type: str, description_guidance: str | None = None
+    ) -> DescriptionResult:
+        """Generate a detailed description for an image."""
         base64_image = base64.b64encode(image_data).decode("utf-8")
 
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": CAPTION_PROMPT},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:{mime_type};base64,{base64_image}",
-                                "detail": "high",
+        # Build prompt with optional guidance
+        prompt = DESCRIPTION_PROMPT
+        if description_guidance:
+            prompt = f"{prompt}\n\nAdditional guidance: {description_guidance}\n\nPlease incorporate this guidance when generating the description."
+
+        start = time.monotonic()
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{mime_type};base64,{base64_image}",
+                                    "detail": "high",
+                                },
                             },
-                        },
-                    ],
-                }
-            ],
-            max_tokens=1500,
-            response_format={"type": "json_object"},
-        )
+                        ],
+                    }
+                ],
+                max_tokens=3000,
+                response_format={"type": "json_object"},
+            )
+            elapsed = (time.monotonic() - start) * 1000
+            usage = response.usage
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"OpenAI describe completed ({self.model})",
+                provider="openai", model=self.model, operation="describe",
+                duration_ms=round(elapsed, 1),
+                input_tokens=usage.prompt_tokens if usage else None,
+                output_tokens=usage.completion_tokens if usage else None,
+                success=True,
+            )
+        except Exception as e:
+            elapsed = (time.monotonic() - start) * 1000
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"OpenAI describe failed: {e}",
+                level=LogLevel.ERROR, provider="openai", model=self.model,
+                operation="describe", duration_ms=round(elapsed, 1), success=False,
+                extra={"error": str(e)},
+            )
+            raise
 
         content = response.choices[0].message.content
         result = json.loads(content) if content else {}
 
-        return CaptionResult(
-            caption_short=result.get("caption_short", ""),
-            description_long=result.get("description_long", ""),
+        return DescriptionResult(
+            description=result.get("description", ""),
             model=self.model,
             raw_response={"content": content, "usage": response.usage.model_dump() if response.usage else None},
         )
@@ -215,10 +275,32 @@ class OpenAIEmbedder(BaseEmbedder):
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def embed_text(self, text: str) -> EmbeddingResult:
         """Generate embedding for text."""
-        response = await self.client.embeddings.create(
-            model=self.model,
-            input=text,
-        )
+        start = time.monotonic()
+        try:
+            response = await self.client.embeddings.create(
+                model=self.model,
+                input=text,
+            )
+            elapsed = (time.monotonic() - start) * 1000
+            usage = response.usage
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"OpenAI embed completed ({self.model})",
+                provider="openai", model=self.model, operation="embed",
+                duration_ms=round(elapsed, 1),
+                input_tokens=usage.total_tokens if usage else None,
+                success=True,
+            )
+        except Exception as e:
+            elapsed = (time.monotonic() - start) * 1000
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"OpenAI embed failed: {e}",
+                level=LogLevel.ERROR, provider="openai", model=self.model,
+                operation="embed", duration_ms=round(elapsed, 1), success=False,
+                extra={"error": str(e)},
+            )
+            raise
 
         return EmbeddingResult(
             embedding=response.data[0].embedding,
@@ -260,16 +342,12 @@ class OpenAIClusterSummarizer(BaseClusterSummarizer):
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def summarize_cluster(
         self,
-        common_tags: dict[str, list[str]],
+        common_tags: list[str],
         sample_descriptions: list[str],
         cluster_size: int,
     ) -> ClusterSummaryResult:
         """Generate summary for a cluster of images."""
-        tags_str = "\n".join(
-            f"- {category}: {', '.join(tags)}"
-            for category, tags in common_tags.items()
-            if tags
-        )
+        tags_str = ", ".join(common_tags) if common_tags else "No common tags"
         descriptions_str = "\n\n".join(
             f"Image {i+1}:\n{desc}"
             for i, desc in enumerate(sample_descriptions[:5])
@@ -281,12 +359,35 @@ class OpenAIClusterSummarizer(BaseClusterSummarizer):
             descriptions=descriptions_str,
         )
 
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=500,
-            response_format={"type": "json_object"},
-        )
+        start = time.monotonic()
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=500,
+                response_format={"type": "json_object"},
+            )
+            elapsed = (time.monotonic() - start) * 1000
+            usage = response.usage
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"OpenAI summarize completed ({self.model})",
+                provider="openai", model=self.model, operation="summarize",
+                duration_ms=round(elapsed, 1),
+                input_tokens=usage.prompt_tokens if usage else None,
+                output_tokens=usage.completion_tokens if usage else None,
+                success=True,
+            )
+        except Exception as e:
+            elapsed = (time.monotonic() - start) * 1000
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"OpenAI summarize failed: {e}",
+                level=LogLevel.ERROR, provider="openai", model=self.model,
+                operation="summarize", duration_ms=round(elapsed, 1), success=False,
+                extra={"error": str(e)},
+            )
+            raise
 
         content = response.choices[0].message.content
         result = json.loads(content) if content else {}

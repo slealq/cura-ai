@@ -3,23 +3,23 @@ from typing import Literal
 
 from app.core.config import get_settings
 from app.providers.anthropic_provider import (
-    AnthropicCaptioner,
     AnthropicClusterSummarizer,
+    AnthropicDescriber,
     AnthropicTagger,
 )
 from app.providers.base import (
-    BaseCaptioner,
     BaseClusterSummarizer,
+    BaseDescriber,
     BaseEmbedder,
     BaseTagger,
-    CaptionResult,
     ClusterSummaryResult,
+    DescriptionResult,
     EmbeddingResult,
     TaggingResult,
 )
 from app.providers.openai_provider import (
-    OpenAICaptioner,
     OpenAIClusterSummarizer,
+    OpenAIDescriber,
     OpenAIEmbedder,
     OpenAITagger,
 )
@@ -38,15 +38,15 @@ def get_tagger(provider: Literal["openai", "anthropic"] | None = None) -> BaseTa
         raise ValueError(f"Unknown tagger provider: {provider}")
 
 
-def get_captioner(provider: Literal["openai", "anthropic"] | None = None) -> BaseCaptioner:
-    """Get captioner instance for the specified provider."""
+def get_describer(provider: Literal["openai", "anthropic"] | None = None) -> BaseDescriber:
+    """Get describer instance for the specified provider."""
     provider = provider or settings.default_vision_provider
     if provider == "openai":
-        return OpenAICaptioner()
+        return OpenAIDescriber()
     elif provider == "anthropic":
-        return AnthropicCaptioner()
+        return AnthropicDescriber()
     else:
-        raise ValueError(f"Unknown captioner provider: {provider}")
+        raise ValueError(f"Unknown describer provider: {provider}")
 
 
 def get_embedder(provider: Literal["openai", "local"] | None = None) -> BaseEmbedder:
@@ -73,15 +73,15 @@ def get_cluster_summarizer(
 
 __all__ = [
     "BaseTagger",
-    "BaseCaptioner",
+    "BaseDescriber",
     "BaseEmbedder",
     "BaseClusterSummarizer",
     "TaggingResult",
-    "CaptionResult",
+    "DescriptionResult",
     "EmbeddingResult",
     "ClusterSummaryResult",
     "get_tagger",
-    "get_captioner",
+    "get_describer",
     "get_embedder",
     "get_cluster_summarizer",
 ]

@@ -247,23 +247,14 @@ class ClusteringService:
 
     def compute_common_tags(
         self,
-        all_tags: list[dict[str, list[str]]],
-        top_n: int = 3,
-    ) -> dict[str, list[str]]:
+        all_tags: list[list[str]],
+        top_n: int = 10,
+    ) -> list[str]:
         """Compute most common tags across a set of images."""
-        category_counters: dict[str, Counter] = {}
-
+        counter = Counter()
         for tags in all_tags:
-            for category, values in tags.items():
-                if category not in category_counters:
-                    category_counters[category] = Counter()
-                category_counters[category].update(values)
-
-        common_tags = {}
-        for category, counter in category_counters.items():
-            common_tags[category] = [tag for tag, _ in counter.most_common(top_n)]
-
-        return common_tags
+            counter.update(tags)
+        return [tag for tag, _ in counter.most_common(top_n)]
 
 
 # Singleton instance

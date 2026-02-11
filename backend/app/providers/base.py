@@ -8,18 +8,17 @@ from typing import Any
 class TaggingResult:
     """Result from image tagging."""
 
-    tags: dict[str, list[str]]
+    tags: list[str]
     model: str
     prompt_version: str
     raw_response: dict[str, Any] | None = None
 
 
 @dataclass
-class CaptionResult:
-    """Result from image captioning/description."""
+class DescriptionResult:
+    """Result from image description."""
 
-    caption_short: str
-    description_long: str  # Markdown bullet points
+    description: str
     model: str
     raw_response: dict[str, Any] | None = None
 
@@ -46,16 +45,19 @@ class BaseTagger(ABC):
     """Abstract base class for image tagging providers."""
 
     @abstractmethod
-    async def tag_image(self, image_data: bytes, mime_type: str) -> TaggingResult:
+    async def tag_image(
+        self, image_data: bytes, mime_type: str, tag_guidance: str | None = None
+    ) -> TaggingResult:
         """
-        Tag an image with structured metadata.
+        Tag an image with flat categorization tags.
 
         Args:
             image_data: Raw image bytes
             mime_type: Image MIME type (e.g., "image/jpeg")
+            tag_guidance: Optional guidance text to influence tagging
 
         Returns:
-            TaggingResult with structured tags
+            TaggingResult with flat list of tags
         """
         pass
 
@@ -65,20 +67,23 @@ class BaseTagger(ABC):
         pass
 
 
-class BaseCaptioner(ABC):
-    """Abstract base class for image captioning providers."""
+class BaseDescriber(ABC):
+    """Abstract base class for image description providers."""
 
     @abstractmethod
-    async def caption_image(self, image_data: bytes, mime_type: str) -> CaptionResult:
+    async def describe_image(
+        self, image_data: bytes, mime_type: str, description_guidance: str | None = None
+    ) -> DescriptionResult:
         """
-        Generate caption and description for an image.
+        Generate a detailed description for an image.
 
         Args:
             image_data: Raw image bytes
             mime_type: Image MIME type
+            description_guidance: Optional guidance text to influence description generation
 
         Returns:
-            CaptionResult with short caption and long description
+            DescriptionResult with detailed description
         """
         pass
 
@@ -134,7 +139,7 @@ class BaseClusterSummarizer(ABC):
     @abstractmethod
     async def summarize_cluster(
         self,
-        common_tags: dict[str, list[str]],
+        common_tags: list[str],
         sample_descriptions: list[str],
         cluster_size: int,
     ) -> ClusterSummaryResult:

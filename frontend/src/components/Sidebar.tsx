@@ -9,6 +9,7 @@ import {
   Settings,
   Activity,
   Upload,
+  Bug,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -17,6 +18,7 @@ const navigation = [
   { name: 'All Images', href: '/images', icon: ImageIcon },
   { name: 'Upload', href: '/upload', icon: Upload },
   { name: 'Jobs', href: '/jobs', icon: Activity },
+  { name: 'Debug', href: '/debug', icon: Bug },
   { name: 'Settings', href: '/settings', icon: Settings },
 ];
 

@@ -5,11 +5,13 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.base import get_db
 from app.models import ImageSource, ImageStatus, Job, JobStatus, JobType
+from app.schemas import StepResponse
 from app.schemas import (
     BatchUploadResponse,
     ImageListResponse,
@@ -18,7 +20,12 @@ from app.schemas import (
     UploadResponse,
 )
 from app.services.image_service import get_image_service
-from app.workers.tasks import process_image_pipeline
+from app.workers.tasks import (
+    describe_image,
+    embed_image,
+    process_image_pipeline,
+    tag_image,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -44,14 +51,11 @@ async def upload_image(
             source=ImageSource.UPLOAD,
         )
 
-        # Queue for processing
-        process_image_pipeline.delay(image.id)
-
         return UploadResponse(
             image_id=image.id,
             filename=file.filename or "upload.jpg",
-            status="queued",
-            message="Image uploaded and queued for processing",
+            status="ingested",
+            message="Image uploaded successfully",
         )
     except Exception as e:
         logger.error(f"Upload failed: {e}")
@@ -81,15 +85,12 @@ async def upload_images_batch(
                 source=ImageSource.UPLOAD,
             )
 
-            # Queue for processing
-            process_image_pipeline.delay(image.id)
-
             uploaded.append(
                 UploadResponse(
                     image_id=image.id,
                     filename=file.filename or "upload.jpg",
-                    status="queued",
-                    message="Image uploaded and queued for processing",
+                    status="ingested",
+                    message="Image uploaded successfully",
                 )
             )
         except Exception as e:
@@ -102,6 +103,7 @@ async def upload_images_batch(
 @router.get("", response_model=ImageListResponse)
 async def list_images(
     status: ImageStatus | None = None,
+    min_status: ImageStatus | None = None,
     source: ImageSource | None = None,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
@@ -111,11 +113,12 @@ async def list_images(
     image_service = get_image_service(db)
     images = image_service.get_images(
         status=status,
+        min_status=min_status,
         source=source,
         skip=skip,
         limit=limit,
     )
-    total = image_service.count_images(status=status)
+    total = image_service.count_images(status=status, min_status=min_status)
 
     return ImageListResponse(
         items=[ImageResponse.model_validate(img) for img in images],
@@ -211,20 +214,169 @@ async def get_similar_images(
     return [ImageResponse.model_validate(img) for img in similar_images]
 
 
-@router.post("/{image_id}/reprocess")
-async def reprocess_image(image_id: int, db: Session = Depends(get_db)):
-    """Reprocess an image through the pipeline."""
+class ReprocessRequest(BaseModel):
+    """Request to reprocess an image."""
+
+    tag_guidance: str | None = None
+    description_guidance: str | None = None
+
+
+@router.post("/{image_id}/reprocess", response_model=StepResponse)
+async def reprocess_image(
+    image_id: int,
+    request: ReprocessRequest | None = None,
+    db: Session = Depends(get_db),
+):
+    """Reprocess an image through the pipeline with optional guidance."""
     image_service = get_image_service(db)
     image = image_service.get_image(image_id)
 
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
 
+    tag_guidance = request.tag_guidance if request else None
+    description_guidance = request.description_guidance if request else None
+
+    # Create job record
+    job = Job(
+        job_type=JobType.REPROCESS,
+        status=JobStatus.PENDING,
+        image_id=image_id,
+        total_items=1,
+        parameters={"tag_guidance": tag_guidance, "description_guidance": description_guidance},
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
     # Reset status and queue for reprocessing
     image_service.update_status(image_id, ImageStatus.INGESTED)
-    process_image_pipeline.delay(image_id)
+    task = process_image_pipeline.delay(image_id, tag_guidance=tag_guidance, description_guidance=description_guidance, job_id=job.id)
+    job.celery_task_id = task.id
+    db.commit()
 
-    return {"status": "queued", "image_id": image_id, "message": "Image queued for reprocessing"}
+    return StepResponse(status="queued", image_id=image_id, step="reprocess", job_id=job.id)
+
+
+class TagRequest(BaseModel):
+    """Request to tag an image."""
+
+    tag_guidance: str | None = None
+
+
+class DescribeRequest(BaseModel):
+    """Request to describe an image."""
+
+    description_guidance: str | None = None
+
+
+TAG_ALLOWED = {ImageStatus.INGESTED, ImageStatus.TAGGED, ImageStatus.DESCRIBED, ImageStatus.EMBEDDED, ImageStatus.CLUSTERED, ImageStatus.FAILED}
+DESCRIBE_ALLOWED = {ImageStatus.TAGGED, ImageStatus.DESCRIBED, ImageStatus.EMBEDDED, ImageStatus.CLUSTERED, ImageStatus.FAILED}
+EMBED_ALLOWED = {ImageStatus.DESCRIBED, ImageStatus.EMBEDDED, ImageStatus.CLUSTERED, ImageStatus.FAILED}
+
+
+@router.post("/{image_id}/tag", response_model=StepResponse)
+async def tag_image_endpoint(
+    image_id: int,
+    request: TagRequest | None = None,
+    db: Session = Depends(get_db),
+):
+    """Tag an image with structured metadata."""
+    image_service = get_image_service(db)
+    image = image_service.get_image(image_id)
+
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    if image.status not in TAG_ALLOWED:
+        raise HTTPException(status_code=400, detail=f"Image status '{image.status}' does not allow tagging")
+
+    tag_guidance = request.tag_guidance if request else None
+
+    job = Job(
+        job_type=JobType.TAG,
+        status=JobStatus.PENDING,
+        image_id=image_id,
+        total_items=1,
+        parameters={"tag_guidance": tag_guidance} if tag_guidance else {},
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    task = tag_image.delay(image_id, tag_guidance=tag_guidance, job_id=job.id)
+    job.celery_task_id = task.id
+    db.commit()
+
+    return StepResponse(status="queued", image_id=image_id, step="tag", job_id=job.id)
+
+
+@router.post("/{image_id}/describe", response_model=StepResponse)
+async def describe_image_endpoint(
+    image_id: int,
+    request: DescribeRequest | None = None,
+    db: Session = Depends(get_db),
+):
+    """Generate caption and description for an image."""
+    image_service = get_image_service(db)
+    image = image_service.get_image(image_id)
+
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    if image.status not in DESCRIBE_ALLOWED:
+        raise HTTPException(status_code=400, detail=f"Image status '{image.status}' does not allow describing")
+
+    description_guidance = request.description_guidance if request else None
+
+    job = Job(
+        job_type=JobType.DESCRIBE,
+        status=JobStatus.PENDING,
+        image_id=image_id,
+        total_items=1,
+        parameters={"description_guidance": description_guidance} if description_guidance else {},
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    task = describe_image.delay(image_id, description_guidance=description_guidance, job_id=job.id)
+    job.celery_task_id = task.id
+    db.commit()
+
+    return StepResponse(status="queued", image_id=image_id, step="describe", job_id=job.id)
+
+
+@router.post("/{image_id}/embed", response_model=StepResponse)
+async def embed_image_endpoint(
+    image_id: int,
+    db: Session = Depends(get_db),
+):
+    """Generate embedding for an image."""
+    image_service = get_image_service(db)
+    image = image_service.get_image(image_id)
+
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    if image.status not in EMBED_ALLOWED:
+        raise HTTPException(status_code=400, detail=f"Image status '{image.status}' does not allow embedding")
+
+    job = Job(
+        job_type=JobType.EMBED,
+        status=JobStatus.PENDING,
+        image_id=image_id,
+        total_items=1,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    task = embed_image.delay(image_id, job_id=job.id)
+    job.celery_task_id = task.id
+    db.commit()
+
+    return StepResponse(status="queued", image_id=image_id, step="embed", job_id=job.id)
 
 
 # Thumbnail serving endpoint

@@ -2,7 +2,8 @@
 
 import type { Image } from '@/types';
 import { imagesApi } from '@/lib/api';
-import { cn, getStatusColor } from '@/lib/utils';
+import { cn } from '@/lib/utils';
+import PipelineProgress from './PipelineProgress';
 
 interface ImageCardProps {
   image: Image;
@@ -30,7 +31,7 @@ export default function ImageCard({
       {thumbnailUrl ? (
         <img
           src={thumbnailUrl}
-          alt={image.metadata?.caption_short || image.original_filename || ''}
+          alt={image.original_filename || ''}
           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
         />
       ) : (
@@ -44,25 +45,18 @@ export default function ImageCard({
         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors" />
       )}
 
-      {/* Status badge */}
+      {/* Pipeline progress dots */}
       {showStatus && (
-        <div className="absolute top-2 right-2">
-          <span
-            className={cn(
-              'px-2 py-0.5 rounded-full text-xs font-medium',
-              getStatusColor(image.status)
-            )}
-          >
-            {image.status}
-          </span>
+        <div className="absolute top-2 right-2 bg-black/50 rounded-full px-2 py-1">
+          <PipelineProgress status={image.status} variant="compact" />
         </div>
       )}
 
-      {/* Caption on hover */}
-      {image.metadata?.caption_short && onClick && (
+      {/* Description on hover */}
+      {image.metadata?.description_long && onClick && (
         <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
           <p className="text-white text-xs line-clamp-2">
-            {image.metadata.caption_short}
+            {image.metadata.description_long}
           </p>
         </div>
       )}

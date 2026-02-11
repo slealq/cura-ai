@@ -50,7 +50,7 @@ class Cluster(Base):
     # AI-generated summaries
     summary_title: Mapped[str | None] = mapped_column(String(256), nullable=True)
     summary_description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    common_tags: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    common_tags: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
 
     # Representative images (IDs of images closest to centroid)
     representative_image_ids: Mapped[list[int]] = mapped_column(JSON, default=list, nullable=False)

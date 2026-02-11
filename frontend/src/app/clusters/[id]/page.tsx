@@ -189,29 +189,18 @@ export default function ClusterDetailPage() {
       )}
 
       {/* Common Tags */}
-      {Object.keys(cluster.common_tags).length > 0 && (
+      {cluster.common_tags.length > 0 && (
         <div>
           <h3 className="font-medium text-sm mb-3">Common Tags</h3>
-          <div className="flex flex-wrap gap-4">
-            {Object.entries(cluster.common_tags).map(([category, tags]) =>
-              tags.length > 0 ? (
-                <div key={category}>
-                  <span className="text-xs text-muted-foreground capitalize">
-                    {category.replace('_', ' ')}:
-                  </span>
-                  <div className="flex gap-1 mt-1">
-                    {tags.map((tag) => (
-                      <span
-                        key={tag}
-                        className="px-2 py-0.5 bg-muted rounded-full text-xs"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ) : null
-            )}
+          <div className="flex flex-wrap gap-1">
+            {cluster.common_tags.map((tag) => (
+              <span
+                key={tag}
+                className="px-2 py-0.5 bg-muted rounded-full text-xs"
+              >
+                {tag}
+              </span>
+            ))}
           </div>
         </div>
       )}

@@ -29,9 +29,7 @@ export default function ClusterCard({ cluster }: ClusterCardProps) {
   });
 
   const title = cluster.display_name || cluster.summary_title || `Cluster ${cluster.id}`;
-  const topTags = Object.entries(cluster.common_tags)
-    .flatMap(([, tags]) => tags.slice(0, 2))
-    .slice(0, 6);
+  const topTags = cluster.common_tags.slice(0, 6);
 
   return (
     <Link href={`/clusters/${cluster.id}`}>

@@ -133,7 +133,7 @@ class ClusterService:
                 centroid_embedding=centroid.tolist() if centroid is not None else None,
                 size=len(member_image_ids),
                 representative_image_ids=representative_ids,
-                common_tags={},
+                common_tags=[],
             )
 
             self.db.add(cluster)
@@ -173,7 +173,7 @@ class ClusterService:
                 summary_title="Unclustered Images",
                 summary_description="Images that don't fit well into other clusters",
                 representative_image_ids=noise_image_ids[:6],
-                common_tags={},
+                common_tags=[],
             )
 
             self.db.add(noise_cluster)
@@ -197,7 +197,7 @@ class ClusterService:
         cluster_id: int,
         summary_title: str,
         summary_description: str,
-        common_tags: dict[str, list[str]],
+        common_tags: list[str],
         summarization_model: str,
     ) -> Cluster | None:
         """Update cluster with AI-generated summary."""

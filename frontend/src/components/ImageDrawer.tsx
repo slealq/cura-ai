@@ -1,12 +1,15 @@
 'use client';
 
-import { useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { X, ExternalLink, RefreshCw } from 'lucide-react';
+import { useEffect, useState, useCallback } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { X, ExternalLink, RefreshCw, Tag, FileText, Cpu } from 'lucide-react';
+import { toast } from 'sonner';
 import type { Image } from '@/types';
-import { imagesApi } from '@/lib/api';
-import { cn, formatDate, formatFileSize, getStatusColor } from '@/lib/utils';
+import { imagesApi, jobsApi, settingsApi } from '@/lib/api';
+import { cn, formatDate, formatFileSize } from '@/lib/utils';
+import { hasReachedStatus } from '@/lib/pipeline';
 import ImageCard from './ImageCard';
+import PipelineProgress from './PipelineProgress';
 
 interface ImageDrawerProps {
   image: Image;
@@ -14,38 +17,192 @@ interface ImageDrawerProps {
 }
 
 export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
+  const queryClient = useQueryClient();
+  const [showReprocessDialog, setShowReprocessDialog] = useState(false);
+  const [showTagDialog, setShowTagDialog] = useState(false);
+  const [showDescribeDialog, setShowDescribeDialog] = useState(false);
+  const [descriptionGuidance, setDescriptionGuidance] = useState('');
+  const [tagGuidance, setTagGuidance] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [staleSteps, setStaleSteps] = useState<string[]>([]);
+
+  // Live image data — polls every 3s while processing
+  const { data: liveImage } = useQuery({
+    queryKey: ['images', image.id],
+    queryFn: () => imagesApi.get(image.id),
+    refetchInterval: isProcessing ? 3000 : false,
+    initialData: image,
+  });
+
+  // Active jobs for this image — polls while processing
+  const { data: imageJobs } = useQuery({
+    queryKey: ['jobs', 'image', image.id],
+    queryFn: () => jobsApi.listByImage(image.id),
+    refetchInterval: isProcessing ? 3000 : false,
+    enabled: isProcessing,
+  });
+
+  // Detect completion from job polling
+  useEffect(() => {
+    if (!isProcessing || !imageJobs) return;
+
+    const activeJobs = imageJobs.items.filter(
+      (j) => j.status === 'pending' || j.status === 'running'
+    );
+
+    if (activeJobs.length === 0 && imageJobs.items.length > 0) {
+      const failedJobs = imageJobs.items.filter((j) => j.status === 'failed');
+      if (failedJobs.length > 0) {
+        toast.error('Processing failed', {
+          description: failedJobs[0].error_message || 'An error occurred',
+        });
+      } else {
+        toast.success('Processing complete');
+      }
+      setIsProcessing(false);
+      setStaleSteps([]);
+      queryClient.invalidateQueries({ queryKey: ['images'] });
+      queryClient.invalidateQueries({ queryKey: ['images', image.id] });
+    }
+  }, [imageJobs, isProcessing, image.id, queryClient]);
+
   const { data: similarImages } = useQuery({
     queryKey: ['similar-images', image.id],
     queryFn: () => imagesApi.getSimilar(image.id, 6),
-    enabled: image.status === 'embedded' || image.status === 'clustered',
+    enabled:
+      liveImage.status === 'embedded' || liveImage.status === 'clustered',
   });
+
+  const { data: defaultGuidance } = useQuery({
+    queryKey: ['guidance-settings'],
+    queryFn: settingsApi.getGuidance,
+  });
+
+  const tagMutation = useMutation({
+    mutationFn: (options?: { tag_guidance?: string }) =>
+      imagesApi.tagImage(image.id, options),
+    onSuccess: () => {
+      toast.info('Tagging started');
+      setIsProcessing(true);
+      setStaleSteps((prev) =>
+        Array.from(new Set([...prev, 'embedded', 'clustered']))
+      );
+      setShowTagDialog(false);
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
+  });
+
+  const describeMutation = useMutation({
+    mutationFn: (options?: { description_guidance?: string }) =>
+      imagesApi.describeImage(image.id, options),
+    onSuccess: () => {
+      toast.info('Describing started');
+      setIsProcessing(true);
+      setStaleSteps((prev) =>
+        Array.from(new Set([...prev, 'embedded', 'clustered']))
+      );
+      setShowDescribeDialog(false);
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
+  });
+
+  const embedMutation = useMutation({
+    mutationFn: () => imagesApi.embedImage(image.id),
+    onSuccess: () => {
+      toast.info('Embedding started');
+      setIsProcessing(true);
+      setStaleSteps((prev) =>
+        Array.from(new Set([...prev, 'clustered']))
+      );
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
+  });
+
+  const reprocessMutation = useMutation({
+    mutationFn: (options: {
+      tag_guidance?: string;
+      description_guidance?: string;
+    }) => imagesApi.reprocess(image.id, options),
+    onSuccess: () => {
+      toast.info('Reprocessing started');
+      setIsProcessing(true);
+      setStaleSteps([]);
+      setShowReprocessDialog(false);
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
+  });
+
+  const canTag =
+    liveImage.status === 'failed' ||
+    hasReachedStatus(liveImage.status, 'ingested');
+  const canDescribe =
+    liveImage.status === 'failed' ||
+    hasReachedStatus(liveImage.status, 'tagged');
+  const canEmbed =
+    liveImage.status === 'failed' ||
+    hasReachedStatus(liveImage.status, 'described');
+
+  // Initialize guidance from defaults when dialogs open
+  const initGuidance = useCallback(() => {
+    if (defaultGuidance) {
+      setDescriptionGuidance(defaultGuidance.description_guidance || '');
+      setTagGuidance(defaultGuidance.tag_guidance || '');
+    }
+  }, [defaultGuidance]);
+
+  useEffect(() => {
+    if (showReprocessDialog || showTagDialog || showDescribeDialog) {
+      initGuidance();
+    }
+  }, [showReprocessDialog, showTagDialog, showDescribeDialog, initGuidance]);
 
   // Close on escape key
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        if (showReprocessDialog) setShowReprocessDialog(false);
+        else if (showTagDialog) setShowTagDialog(false);
+        else if (showDescribeDialog) setShowDescribeDialog(false);
+        else onClose();
+      }
     };
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [onClose]);
+  }, [onClose, showReprocessDialog, showTagDialog, showDescribeDialog]);
 
-  const imageUrl = imagesApi.getImageUrl(image.object_key);
-  const tags = image.metadata?.tags || {};
+  const handleReprocess = () => {
+    reprocessMutation.mutate({
+      description_guidance: descriptionGuidance || undefined,
+      tag_guidance: tagGuidance || undefined,
+    });
+  };
+
+  const handleTag = () => {
+    tagMutation.mutate({
+      tag_guidance: tagGuidance || undefined,
+    });
+  };
+
+  const handleDescribe = () => {
+    describeMutation.mutate({
+      description_guidance: descriptionGuidance || undefined,
+    });
+  };
+
+  const imageUrl = imagesApi.getImageUrl(liveImage.object_key);
+  const tags = liveImage.metadata?.tags || [];
 
   return (
     <>
       {/* Backdrop */}
-      <div
-        className="fixed inset-0 bg-black/50 z-40"
-        onClick={onClose}
-      />
+      <div className="fixed inset-0 bg-black/50 z-40" onClick={onClose} />
 
       {/* Drawer */}
       <div className="fixed inset-y-0 right-0 w-full max-w-xl bg-white shadow-xl z-50 overflow-y-auto">
         {/* Header */}
         <div className="sticky top-0 bg-white border-b border-border px-6 py-4 flex items-center justify-between">
           <h2 className="font-semibold truncate">
-            {image.original_filename || image.object_key}
+            {liveImage.original_filename || liveImage.object_key}
           </h2>
           <button
             onClick={onClose}
@@ -60,86 +217,95 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
           <div className="rounded-lg overflow-hidden bg-muted">
             <img
               src={imageUrl}
-              alt={image.metadata?.caption_short || ''}
+              alt={liveImage.original_filename || ''}
               className="w-full h-auto"
             />
           </div>
 
-          {/* Status & Actions */}
-          <div className="flex items-center justify-between">
-            <span
-              className={cn(
-                'px-3 py-1 rounded-full text-sm font-medium',
-                getStatusColor(image.status)
-              )}
+          {/* Pipeline Status */}
+          <PipelineProgress
+            status={liveImage.status}
+            variant="full"
+            staleSteps={staleSteps}
+          />
+
+          {/* Actions */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <a
+              href={imageUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-2 hover:bg-muted rounded-lg transition-colors"
             >
-              {image.status}
-            </span>
-            <div className="flex items-center gap-2">
-              <a
-                href={imageUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="p-2 hover:bg-muted rounded-lg transition-colors"
-              >
-                <ExternalLink className="h-4 w-4" />
-              </a>
+              <ExternalLink className="h-4 w-4" />
+            </a>
+            {canTag && (
               <button
-                onClick={() => imagesApi.reprocess(image.id)}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-lg hover:bg-muted transition-colors"
+                onClick={() => setShowTagDialog(true)}
+                disabled={tagMutation.isPending || isProcessing}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
               >
-                <RefreshCw className="h-4 w-4" />
-                Reprocess
+                <Tag className="h-3.5 w-3.5" />
+                Tag
               </button>
-            </div>
+            )}
+            {canDescribe && (
+              <button
+                onClick={() => setShowDescribeDialog(true)}
+                disabled={describeMutation.isPending || isProcessing}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
+              >
+                <FileText className="h-3.5 w-3.5" />
+                Describe
+              </button>
+            )}
+            {canEmbed && (
+              <button
+                onClick={() => embedMutation.mutate()}
+                disabled={embedMutation.isPending || isProcessing}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
+              >
+                <Cpu className="h-3.5 w-3.5" />
+                Embed
+              </button>
+            )}
+            <button
+              onClick={() => setShowReprocessDialog(true)}
+              disabled={isProcessing}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={cn('h-4 w-4', isProcessing && 'animate-spin')} />
+              {isProcessing ? 'Processing...' : 'Reprocess'}
+            </button>
           </div>
 
-          {/* Caption */}
-          {image.metadata?.caption_short && (
-            <div>
-              <h3 className="text-sm font-medium text-muted-foreground mb-1">
-                Caption
-              </h3>
-              <p className="text-sm">{image.metadata.caption_short}</p>
-            </div>
-          )}
-
           {/* Description */}
-          {image.metadata?.description_long && (
+          {liveImage.metadata?.description_long && (
             <div>
               <h3 className="text-sm font-medium text-muted-foreground mb-1">
-                Design Notes
+                Description
               </h3>
               <div className="text-sm whitespace-pre-line">
-                {image.metadata.description_long}
+                {liveImage.metadata.description_long}
               </div>
             </div>
           )}
 
           {/* Tags */}
-          {Object.keys(tags).length > 0 && (
+          {tags.length > 0 && (
             <div>
               <h3 className="text-sm font-medium text-muted-foreground mb-2">
                 Tags
               </h3>
-              <div className="space-y-2">
-                {Object.entries(tags).map(([category, values]) =>
-                  values.length > 0 ? (
-                    <div key={category} className="flex flex-wrap gap-1">
-                      <span className="text-xs text-muted-foreground capitalize min-w-[80px]">
-                        {category.replace('_', ' ')}:
-                      </span>
-                      {values.map((tag) => (
-                        <span
-                          key={tag}
-                          className="px-2 py-0.5 bg-muted rounded-full text-xs"
-                        >
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null
-                )}
+              <div className="flex flex-wrap gap-1">
+                {tags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="px-2 py-0.5 bg-muted rounded-full text-xs"
+                  >
+                    {tag}
+                  </span>
+                ))}
               </div>
             </div>
           )}
@@ -152,42 +318,50 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
             <dl className="grid grid-cols-2 gap-2 text-sm">
               <dt className="text-muted-foreground">Dimensions</dt>
               <dd>
-                {image.width && image.height
-                  ? `${image.width} × ${image.height}`
+                {liveImage.width && liveImage.height
+                  ? `${liveImage.width} × ${liveImage.height}`
                   : 'N/A'}
               </dd>
               <dt className="text-muted-foreground">File Size</dt>
-              <dd>{formatFileSize(image.file_size)}</dd>
+              <dd>{formatFileSize(liveImage.file_size)}</dd>
               <dt className="text-muted-foreground">Source</dt>
-              <dd className="capitalize">{image.source.replace('_', ' ')}</dd>
+              <dd className="capitalize">
+                {liveImage.source.replace('_', ' ')}
+              </dd>
               <dt className="text-muted-foreground">Ingested</dt>
-              <dd>{formatDate(image.ingested_at)}</dd>
+              <dd>{formatDate(liveImage.ingested_at)}</dd>
             </dl>
           </div>
 
           {/* Model Info */}
-          {image.metadata && (
+          {liveImage.metadata && (
             <div>
               <h3 className="text-sm font-medium text-muted-foreground mb-2">
                 Processing Info
               </h3>
               <dl className="grid grid-cols-2 gap-2 text-xs">
-                {image.metadata.tagging_model && (
+                {liveImage.metadata.tagging_model && (
                   <>
                     <dt className="text-muted-foreground">Tagging Model</dt>
-                    <dd className="font-mono">{image.metadata.tagging_model}</dd>
+                    <dd className="font-mono">
+                      {liveImage.metadata.tagging_model}
+                    </dd>
                   </>
                 )}
-                {image.metadata.caption_model && (
+                {liveImage.metadata.caption_model && (
                   <>
-                    <dt className="text-muted-foreground">Caption Model</dt>
-                    <dd className="font-mono">{image.metadata.caption_model}</dd>
+                    <dt className="text-muted-foreground">Description Model</dt>
+                    <dd className="font-mono">
+                      {liveImage.metadata.caption_model}
+                    </dd>
                   </>
                 )}
-                {image.metadata.embedding_model && (
+                {liveImage.metadata.embedding_model && (
                   <>
                     <dt className="text-muted-foreground">Embedding Model</dt>
-                    <dd className="font-mono">{image.metadata.embedding_model}</dd>
+                    <dd className="font-mono">
+                      {liveImage.metadata.embedding_model}
+                    </dd>
                   </>
                 )}
               </dl>
@@ -209,6 +383,168 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
           )}
         </div>
       </div>
+
+      {/* Tag Dialog */}
+      {showTagDialog && (
+        <>
+          <div
+            className="fixed inset-0 bg-black/50 z-50"
+            onClick={() => setShowTagDialog(false)}
+          />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div
+              className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-lg font-semibold">Tag Image</h3>
+              <p className="text-sm text-muted-foreground">
+                Optionally provide guidance to influence how this image is
+                tagged.
+              </p>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Tag Guidance
+                </label>
+                <textarea
+                  value={tagGuidance}
+                  onChange={(e) => setTagGuidance(e.target.value)}
+                  placeholder="e.g., Focus on architectural elements and materials"
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-y min-h-[80px]"
+                />
+              </div>
+
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => setShowTagDialog(false)}
+                  className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleTag}
+                  disabled={tagMutation.isPending}
+                  className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+                >
+                  {tagMutation.isPending ? 'Starting...' : 'Tag'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Describe Dialog */}
+      {showDescribeDialog && (
+        <>
+          <div
+            className="fixed inset-0 bg-black/50 z-50"
+            onClick={() => setShowDescribeDialog(false)}
+          />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div
+              className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-lg font-semibold">Describe Image</h3>
+              <p className="text-sm text-muted-foreground">
+                Optionally provide guidance to influence how this image is
+                described.
+              </p>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Description Guidance
+                </label>
+                <textarea
+                  value={descriptionGuidance}
+                  onChange={(e) => setDescriptionGuidance(e.target.value)}
+                  placeholder="e.g., Focus on detailed physical features and positioning"
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-y min-h-[80px]"
+                />
+              </div>
+
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => setShowDescribeDialog(false)}
+                  className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDescribe}
+                  disabled={describeMutation.isPending}
+                  className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+                >
+                  {describeMutation.isPending ? 'Starting...' : 'Describe'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Reprocess Dialog */}
+      {showReprocessDialog && (
+        <>
+          <div
+            className="fixed inset-0 bg-black/50 z-50"
+            onClick={() => setShowReprocessDialog(false)}
+          />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div
+              className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-lg font-semibold">Reprocess Image</h3>
+              <p className="text-sm text-muted-foreground">
+                Optionally provide guidance to influence how this image is tagged
+                and described.
+              </p>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Description Guidance
+                </label>
+                <textarea
+                  value={descriptionGuidance}
+                  onChange={(e) => setDescriptionGuidance(e.target.value)}
+                  placeholder="e.g., Focus on detailed physical features and positioning"
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-y min-h-[80px]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Tag Guidance
+                </label>
+                <textarea
+                  value={tagGuidance}
+                  onChange={(e) => setTagGuidance(e.target.value)}
+                  placeholder="e.g., Focus on architectural elements and materials"
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-y min-h-[80px]"
+                />
+              </div>
+
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => setShowReprocessDialog(false)}
+                  className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleReprocess}
+                  disabled={reprocessMutation.isPending}
+                  className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+                >
+                  {reprocessMutation.isPending ? 'Starting...' : 'Reprocess'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </>
   );
 }

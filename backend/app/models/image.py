@@ -37,6 +37,17 @@ class ImageStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+STATUS_ORDER: dict[ImageStatus, int] = {
+    ImageStatus.PENDING: 0,
+    ImageStatus.INGESTED: 1,
+    ImageStatus.NORMALIZED: 2,
+    ImageStatus.TAGGED: 3,
+    ImageStatus.DESCRIBED: 4,
+    ImageStatus.EMBEDDED: 5,
+    ImageStatus.CLUSTERED: 6,
+}
+
+
 class ImageSource(str, enum.Enum):
     """Source of the image."""
 
@@ -113,14 +124,13 @@ class ImageMetadata(Base):
         Integer, ForeignKey("images.id", ondelete="CASCADE"), unique=True, nullable=False
     )
 
-    # Structured tags
-    tags: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    # Flat categorization tags
+    tags: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
 
     # Color analysis
     dominant_colors: Mapped[list[dict]] = mapped_column(JSON, default=list, nullable=False)
 
-    # AI-generated descriptions
-    caption_short: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # AI-generated description
     description_long: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Embedding vector (1536 dimensions for OpenAI text-embedding-3-small)

@@ -45,4 +45,12 @@ celery_app.conf.update(
         "app.workers.tasks.cluster_all_images": {"queue": "clustering"},
         "app.workers.tasks.summarize_clusters": {"queue": "clustering"},
     },
+
+    # Beat schedule
+    beat_schedule={
+        "cleanup-pipeline-logs": {
+            "task": "app.workers.tasks.cleanup_old_pipeline_logs",
+            "schedule": 86400.0,  # once per day
+        },
+    },
 )

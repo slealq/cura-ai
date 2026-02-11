@@ -2,8 +2,8 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, Enum, Index, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Index, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 
@@ -42,6 +42,12 @@ class Job(Base):
     # Job identification
     celery_task_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     job_type: Mapped[JobType] = mapped_column(Enum(JobType), nullable=False)
+    image_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("images.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    # Relationships
+    image = relationship("Image", lazy="joined")
 
     # Status tracking
     status: Mapped[JobStatus] = mapped_column(

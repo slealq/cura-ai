@@ -1,35 +1,71 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { imagesApi } from '@/lib/api';
 import ImageCard from '@/components/ImageCard';
 import ImageDrawer from '@/components/ImageDrawer';
-import { cn, getStatusColor } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import type { Image } from '@/types';
 
-const statusFilters = [
-  { value: undefined, label: 'All' },
-  { value: 'ingested', label: 'Ingested' },
-  { value: 'tagged', label: 'Tagged' },
-  { value: 'described', label: 'Described' },
-  { value: 'embedded', label: 'Embedded' },
-  { value: 'clustered', label: 'Clustered' },
-  { value: 'failed', label: 'Failed' },
+type FilterMode = 'none' | 'min_status' | 'exact';
+
+const statusFilters: { value: string | undefined; label: string; mode: FilterMode }[] = [
+  { value: undefined, label: 'All', mode: 'none' },
+  { value: 'ingested', label: 'Ingested', mode: 'min_status' },
+  { value: 'tagged', label: 'Tagged', mode: 'min_status' },
+  { value: 'described', label: 'Described', mode: 'min_status' },
+  { value: 'embedded', label: 'Embedded', mode: 'min_status' },
+  { value: 'clustered', label: 'Clustered', mode: 'min_status' },
+  { value: 'failed', label: 'Failed', mode: 'exact' },
 ];
 
 export default function ImagesPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center h-64">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+      }
+    >
+      <ImagesContent />
+    </Suspense>
+  );
+}
+
+function ImagesContent() {
+  const searchParams = useSearchParams();
+  const imageIdParam = searchParams.get('image_id');
   const [selectedImage, setSelectedImage] = useState<Image | null>(null);
   const [statusFilter, setStatusFilter] = useState<string | undefined>();
+  const [filterMode, setFilterMode] = useState<FilterMode>('none');
   const [page, setPage] = useState(0);
   const limit = 50;
 
+  // Auto-open drawer when image_id is in URL params (only once)
+  const hasOpenedLinked = useRef(false);
+  const { data: linkedImage } = useQuery({
+    queryKey: ['images', Number(imageIdParam)],
+    queryFn: () => imagesApi.get(Number(imageIdParam)),
+    enabled: !!imageIdParam,
+  });
+
+  useEffect(() => {
+    if (linkedImage && !hasOpenedLinked.current) {
+      hasOpenedLinked.current = true;
+      setSelectedImage(linkedImage);
+    }
+  }, [linkedImage]);
+
   const { data, isLoading } = useQuery({
-    queryKey: ['images', statusFilter, page],
+    queryKey: ['images', statusFilter, filterMode, page],
     queryFn: () =>
       imagesApi.list({
-        status: statusFilter,
+        status: filterMode === 'exact' ? statusFilter : undefined,
+        min_status: filterMode === 'min_status' ? statusFilter : undefined,
         skip: page * limit,
         limit,
       }),
@@ -47,6 +83,7 @@ export default function ImagesPage() {
               key={filter.label}
               onClick={() => {
                 setStatusFilter(filter.value);
+                setFilterMode(filter.mode);
                 setPage(0);
               }}
               className={cn(

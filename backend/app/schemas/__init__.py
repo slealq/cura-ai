@@ -18,9 +18,8 @@ class ImageBase(BaseModel):
 class ImageMetadataResponse(BaseModel):
     """Image metadata response."""
 
-    tags: dict[str, list[str]] = Field(default_factory=dict)
+    tags: list[str] = Field(default_factory=list)
     dominant_colors: list[dict] = Field(default_factory=list)
-    caption_short: str | None = None
     description_long: str | None = None
     tagging_model: str | None = None
     caption_model: str | None = None
@@ -73,7 +72,7 @@ class ClusterResponse(BaseModel):
     size: int
     summary_title: str | None
     summary_description: str | None
-    common_tags: dict[str, list[str]] = Field(default_factory=dict)
+    common_tags: list[str] = Field(default_factory=list)
     representative_image_ids: list[int] = Field(default_factory=list)
     display_name: str | None
     is_pinned: bool
@@ -128,9 +127,21 @@ class JobResponse(BaseModel):
     started_at: datetime | None
     completed_at: datetime | None
     result: dict | None = None
+    image_id: int | None = None
+    image_filename: str | None = None
+    image_thumbnail: str | None = None
 
     class Config:
         from_attributes = True
+
+
+class StepResponse(BaseModel):
+    """Response from triggering a single image processing step."""
+
+    status: str
+    image_id: int
+    step: str
+    job_id: int
 
 
 class JobListResponse(BaseModel):
@@ -174,22 +185,6 @@ class SearchResponse(BaseModel):
     images: list[ImageResponse]
     query: str
     total: int
-
-
-# Filter schemas
-class TagFilterOptions(BaseModel):
-    """Available tag filter options."""
-
-    style: list[str] = Field(default_factory=list)
-    subject: list[str] = Field(default_factory=list)
-    medium: list[str] = Field(default_factory=list)
-    mood: list[str] = Field(default_factory=list)
-    color_palette: list[str] = Field(default_factory=list)
-    lighting: list[str] = Field(default_factory=list)
-    materials: list[str] = Field(default_factory=list)
-    composition: list[str] = Field(default_factory=list)
-    typography: list[str] = Field(default_factory=list)
-    era_reference: list[str] = Field(default_factory=list)
 
 
 # Stats schemas
