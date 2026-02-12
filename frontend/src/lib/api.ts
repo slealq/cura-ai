@@ -37,6 +37,17 @@ const api = axios.create({
   },
 });
 
+// Extract meaningful error messages from API responses
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.data?.detail) {
+      error.message = error.response.data.detail;
+    }
+    return Promise.reject(error);
+  }
+);
+
 // Images API
 export const imagesApi = {
   list: async (params?: {

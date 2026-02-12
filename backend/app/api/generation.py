@@ -196,15 +196,20 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db)):
     is_style = request.is_style if request.is_style is not None else training_defaults.get("is_style", False)
 
     # Create job
-    job = Job(
-        job_type=JobType.LORA_TRAIN,
-        status=JobStatus.PENDING,
-        total_items=1,
-        parameters={"folder_id": request.folder_id, "trigger_word": request.trigger_word},
-    )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
+    try:
+        job = Job(
+            job_type=JobType.LORA_TRAIN,
+            status=JobStatus.PENDING,
+            total_items=1,
+            parameters={"folder_id": request.folder_id, "trigger_word": request.trigger_word},
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to create LoRA training job: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create LoRA training job: {e}")
 
     # Create LoRA model record
     gen_service = get_generation_service(db)
@@ -294,19 +299,24 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
     provider = settings.default_generation_provider
 
     # Create job
-    job = Job(
-        job_type=JobType.BATCH_GENERATE if request.num_images > 1 else JobType.GENERATE_IMAGE,
-        status=JobStatus.PENDING,
-        total_items=request.num_images,
-        parameters={
-            "prompt": request.prompt[:200],
-            "num_images": request.num_images,
-            "lora_model_id": request.lora_model_id,
-        },
-    )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
+    try:
+        job = Job(
+            job_type=JobType.BATCH_GENERATE if request.num_images > 1 else JobType.GENERATE_IMAGE,
+            status=JobStatus.PENDING,
+            total_items=request.num_images,
+            parameters={
+                "prompt": request.prompt[:200],
+                "num_images": request.num_images,
+                "lora_model_id": request.lora_model_id,
+            },
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to create generation job: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create generation job: {e}")
 
     # Create generated image records
     gen_ids = []
