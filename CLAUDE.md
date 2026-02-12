@@ -97,30 +97,49 @@ npm run lint         # ESLint
 
 **Stack:** Next.js 14 + FastAPI + PostgreSQL/pgvector + Celery/Redis
 
+**Docker services:** postgres, redis, backend, celery-worker, celery-worker-clustering, celery-beat (optional), frontend
+
 **Key patterns:**
-- **Provider abstraction** (`backend/app/providers/`): Swappable AI providers (OpenAI/Anthropic) via base classes and factory functions (`get_tagger()`, `get_describer()`, etc.)
+- **Provider abstraction** (`backend/app/providers/`): Swappable AI providers (OpenAI/Anthropic) via base classes and factory functions (`get_tagger()`, `get_describer()`, `get_embedder()`, `get_cluster_summarizer()`)
 - **Service layer** (`backend/app/services/`): Business logic decoupled from API routes
-- **Celery task chaining** (`backend/app/workers/tasks.py`): `process_image_pipeline()` orchestrates tag→describe→embed flow
+- **Celery task chaining** (`backend/app/workers/tasks.py`): `process_image_pipeline()` orchestrates tag→describe→embed flow. Upstream changes auto-trigger re-embedding.
 - **pgvector**: 1536-dim embeddings for similarity search via cosine distance
+- **Hybrid search**: Combines semantic (embedding) and text (tsvector) search with adaptive weighting
 
 **Processing flow:**
-1. Upload → `ImageService.ingest_image()` stores file, generates thumbnails
+1. Upload → `ImageService.ingest_image()` stores file, generates thumbnails (200/400/800px), computes SHA-256 + perceptual hash
 2. `tag_image` task → Vision AI extracts flat categorization tags
 3. `describe_image` task → Vision AI generates detailed sectioned description for image reproduction
 4. `embed_image` task → Creates text embedding from tags + description
-5. `cluster_all_images` task → HDBSCAN groups by embedding similarity
-6. `summarize_clusters` task → Generates cluster descriptions
+5. `cluster_all_images` task → HDBSCAN/KMeans/Graph groups by embedding similarity (with optional UMAP reduction)
+6. `summarize_clusters` task → Generates cluster titles and descriptions
 
-**API structure:**
-- Routes in `backend/app/api/` (images, clusters, search, jobs, settings)
-- Schemas in `backend/app/schemas/` (Pydantic request/response models)
-- Frontend API client in `frontend/src/lib/api.ts` (typed Axios functions)
+**API routes** (`backend/app/api/`):
+- `images.py` — Image CRUD, upload (single/batch), reprocess, tag, describe, embed, similar images, file serving
+- `folders.py` — Folder CRUD, add/remove images, folder-scoped image listing, folder reprocess
+- `clusters.py` — Cluster listing, detail, rename, pin, archive, merge, exclude image, summarize, recluster, export
+- `search.py` — Hybrid semantic+text search, tag filtering, tag listing
+- `jobs.py` — Job listing/detail/cancel/delete, pipeline triggers (full, tag-all, describe-all, embed-all, reprocess-all, reprocess-failed, reprocess-selected), batch job image listing
+- `settings.py` — Prompt presets CRUD, activate preset, prompt get/update/reset/suggest, clustering config get/update/reset
+- `logs.py` — Pipeline log queries, stats, cleanup
 
 **Database models** (`backend/app/models/`):
-- `Image` + `ImageMetadata` (1:1) - core image data with embeddings
-- `Cluster` + `ClusterMembership` - groupings with centroids
-- `Job` - async job tracking
-- `AppSetting` - key/value settings (guidance defaults)
+- `Image` + `ImageMetadata` (1:1) — Core image data with status tracking, tags, description, embedding, hashes, tsvector
+- `Cluster` + `ClusterMembership` — Clustering results with centroid, summary, pin/archive/rename, outlier exclusion
+- `Job` — Async job tracking (types: INGEST, TAG, DESCRIBE, EMBED, CLUSTER, SUMMARIZE_CLUSTER, FULL_PIPELINE, REPROCESS, BATCH_REPROCESS)
+- `Folder` + `FolderImage` — User folders for organizing images (many-to-many)
+- `PromptPreset` — Named tag+description prompt pairs with active/default flag
+- `PipelineLog` — Structured logs (category, level, tokens, duration, provider/model)
+- `AppSetting` — Key-value config store
+- `APIKey` — Encrypted API key storage with validation status
+
+**Frontend structure** (`frontend/src/`):
+- Pages: Home (clusters), Folders, Folder Detail, All Images, Upload, Search, Cluster Detail, Jobs, Debug, Settings
+- Components: Header (search+stats), Sidebar (navigation), ImageCard, ImageDrawer (detail slide-over), ImageGrid (paginated with filters+batch actions), ClusterCard, FolderCard, PipelineProgress
+- API client: `lib/api.ts` — Typed Axios functions for all endpoints
+- State: TanStack Query with polling (5s jobs, 3s logs, 10s stats)
+
+**Alembic migrations:** 10 versions (001-010) covering initial schema through folders
 
 ## Environment
 
