@@ -12,14 +12,26 @@ from app.db.base import SessionLocal
 from app.models import Image, ImageMetadata, ImageStatus, Job, JobStatus, JobType
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers import get_cluster_summarizer, get_describer, get_embedder, get_tagger
+from app.providers.base import AIContentError
 from app.services.cluster_service import get_cluster_service
 from app.services.clustering import get_clustering_service
 from app.services.image_service import get_image_service
 from app.services.log_service import write_log
-from app.services.settings_service import get_settings_service
+from app.services.settings_service import compose_description_prompt, compose_tag_prompt, get_settings_service
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _unwrap_error(e: Exception) -> str:
+    """Extract a readable error message, unwrapping RetryError if needed."""
+    # tenacity wraps the real exception in RetryError
+    if hasattr(e, 'last_attempt'):
+        try:
+            real = e.last_attempt.result()
+        except Exception as inner:
+            return str(inner)
+    return str(e)
 
 
 def get_db() -> Session:
@@ -58,7 +70,7 @@ def _update_job_status(db: Session, job_id: int | None, status: JobStatus, **kwa
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
-def tag_image(self, image_id: int, tag_guidance: str | None = None, job_id: int | None = None) -> dict:
+def tag_image(self, image_id: int, tag_prompt: str | None = None, job_id: int | None = None) -> dict:
     """
     Tag an image with categorization tags.
 
@@ -83,14 +95,16 @@ def tag_image(self, image_id: int, tag_guidance: str | None = None, job_id: int 
         if not image_data:
             raise Exception("Failed to load image data")
 
-        # Get default guidance if not provided
-        if tag_guidance is None:
+        # Get composed prompt: settings default or wrap user-provided guidance
+        if tag_prompt is None:
             settings_service = get_settings_service(db)
-            tag_guidance = settings_service.get_default_tag_guidance()
+            tag_prompt = settings_service.get_tag_prompt()
+        else:
+            tag_prompt = compose_tag_prompt(tag_prompt)
 
         # Tag image
         tagger = get_tagger()
-        result = run_async(tagger.tag_image(image_data, image.mime_type, tag_guidance))
+        result = run_async(tagger.tag_image(image_data, image.mime_type, tag_prompt))
 
         # Save metadata
         image_service.save_metadata(
@@ -116,19 +130,22 @@ def tag_image(self, image_id: int, tag_guidance: str | None = None, job_id: int 
 
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
-        logger.error(f"Failed to tag image {image_id}: {e}")
-        write_log(category=LogCategory.TASK, message=f"Task tag_image failed for image {image_id}: {e}",
+        err_msg = _unwrap_error(e)
+        logger.error(f"Failed to tag image {image_id}: {err_msg}")
+        write_log(category=LogCategory.TASK, message=f"Task tag_image failed for image {image_id}: {err_msg}",
                   level=LogLevel.ERROR, task_name="tag_image", image_id=image_id, job_id=job_id,
-                  duration_ms=round(elapsed, 1), extra={"error": str(e)})
-        _update_job_status(db, job_id, JobStatus.FAILED, error_message=str(e))
-        image_service.update_status(image_id, ImageStatus.FAILED, str(e))
+                  duration_ms=round(elapsed, 1), extra={"error": err_msg})
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
+        image_service.update_status(image_id, ImageStatus.FAILED, err_msg)
+        if isinstance(e, AIContentError):
+            raise  # Don't retry content refusals
         raise self.retry(exc=e)
     finally:
         db.close()
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
-def describe_image(self, image_id: int, description_guidance: str | None = None, job_id: int | None = None) -> dict:
+def describe_image(self, image_id: int, description_prompt: str | None = None, job_id: int | None = None) -> dict:
     """
     Generate a detailed description for an image.
 
@@ -152,14 +169,16 @@ def describe_image(self, image_id: int, description_guidance: str | None = None,
         if not image_data:
             raise Exception("Failed to load image data")
 
-        # Get default guidance if not provided
-        if description_guidance is None:
+        # Get composed prompt: settings default or wrap user-provided guidance
+        if description_prompt is None:
             settings_service = get_settings_service(db)
-            description_guidance = settings_service.get_default_description_guidance()
+            description_prompt = settings_service.get_description_prompt()
+        else:
+            description_prompt = compose_description_prompt(description_prompt)
 
         # Generate description
         describer = get_describer()
-        result = run_async(describer.describe_image(image_data, image.mime_type, description_guidance))
+        result = run_async(describer.describe_image(image_data, image.mime_type, description_prompt))
 
         # Save metadata
         image_service.save_metadata(
@@ -184,12 +203,15 @@ def describe_image(self, image_id: int, description_guidance: str | None = None,
 
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
-        logger.error(f"Failed to describe image {image_id}: {e}")
-        write_log(category=LogCategory.TASK, message=f"Task describe_image failed for image {image_id}: {e}",
+        err_msg = _unwrap_error(e)
+        logger.error(f"Failed to describe image {image_id}: {err_msg}")
+        write_log(category=LogCategory.TASK, message=f"Task describe_image failed for image {image_id}: {err_msg}",
                   level=LogLevel.ERROR, task_name="describe_image", image_id=image_id, job_id=job_id,
-                  duration_ms=round(elapsed, 1), extra={"error": str(e)})
-        _update_job_status(db, job_id, JobStatus.FAILED, error_message=str(e))
-        image_service.update_status(image_id, ImageStatus.FAILED, str(e))
+                  duration_ms=round(elapsed, 1), extra={"error": err_msg})
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
+        image_service.update_status(image_id, ImageStatus.FAILED, err_msg)
+        if isinstance(e, AIContentError):
+            raise  # Don't retry content refusals
         raise self.retry(exc=e)
     finally:
         db.close()
@@ -254,9 +276,9 @@ def embed_image(self, image_id: int, job_id: int | None = None) -> dict:
         logger.error(f"Failed to embed image {image_id}: {e}")
         write_log(category=LogCategory.TASK, message=f"Task embed_image failed for image {image_id}: {e}",
                   level=LogLevel.ERROR, task_name="embed_image", image_id=image_id, job_id=job_id,
-                  duration_ms=round(elapsed, 1), extra={"error": str(e)})
-        _update_job_status(db, job_id, JobStatus.FAILED, error_message=str(e))
-        image_service.update_status(image_id, ImageStatus.FAILED, str(e))
+                  duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)})
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=_unwrap_error(e))
+        image_service.update_status(image_id, ImageStatus.FAILED, _unwrap_error(e))
         raise self.retry(exc=e)
     finally:
         db.close()
@@ -264,7 +286,7 @@ def embed_image(self, image_id: int, job_id: int | None = None) -> dict:
 
 @celery_app.task(bind=True)
 def tag_and_describe_image(
-    self, image_id: int, tag_guidance: str | None = None, description_guidance: str | None = None
+    self, image_id: int, tag_prompt: str | None = None, description_prompt: str | None = None
 ) -> dict:
     """
     Combined task to tag and describe an image.
@@ -284,20 +306,24 @@ def tag_and_describe_image(
         if not image_data:
             raise Exception("Failed to load image data")
 
-        # Get default guidance if not provided
+        # Get composed prompts: settings default or wrap user-provided guidance
         settings_service = get_settings_service(db)
-        if tag_guidance is None:
-            tag_guidance = settings_service.get_default_tag_guidance()
-        if description_guidance is None:
-            description_guidance = settings_service.get_default_description_guidance()
+        if tag_prompt is None:
+            tag_prompt = settings_service.get_tag_prompt()
+        else:
+            tag_prompt = compose_tag_prompt(tag_prompt)
+        if description_prompt is None:
+            description_prompt = settings_service.get_description_prompt()
+        else:
+            description_prompt = compose_description_prompt(description_prompt)
 
         # Tag image
         tagger = get_tagger()
-        tag_result = run_async(tagger.tag_image(image_data, image.mime_type, tag_guidance))
+        tag_result = run_async(tagger.tag_image(image_data, image.mime_type, tag_prompt))
 
         # Describe image
         describer = get_describer()
-        description_result = run_async(describer.describe_image(image_data, image.mime_type, description_guidance))
+        description_result = run_async(describer.describe_image(image_data, image.mime_type, description_prompt))
 
         # Save metadata
         image_service.save_metadata(
@@ -321,7 +347,7 @@ def tag_and_describe_image(
 
     except Exception as e:
         logger.error(f"Failed to process image {image_id}: {e}")
-        image_service.update_status(image_id, ImageStatus.FAILED, str(e))
+        image_service.update_status(image_id, ImageStatus.FAILED, _unwrap_error(e))
         raise
     finally:
         db.close()
@@ -417,7 +443,7 @@ def cluster_all_images(self, job_id: int | None = None) -> dict:
         logger.error(f"Clustering failed: {e}")
         write_log(category=LogCategory.TASK, message=f"Task cluster_all_images failed: {e}",
                   level=LogLevel.ERROR, task_name="cluster_all_images", job_id=job_id,
-                  duration_ms=round(elapsed, 1), extra={"error": str(e)})
+                  duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)})
         if job_id:
             job = db.query(Job).filter(Job.id == job_id).first()
             if job:
@@ -498,7 +524,7 @@ def summarize_cluster(self, cluster_id: int) -> dict:
         logger.error(f"Failed to summarize cluster {cluster_id}: {e}")
         write_log(category=LogCategory.TASK, message=f"Task summarize_cluster failed for cluster {cluster_id}: {e}",
                   level=LogLevel.ERROR, task_name="summarize_cluster",
-                  duration_ms=round(elapsed, 1), extra={"error": str(e)})
+                  duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)})
         raise
     finally:
         db.close()
@@ -551,7 +577,7 @@ def summarize_clusters(self, cluster_ids: list[int], job_id: int | None = None) 
 
 @celery_app.task(bind=True)
 def process_image_pipeline(
-    self, image_id: int, tag_guidance: str | None = None, description_guidance: str | None = None, job_id: int | None = None
+    self, image_id: int, tag_prompt: str | None = None, description_prompt: str | None = None, job_id: int | None = None
 ) -> dict:
     """
     Run full pipeline for a single image: tag -> describe -> embed.
@@ -576,20 +602,24 @@ def process_image_pipeline(
         if not image_data:
             raise Exception("Failed to load image data")
 
-        # Get default guidance if not provided
+        # Get composed prompts: settings default or wrap user-provided guidance
         settings_service = get_settings_service(db)
-        if tag_guidance is None:
-            tag_guidance = settings_service.get_default_tag_guidance()
-        if description_guidance is None:
-            description_guidance = settings_service.get_default_description_guidance()
+        if tag_prompt is None:
+            tag_prompt = settings_service.get_tag_prompt()
+        else:
+            tag_prompt = compose_tag_prompt(tag_prompt)
+        if description_prompt is None:
+            description_prompt = settings_service.get_description_prompt()
+        else:
+            description_prompt = compose_description_prompt(description_prompt)
 
         # Tag
         tagger = get_tagger()
-        tag_result = run_async(tagger.tag_image(image_data, image.mime_type, tag_guidance))
+        tag_result = run_async(tagger.tag_image(image_data, image.mime_type, tag_prompt))
 
         # Describe
         describer = get_describer()
-        description_result = run_async(describer.describe_image(image_data, image.mime_type, description_guidance))
+        description_result = run_async(describer.describe_image(image_data, image.mime_type, description_prompt))
 
         # Build text for embedding
         text_parts = []
@@ -629,12 +659,13 @@ def process_image_pipeline(
 
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
-        logger.error(f"Pipeline failed for image {image_id}: {e}")
-        write_log(category=LogCategory.TASK, message=f"Task process_image_pipeline failed for image {image_id}: {e}",
+        err_msg = _unwrap_error(e)
+        logger.error(f"Pipeline failed for image {image_id}: {err_msg}")
+        write_log(category=LogCategory.TASK, message=f"Task process_image_pipeline failed for image {image_id}: {err_msg}",
                   level=LogLevel.ERROR, task_name="process_image_pipeline", image_id=image_id, job_id=job_id,
-                  duration_ms=round(elapsed, 1), extra={"error": str(e)})
-        _update_job_status(db, job_id, JobStatus.FAILED, error_message=str(e))
-        image_service.update_status(image_id, ImageStatus.FAILED, str(e))
+                  duration_ms=round(elapsed, 1), extra={"error": err_msg})
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
+        image_service.update_status(image_id, ImageStatus.FAILED, _unwrap_error(e))
         raise
     finally:
         db.close()
@@ -710,13 +741,141 @@ def run_full_pipeline(self, job_id: int) -> dict:
         logger.error(f"Full pipeline failed: {e}")
         write_log(category=LogCategory.TASK, message=f"Task run_full_pipeline failed: {e}",
                   level=LogLevel.ERROR, task_name="run_full_pipeline", job_id=job_id,
-                  duration_ms=round(elapsed, 1), extra={"error": str(e)})
+                  duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)})
         if job_id:
             job = db.query(Job).filter(Job.id == job_id).first()
             if job:
                 job.status = JobStatus.FAILED
                 job.error_message = str(e)
                 db.commit()
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True, queue='clustering')
+def run_batch_reprocess(self, job_id: int, image_ids: list[int]) -> dict:
+    """
+    Reprocess a batch of images: reset each to INGESTED, dispatch process_image_pipeline,
+    then poll until all images have finished processing.
+
+    Idempotent: if tasks were already dispatched (e.g. after worker restart / re-delivery),
+    Phase 1 is skipped and we go straight to polling.
+    """
+    write_log(category=LogCategory.TASK, message=f"Task run_batch_reprocess started ({len(image_ids)} images)",
+              task_name="run_batch_reprocess", job_id=job_id)
+    task_start = time.monotonic()
+    db = get_db()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+
+        # Check if this job was already cancelled (e.g. user cancelled while we were re-delivered)
+        if job and job.status == JobStatus.CANCELLED:
+            logger.info(f"Batch reprocess job {job_id} already cancelled, skipping")
+            return {"status": "cancelled", "total": len(image_ids)}
+
+        # Check idempotency: if tasks were already dispatched, skip Phase 1
+        already_dispatched = False
+        if job and isinstance(job.result, dict) and job.result.get("dispatched"):
+            already_dispatched = True
+            logger.info(f"Batch reprocess job {job_id} already dispatched, skipping to Phase 2")
+            write_log(category=LogCategory.TASK,
+                      message=f"Re-delivery detected for job {job_id}, skipping dispatch (already sent)",
+                      task_name="run_batch_reprocess", job_id=job_id)
+
+        if job and not already_dispatched:
+            job.status = JobStatus.RUNNING
+            job.started_at = datetime.utcnow()
+            job.total_items = len(image_ids)
+            job.result = {"image_ids": image_ids}
+            db.commit()
+
+        image_service = get_image_service(db)
+        queued = 0
+
+        # Phase 1: Reset images and dispatch pipeline tasks (skipped on re-delivery)
+        if not already_dispatched:
+            for image_id in image_ids:
+                try:
+                    image_service.update_status(image_id, ImageStatus.INGESTED)
+                    process_image_pipeline.delay(image_id)
+                    queued += 1
+                except Exception as e:
+                    logger.error(f"Failed to queue reprocess for image {image_id}: {e}")
+
+            # Mark dispatched BEFORE polling so re-delivery skips Phase 1
+            if job:
+                job.result = {"image_ids": image_ids, "dispatched": True, "queued": queued}
+                db.commit()
+
+        # Phase 2: Poll until all images have finished (no longer INGESTED)
+        image_id_set = set(image_ids)
+        poll_interval = 5  # seconds
+        while True:
+            # Re-check if job was cancelled during polling
+            db.expire_all()
+            job = db.query(Job).filter(Job.id == job_id).first()
+            if job and job.status == JobStatus.CANCELLED:
+                logger.info(f"Batch reprocess job {job_id} cancelled during polling")
+                return {"status": "cancelled", "total": len(image_ids)}
+
+            done_count = (
+                db.query(Image)
+                .filter(
+                    Image.id.in_(image_id_set),
+                    Image.status != ImageStatus.INGESTED,
+                )
+                .count()
+            )
+
+            if job:
+                job.progress = done_count
+                db.commit()
+
+            if done_count >= len(image_ids):
+                break
+
+            time.sleep(poll_interval)
+
+        # Count outcomes
+        failed_count = (
+            db.query(Image)
+            .filter(Image.id.in_(image_id_set), Image.status == ImageStatus.FAILED)
+            .count()
+        )
+        succeeded = len(image_ids) - failed_count
+
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.status = JobStatus.COMPLETED
+            job.completed_at = datetime.utcnow()
+            job.result = {
+                "total": len(image_ids),
+                "queued": queued,
+                "succeeded": succeeded,
+                "failed": failed_count,
+                "image_ids": image_ids,
+                "dispatched": True,
+            }
+            db.commit()
+
+        elapsed = (time.monotonic() - task_start) * 1000
+        write_log(category=LogCategory.TASK,
+                  message=f"Task run_batch_reprocess completed in {elapsed:.0f}ms ({succeeded} succeeded, {failed_count} failed)",
+                  task_name="run_batch_reprocess", job_id=job_id, duration_ms=round(elapsed, 1))
+        return {"status": "success", "total": len(image_ids), "succeeded": succeeded, "failed": failed_count}
+
+    except Exception as e:
+        elapsed = (time.monotonic() - task_start) * 1000
+        logger.error(f"Batch reprocess failed: {e}")
+        write_log(category=LogCategory.TASK, message=f"Task run_batch_reprocess failed: {e}",
+                  level=LogLevel.ERROR, task_name="run_batch_reprocess", job_id=job_id,
+                  duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)})
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.status = JobStatus.FAILED
+            job.error_message = str(e)
+            db.commit()
         raise
     finally:
         db.close()

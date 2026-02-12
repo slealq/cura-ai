@@ -20,6 +20,7 @@ class JobType(str, enum.Enum):
     SUMMARIZE_CLUSTER = "summarize_cluster"
     FULL_PIPELINE = "full_pipeline"
     REPROCESS = "reprocess"
+    BATCH_REPROCESS = "batch_reprocess"
 
 
 class JobStatus(str, enum.Enum):

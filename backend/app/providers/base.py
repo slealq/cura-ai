@@ -4,6 +4,18 @@ from dataclasses import dataclass
 from typing import Any
 
 
+class AIContentError(Exception):
+    """Raised when the AI model refuses or cannot process the image.
+
+    Contains the reason reported by the model in the JSON error field.
+    """
+
+    def __init__(self, reason: str, operation: str = "process"):
+        self.reason = reason
+        self.operation = operation
+        super().__init__(f"AI could not {operation} image: {reason}")
+
+
 @dataclass
 class TaggingResult:
     """Result from image tagging."""
@@ -46,7 +58,7 @@ class BaseTagger(ABC):
 
     @abstractmethod
     async def tag_image(
-        self, image_data: bytes, mime_type: str, tag_guidance: str | None = None
+        self, image_data: bytes, mime_type: str, tag_prompt: str | None = None
     ) -> TaggingResult:
         """
         Tag an image with flat categorization tags.
@@ -54,7 +66,7 @@ class BaseTagger(ABC):
         Args:
             image_data: Raw image bytes
             mime_type: Image MIME type (e.g., "image/jpeg")
-            tag_guidance: Optional guidance text to influence tagging
+            tag_prompt: Full prompt to use for tagging (if None, uses provider default)
 
         Returns:
             TaggingResult with flat list of tags
@@ -72,7 +84,7 @@ class BaseDescriber(ABC):
 
     @abstractmethod
     async def describe_image(
-        self, image_data: bytes, mime_type: str, description_guidance: str | None = None
+        self, image_data: bytes, mime_type: str, description_prompt: str | None = None
     ) -> DescriptionResult:
         """
         Generate a detailed description for an image.
@@ -80,7 +92,7 @@ class BaseDescriber(ABC):
         Args:
             image_data: Raw image bytes
             mime_type: Image MIME type
-            description_guidance: Optional guidance text to influence description generation
+            description_prompt: Full prompt to use for description (if None, uses provider default)
 
         Returns:
             DescriptionResult with detailed description

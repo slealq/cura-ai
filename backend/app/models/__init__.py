@@ -4,6 +4,7 @@ from app.models.cluster import Cluster, ClusteringMethod, ClusterMembership
 from app.models.image import Image, ImageMetadata, ImageSource, ImageStatus
 from app.models.job import Job, JobStatus, JobType
 from app.models.pipeline_log import LogCategory, LogLevel, PipelineLog
+from app.models.prompt_preset import PromptPreset
 from app.models.settings import AppSettings
 
 __all__ = [
@@ -23,5 +24,6 @@ __all__ = [
     "LogCategory",
     "LogLevel",
     "PipelineLog",
+    "PromptPreset",
     "AppSettings",
 ]

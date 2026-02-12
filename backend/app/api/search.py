@@ -9,11 +9,22 @@ from sqlalchemy.orm import Session
 from app.db.base import get_db
 from app.models import Image, ImageMetadata
 from app.providers import get_embedder
-from app.schemas import ImageResponse, SearchRequest, SearchResponse
+from app.schemas import ImageResponse, SearchRequest, SearchResponse, ScoredImageResponse
 from app.services.image_service import get_image_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/search", tags=["search"])
+
+
+def _adaptive_weights(query: str) -> tuple[float, float]:
+    """Return (semantic_weight, text_weight) based on query word count."""
+    word_count = len(query.split())
+    if word_count <= 2:
+        return 0.4, 0.6
+    elif word_count <= 5:
+        return 0.6, 0.4
+    else:
+        return 0.8, 0.2
 
 
 @router.post("", response_model=SearchResponse)
@@ -22,42 +33,74 @@ async def semantic_search(
     db: Session = Depends(get_db),
 ):
     """
-    Perform semantic search on image descriptions using embeddings.
+    Hybrid search: combines semantic embedding similarity with keyword matching.
 
-    This searches across all image descriptions and tags using vector similarity.
+    Short queries lean towards keyword matching; longer queries lean towards semantic.
     """
-    # Generate embedding for the query
     embedder = get_embedder()
     query_embedding = await embedder.embed_text(request.query)
-
     embedding_str = "[" + ",".join(str(x) for x in query_embedding.embedding) + "]"
 
-    # Search using pgvector cosine distance
+    sw, tw = _adaptive_weights(request.query)
+
     sql_query = text("""
-        SELECT i.id, m.embedding <-> :embedding AS distance
-        FROM images i
-        JOIN image_metadata m ON i.id = m.image_id
-        WHERE m.embedding IS NOT NULL
-        ORDER BY m.embedding <-> :embedding
+        WITH scored AS (
+            SELECT i.id,
+                (1.0 - (m.embedding <=> :embedding) / 2.0) AS semantic_score,
+                CASE WHEN m.search_vector IS NOT NULL
+                     AND plainto_tsquery('english', :query_text) != ''::tsquery
+                THEN ts_rank_cd(m.search_vector, plainto_tsquery('english', :query_text))
+                ELSE 0 END AS raw_text_score
+            FROM images i
+            JOIN image_metadata m ON i.id = m.image_id
+            WHERE m.embedding IS NOT NULL
+        )
+        SELECT id, semantic_score,
+            raw_text_score / (raw_text_score + 1.0) AS text_score,
+            (:sw * semantic_score + :tw * (raw_text_score / (raw_text_score + 1.0))) AS combined_score
+        FROM scored
+        ORDER BY combined_score DESC
         LIMIT :limit
     """)
 
-    result = db.execute(sql_query, {"embedding": embedding_str, "limit": request.limit})
+    result = db.execute(sql_query, {
+        "embedding": embedding_str,
+        "query_text": request.query,
+        "sw": sw,
+        "tw": tw,
+        "limit": request.limit,
+    })
     rows = result.fetchall()
 
     image_ids = [row[0] for row in rows]
+    scores_by_id = {
+        row[0]: {
+            "semantic_score": float(row[1]),
+            "text_score": float(row[2]),
+            "combined_score": float(row[3]),
+        }
+        for row in rows
+    }
 
     image_service = get_image_service(db)
     images = image_service.get_images_by_ids(image_ids)
 
-    # Maintain search order
     id_to_image = {img.id: img for img in images}
-    ordered_images = [id_to_image[img_id] for img_id in image_ids if img_id in id_to_image]
+    scored_results = []
+    for img_id in image_ids:
+        if img_id in id_to_image:
+            s = scores_by_id[img_id]
+            scored_results.append(ScoredImageResponse(
+                image=ImageResponse.model_validate(id_to_image[img_id]),
+                score=s["combined_score"],
+                semantic_score=s["semantic_score"],
+                text_score=s["text_score"],
+            ))
 
     return SearchResponse(
-        images=[ImageResponse.model_validate(img) for img in ordered_images],
+        results=scored_results,
         query=request.query,
-        total=len(ordered_images),
+        total=len(scored_results),
     )
 
 

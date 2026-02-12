@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { X, ExternalLink, RefreshCw, Tag, FileText, Cpu } from 'lucide-react';
 import { toast } from 'sonner';
-import type { Image } from '@/types';
+import type { Image, PromptPreset } from '@/types';
 import { imagesApi, jobsApi, settingsApi } from '@/lib/api';
 import { cn, formatDate, formatFileSize } from '@/lib/utils';
 import { hasReachedStatus } from '@/lib/pipeline';
@@ -21,8 +21,8 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
   const [showReprocessDialog, setShowReprocessDialog] = useState(false);
   const [showTagDialog, setShowTagDialog] = useState(false);
   const [showDescribeDialog, setShowDescribeDialog] = useState(false);
-  const [descriptionGuidance, setDescriptionGuidance] = useState('');
-  const [tagGuidance, setTagGuidance] = useState('');
+  const [descriptionPrompt, setDescriptionPrompt] = useState('');
+  const [tagPrompt, setTagPrompt] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [staleSteps, setStaleSteps] = useState<string[]>([]);
 
@@ -73,13 +73,18 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
       liveImage.status === 'embedded' || liveImage.status === 'clustered',
   });
 
-  const { data: defaultGuidance } = useQuery({
-    queryKey: ['guidance-settings'],
-    queryFn: settingsApi.getGuidance,
+  const { data: defaultPrompts } = useQuery({
+    queryKey: ['prompt-settings'],
+    queryFn: settingsApi.getPrompts,
+  });
+
+  const { data: presets } = useQuery({
+    queryKey: ['presets'],
+    queryFn: settingsApi.listPresets,
   });
 
   const tagMutation = useMutation({
-    mutationFn: (options?: { tag_guidance?: string }) =>
+    mutationFn: (options?: { tag_prompt?: string }) =>
       imagesApi.tagImage(image.id, options),
     onSuccess: () => {
       toast.info('Tagging started');
@@ -93,7 +98,7 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
   });
 
   const describeMutation = useMutation({
-    mutationFn: (options?: { description_guidance?: string }) =>
+    mutationFn: (options?: { description_prompt?: string }) =>
       imagesApi.describeImage(image.id, options),
     onSuccess: () => {
       toast.info('Describing started');
@@ -120,8 +125,8 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
 
   const reprocessMutation = useMutation({
     mutationFn: (options: {
-      tag_guidance?: string;
-      description_guidance?: string;
+      tag_prompt?: string;
+      description_prompt?: string;
     }) => imagesApi.reprocess(image.id, options),
     onSuccess: () => {
       toast.info('Reprocessing started');
@@ -142,19 +147,19 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
     liveImage.status === 'failed' ||
     hasReachedStatus(liveImage.status, 'described');
 
-  // Initialize guidance from defaults when dialogs open
-  const initGuidance = useCallback(() => {
-    if (defaultGuidance) {
-      setDescriptionGuidance(defaultGuidance.description_guidance || '');
-      setTagGuidance(defaultGuidance.tag_guidance || '');
+  // Initialize prompts from defaults when dialogs open
+  const initPrompts = useCallback(() => {
+    if (defaultPrompts) {
+      setDescriptionPrompt(defaultPrompts.description_prompt);
+      setTagPrompt(defaultPrompts.tag_prompt);
     }
-  }, [defaultGuidance]);
+  }, [defaultPrompts]);
 
   useEffect(() => {
     if (showReprocessDialog || showTagDialog || showDescribeDialog) {
-      initGuidance();
+      initPrompts();
     }
-  }, [showReprocessDialog, showTagDialog, showDescribeDialog, initGuidance]);
+  }, [showReprocessDialog, showTagDialog, showDescribeDialog, initPrompts]);
 
   // Close on escape key
   useEffect(() => {
@@ -172,20 +177,20 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
 
   const handleReprocess = () => {
     reprocessMutation.mutate({
-      description_guidance: descriptionGuidance || undefined,
-      tag_guidance: tagGuidance || undefined,
+      description_prompt: descriptionPrompt || undefined,
+      tag_prompt: tagPrompt || undefined,
     });
   };
 
   const handleTag = () => {
     tagMutation.mutate({
-      tag_guidance: tagGuidance || undefined,
+      tag_prompt: tagPrompt || undefined,
     });
   };
 
   const handleDescribe = () => {
     describeMutation.mutate({
-      description_guidance: descriptionGuidance || undefined,
+      description_prompt: descriptionPrompt || undefined,
     });
   };
 
@@ -393,24 +398,43 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
           />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div
-              className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4"
+              className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
               <h3 className="text-lg font-semibold">Tag Image</h3>
               <p className="text-sm text-muted-foreground">
-                Optionally provide guidance to influence how this image is
-                tagged.
+                These instructions tell the AI what to look for. JSON formatting and error handling are added automatically.
               </p>
+
+              {presets && presets.length > 0 && (
+                <div>
+                  <label className="block text-sm font-medium mb-1">Preset</label>
+                  <select
+                    className="w-full px-3 py-2 border border-border rounded-lg text-sm"
+                    value=""
+                    onChange={(e) => {
+                      const p = presets.find((pr) => pr.id === Number(e.target.value));
+                      if (p) setTagPrompt(p.tag_prompt);
+                    }}
+                  >
+                    <option value="" disabled>Load from preset...</option>
+                    {presets.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}{p.is_default ? ' (active)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium mb-2">
-                  Tag Guidance
+                  Tag Instructions
                 </label>
                 <textarea
-                  value={tagGuidance}
-                  onChange={(e) => setTagGuidance(e.target.value)}
-                  placeholder="e.g., Focus on architectural elements and materials"
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-y min-h-[80px]"
+                  value={tagPrompt}
+                  onChange={(e) => setTagPrompt(e.target.value)}
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm font-mono resize-y min-h-[200px]"
                 />
               </div>
 
@@ -443,24 +467,43 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
           />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div
-              className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4"
+              className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
               <h3 className="text-lg font-semibold">Describe Image</h3>
               <p className="text-sm text-muted-foreground">
-                Optionally provide guidance to influence how this image is
-                described.
+                These instructions tell the AI how to describe the image. JSON formatting and error handling are added automatically.
               </p>
+
+              {presets && presets.length > 0 && (
+                <div>
+                  <label className="block text-sm font-medium mb-1">Preset</label>
+                  <select
+                    className="w-full px-3 py-2 border border-border rounded-lg text-sm"
+                    value=""
+                    onChange={(e) => {
+                      const p = presets.find((pr) => pr.id === Number(e.target.value));
+                      if (p) setDescriptionPrompt(p.description_prompt);
+                    }}
+                  >
+                    <option value="" disabled>Load from preset...</option>
+                    {presets.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}{p.is_default ? ' (active)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium mb-2">
-                  Description Guidance
+                  Description Instructions
                 </label>
                 <textarea
-                  value={descriptionGuidance}
-                  onChange={(e) => setDescriptionGuidance(e.target.value)}
-                  placeholder="e.g., Focus on detailed physical features and positioning"
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-y min-h-[80px]"
+                  value={descriptionPrompt}
+                  onChange={(e) => setDescriptionPrompt(e.target.value)}
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm font-mono resize-y min-h-[200px]"
                 />
               </div>
 
@@ -493,36 +536,57 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
           />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div
-              className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4"
+              className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
               <h3 className="text-lg font-semibold">Reprocess Image</h3>
               <p className="text-sm text-muted-foreground">
-                Optionally provide guidance to influence how this image is tagged
-                and described.
+                These instructions tell the AI what to look for. JSON formatting and error handling are added automatically.
               </p>
+
+              {presets && presets.length > 0 && (
+                <div>
+                  <label className="block text-sm font-medium mb-1">Preset</label>
+                  <select
+                    className="w-full px-3 py-2 border border-border rounded-lg text-sm"
+                    value=""
+                    onChange={(e) => {
+                      const p = presets.find((pr) => pr.id === Number(e.target.value));
+                      if (p) {
+                        setTagPrompt(p.tag_prompt);
+                        setDescriptionPrompt(p.description_prompt);
+                      }
+                    }}
+                  >
+                    <option value="" disabled>Load from preset...</option>
+                    {presets.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}{p.is_default ? ' (active)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium mb-2">
-                  Description Guidance
+                  Description Instructions
                 </label>
                 <textarea
-                  value={descriptionGuidance}
-                  onChange={(e) => setDescriptionGuidance(e.target.value)}
-                  placeholder="e.g., Focus on detailed physical features and positioning"
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-y min-h-[80px]"
+                  value={descriptionPrompt}
+                  onChange={(e) => setDescriptionPrompt(e.target.value)}
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm font-mono resize-y min-h-[150px]"
                 />
               </div>
 
               <div>
                 <label className="block text-sm font-medium mb-2">
-                  Tag Guidance
+                  Tag Instructions
                 </label>
                 <textarea
-                  value={tagGuidance}
-                  onChange={(e) => setTagGuidance(e.target.value)}
-                  placeholder="e.g., Focus on architectural elements and materials"
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-y min-h-[80px]"
+                  value={tagPrompt}
+                  onChange={(e) => setTagPrompt(e.target.value)}
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm font-mono resize-y min-h-[150px]"
                 />
               </div>
 

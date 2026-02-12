@@ -1,11 +1,12 @@
 'use client';
 
+import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Play, XCircle, RefreshCw, Tag, FileText, Cpu, Sparkles, Check } from 'lucide-react';
+import { Loader2, Play, XCircle, RefreshCw, Tag, FileText, Cpu, Sparkles, Check, AlertTriangle } from 'lucide-react';
 import { jobsApi, clustersApi, imagesApi } from '@/lib/api';
 import { cn, formatDate, getStatusColor } from '@/lib/utils';
-import type { Job } from '@/types';
+import type { BatchJobImage, Job } from '@/types';
 
 export default function JobsPage() {
   const queryClient = useQueryClient();
@@ -52,10 +53,30 @@ export default function JobsPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
   });
 
+  const reprocessAllMutation = useMutation({
+    mutationFn: jobsApi.reprocessAll,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['pipeline-stats'] });
+    },
+  });
+
+  const reprocessFailedMutation = useMutation({
+    mutationFn: jobsApi.reprocessFailed,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['pipeline-stats'] });
+    },
+  });
+
   const cancelJobMutation = useMutation({
     mutationFn: jobsApi.cancel,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
   });
+
+  const hasBatchRunning = jobs?.items.some(
+    (j) => j.job_type === 'batch_reprocess' && (j.status === 'running' || j.status === 'pending')
+  ) ?? false;
 
   return (
     <div className="space-y-6">
@@ -101,6 +122,38 @@ export default function JobsPage() {
             <Cpu className="h-4 w-4" />
             Embed All
           </button>
+
+          <div className="w-px h-6 bg-border" />
+
+          <button
+            onClick={() => reprocessAllMutation.mutate()}
+            disabled={reprocessAllMutation.isPending || hasBatchRunning}
+            title={hasBatchRunning ? 'A batch reprocess job is already running' : undefined}
+            className={cn(
+              'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+              'border border-border hover:bg-muted',
+              'disabled:opacity-50 disabled:cursor-not-allowed'
+            )}
+          >
+            <RefreshCw className={cn('h-4 w-4', reprocessAllMutation.isPending && 'animate-spin')} />
+            Reprocess All
+          </button>
+
+          {stats && stats.failed > 0 && (
+            <button
+              onClick={() => reprocessFailedMutation.mutate()}
+              disabled={reprocessFailedMutation.isPending || hasBatchRunning}
+              title={hasBatchRunning ? 'A batch reprocess job is already running' : undefined}
+              className={cn(
+                'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+                'border border-red-300 text-red-700 hover:bg-red-50',
+                'disabled:opacity-50 disabled:cursor-not-allowed'
+              )}
+            >
+              <AlertTriangle className="h-4 w-4" />
+              Reprocess Failed ({stats.failed})
+            </button>
+          )}
 
           <div className="w-px h-6 bg-border" />
 
@@ -230,6 +283,8 @@ export default function JobsPage() {
                           {job.image_filename || `#${job.image_id}`}
                         </span>
                       </Link>
+                    ) : job.job_type === 'batch_reprocess' ? (
+                      <BatchImagesPill job={job} />
                     ) : (
                       <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">
                         Batch
@@ -287,6 +342,99 @@ export default function JobsPage() {
                 <p className="text-red-700 mt-1">{job.error_message}</p>
               </div>
             ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BatchImagesPill({ job }: { job: Job }) {
+  const [open, setOpen] = useState(false);
+  const [images, setImages] = useState<BatchJobImage[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  const imageCount = (job.result as Record<string, unknown> | null)?.image_ids
+    ? ((job.result as Record<string, unknown>).image_ids as number[]).length
+    : job.total_items;
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    if (open) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  const handleOpen = async () => {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setOpen(true);
+    if (!images) {
+      setLoading(true);
+      try {
+        const data = await jobsApi.getJobImages(job.id);
+        setImages(data);
+      } catch {
+        setImages([]);
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+  return (
+    <div className="relative" ref={popoverRef}>
+      <button
+        onClick={handleOpen}
+        className="text-xs text-primary bg-primary/10 hover:bg-primary/20 px-2 py-0.5 rounded font-medium transition-colors"
+      >
+        {imageCount} images
+      </button>
+
+      {open && (
+        <div className="absolute z-50 top-full mt-1 left-0 bg-white border border-border rounded-lg shadow-lg p-3 w-64 max-h-80 overflow-y-auto">
+          {loading ? (
+            <div className="flex items-center justify-center py-4">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            </div>
+          ) : images && images.length > 0 ? (
+            <div className="space-y-2">
+              {images.slice(0, 10).map((img) => (
+                <Link
+                  key={img.id}
+                  href={`/images?image_id=${img.id}`}
+                  className="flex items-center gap-2 hover:bg-muted rounded p-1 transition-colors"
+                >
+                  {img.thumbnail ? (
+                    <img
+                      src={imagesApi.getThumbnailUrl(img.thumbnail)}
+                      alt=""
+                      className="h-8 w-8 rounded object-cover flex-shrink-0"
+                    />
+                  ) : (
+                    <div className="h-8 w-8 rounded bg-muted flex-shrink-0" />
+                  )}
+                  <span className="text-xs truncate text-primary">
+                    {img.original_filename || `#${img.id}`}
+                  </span>
+                </Link>
+              ))}
+              {images.length > 10 && (
+                <p className="text-xs text-muted-foreground text-center pt-1">
+                  and {images.length - 10} more...
+                </p>
+              )}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground text-center py-4">No images found</p>
+          )}
         </div>
       )}
     </div>

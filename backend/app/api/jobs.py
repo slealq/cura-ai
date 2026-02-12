@@ -6,11 +6,29 @@ from sqlalchemy.orm import Session
 
 from app.db.base import get_db
 from app.models import Image, ImageStatus, Job, JobStatus, JobType
-from app.schemas import JobListResponse, JobResponse
-from app.workers.tasks import describe_image, embed_image, run_full_pipeline, tag_image
+from app.schemas import BatchJobImageInfo, BatchReprocessRequest, JobListResponse, JobResponse
+from app.workers.tasks import describe_image, embed_image, run_batch_reprocess, run_full_pipeline, tag_image
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+
+def _check_no_active_batch(db: Session) -> None:
+    """Raise 409 if a BATCH_REPROCESS job is already RUNNING or PENDING."""
+    active = (
+        db.query(Job)
+        .filter(
+            Job.job_type == JobType.BATCH_REPROCESS,
+            Job.status.in_([JobStatus.PENDING, JobStatus.RUNNING]),
+        )
+        .first()
+    )
+    if active:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A batch reprocess job is already active (job #{active.id}, status: {active.status.value}). "
+                   "Cancel it first or wait for it to finish.",
+        )
 
 
 def _job_to_response(job: Job) -> JobResponse:
@@ -175,6 +193,134 @@ async def trigger_batch_embed(db: Session = Depends(get_db)):
         embed_image.delay(img.id)
 
     return {"status": "queued", "job_id": job.id, "total": len(images), "message": f"Embedding {len(images)} images"}
+
+
+@router.post("/pipeline/reprocess-all")
+async def trigger_reprocess_all(db: Session = Depends(get_db)):
+    """Reprocess ALL images from scratch."""
+    _check_no_active_batch(db)
+    images = db.query(Image).all()
+
+    if not images:
+        return {"status": "skipped", "total": 0, "message": "No images to reprocess"}
+
+    image_ids = [img.id for img in images]
+
+    job = Job(
+        job_type=JobType.BATCH_REPROCESS,
+        status=JobStatus.PENDING,
+        total_items=len(image_ids),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    task = run_batch_reprocess.delay(job.id, image_ids)
+    job.celery_task_id = task.id
+    db.commit()
+
+    return {
+        "status": "queued",
+        "job_id": job.id,
+        "total": len(image_ids),
+        "message": f"Reprocessing all {len(image_ids)} images",
+    }
+
+
+@router.post("/pipeline/reprocess-failed")
+async def trigger_reprocess_failed(db: Session = Depends(get_db)):
+    """Reprocess only FAILED images."""
+    _check_no_active_batch(db)
+    images = db.query(Image).filter(Image.status == ImageStatus.FAILED).all()
+
+    if not images:
+        return {"status": "skipped", "total": 0, "message": "No failed images to reprocess"}
+
+    image_ids = [img.id for img in images]
+
+    job = Job(
+        job_type=JobType.BATCH_REPROCESS,
+        status=JobStatus.PENDING,
+        total_items=len(image_ids),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    task = run_batch_reprocess.delay(job.id, image_ids)
+    job.celery_task_id = task.id
+    db.commit()
+
+    return {
+        "status": "queued",
+        "job_id": job.id,
+        "total": len(image_ids),
+        "message": f"Reprocessing {len(image_ids)} failed images",
+    }
+
+
+@router.post("/pipeline/reprocess-selected")
+async def trigger_reprocess_selected(
+    request: BatchReprocessRequest, db: Session = Depends(get_db)
+):
+    """Reprocess specific images by ID."""
+    _check_no_active_batch(db)
+    images = db.query(Image).filter(Image.id.in_(request.image_ids)).all()
+    found_ids = {img.id for img in images}
+    missing = set(request.image_ids) - found_ids
+
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Images not found: {sorted(missing)}")
+
+    image_ids = list(found_ids)
+
+    job = Job(
+        job_type=JobType.BATCH_REPROCESS,
+        status=JobStatus.PENDING,
+        total_items=len(image_ids),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    task = run_batch_reprocess.delay(job.id, image_ids)
+    job.celery_task_id = task.id
+    db.commit()
+
+    return {
+        "status": "queued",
+        "job_id": job.id,
+        "total": len(image_ids),
+        "message": f"Reprocessing {len(image_ids)} selected images",
+    }
+
+
+@router.get("/{job_id}/images", response_model=list[BatchJobImageInfo])
+async def get_job_images(job_id: int, db: Session = Depends(get_db)):
+    """Get images belonging to a batch job."""
+    job = db.query(Job).filter(Job.id == job_id).first()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    image_ids = (job.result or {}).get("image_ids", [])
+    if not image_ids:
+        return []
+
+    images = db.query(Image).filter(Image.id.in_(image_ids)).all()
+
+    result = []
+    for img in images:
+        thumb = img.thumbnail_uri_small
+        if thumb:
+            thumb = thumb.rsplit("/", 1)[-1]
+        result.append(BatchJobImageInfo(
+            id=img.id,
+            original_filename=img.original_filename,
+            thumbnail=thumb,
+        ))
+
+    return result
 
 
 @router.delete("/{job_id}")

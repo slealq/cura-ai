@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
 )
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -141,6 +142,9 @@ class ImageMetadata(Base):
     caption_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     embedding_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     tagging_prompt_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # Full-text search vector (managed by DB trigger)
+    search_vector = mapped_column(TSVECTOR, nullable=True)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

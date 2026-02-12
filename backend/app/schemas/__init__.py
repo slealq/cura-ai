@@ -179,10 +179,19 @@ class SearchRequest(BaseModel):
     limit: int = Field(default=20, ge=1, le=100)
 
 
+class ScoredImageResponse(BaseModel):
+    """Image with search relevance scores."""
+
+    image: ImageResponse
+    score: float
+    semantic_score: float
+    text_score: float
+
+
 class SearchResponse(BaseModel):
     """Search response schema."""
 
-    images: list[ImageResponse]
+    results: list[ScoredImageResponse]
     query: str
     total: int
 
@@ -215,3 +224,18 @@ class TriggerClusteringResponse(BaseModel):
     job_id: int
     status: str
     message: str
+
+
+# Batch reprocess schemas
+class BatchReprocessRequest(BaseModel):
+    """Request to reprocess specific images."""
+
+    image_ids: list[int] = Field(..., min_length=1)
+
+
+class BatchJobImageInfo(BaseModel):
+    """Image info for batch job popover."""
+
+    id: int
+    original_filename: str | None
+    thumbnail: str | None

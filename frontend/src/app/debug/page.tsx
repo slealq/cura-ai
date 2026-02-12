@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Trash2, Bug } from 'lucide-react';
+import { Loader2, Trash2, Bug, ChevronRight, ChevronDown } from 'lucide-react';
 import { toast } from 'sonner';
 import { logsApi } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -263,62 +263,230 @@ export default function DebugPage() {
 }
 
 function LogRow({ log }: { log: LogEntry }) {
+  const [expanded, setExpanded] = useState(false);
   const tokens =
     log.input_tokens != null || log.output_tokens != null
       ? (log.input_tokens || 0) + (log.output_tokens || 0)
       : null;
 
+  const hasDetails = log.extra && Object.keys(log.extra).length > 0;
+  const extra = log.extra as Record<string, unknown> | null;
+
   return (
-    <tr className="hover:bg-muted/30 text-xs">
-      <td className="px-3 py-2 font-mono text-muted-foreground whitespace-nowrap">
-        {formatDate(log.created_at)}
-      </td>
-      <td className="px-3 py-2">
-        <span
-          className={cn(
-            'px-1.5 py-0.5 rounded text-[10px] font-medium uppercase',
-            LEVEL_COLORS[log.level] || LEVEL_COLORS.info
-          )}
-        >
-          {log.level}
-        </span>
-      </td>
-      <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
-        {CATEGORY_LABELS[log.category] || log.category}
-      </td>
-      <td className="px-3 py-2 max-w-md">
-        <span className="truncate block">{log.message}</span>
-      </td>
-      <td className="px-3 py-2 whitespace-nowrap">
-        {log.provider ? (
-          <span className="font-mono text-muted-foreground">
-            {log.provider}
-            {log.model && (
-              <span className="text-foreground ml-1">/ {log.model}</span>
+    <>
+      <tr
+        className={cn(
+          'text-xs',
+          hasDetails ? 'cursor-pointer' : '',
+          expanded ? 'bg-muted/40' : 'hover:bg-muted/30',
+        )}
+        onClick={() => hasDetails && setExpanded(!expanded)}
+      >
+        <td className="px-3 py-2 font-mono text-muted-foreground whitespace-nowrap">
+          <span className="inline-flex items-center gap-1">
+            {hasDetails && (
+              expanded
+                ? <ChevronDown className="h-3 w-3" />
+                : <ChevronRight className="h-3 w-3" />
             )}
+            {formatDate(log.created_at)}
           </span>
-        ) : (
-          <span className="text-muted-foreground">-</span>
-        )}
-      </td>
-      <td className="px-3 py-2 font-mono whitespace-nowrap">
-        {tokens != null ? (
-          <span>{tokens.toLocaleString()}</span>
-        ) : (
-          <span className="text-muted-foreground">-</span>
-        )}
-      </td>
-      <td className="px-3 py-2 font-mono whitespace-nowrap">
-        {log.duration_ms != null ? (
-          <span>
-            {log.duration_ms >= 1000
-              ? `${(log.duration_ms / 1000).toFixed(1)}s`
-              : `${log.duration_ms.toFixed(0)}ms`}
+        </td>
+        <td className="px-3 py-2">
+          <span
+            className={cn(
+              'px-1.5 py-0.5 rounded text-[10px] font-medium uppercase',
+              LEVEL_COLORS[log.level] || LEVEL_COLORS.info
+            )}
+          >
+            {log.level}
           </span>
-        ) : (
-          <span className="text-muted-foreground">-</span>
+        </td>
+        <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
+          {CATEGORY_LABELS[log.category] || log.category}
+        </td>
+        <td className="px-3 py-2 max-w-md">
+          <span className="truncate block">{log.message}</span>
+        </td>
+        <td className="px-3 py-2 whitespace-nowrap">
+          {log.provider ? (
+            <span className="font-mono text-muted-foreground">
+              {log.provider}
+              {log.model && (
+                <span className="text-foreground ml-1">/ {log.model}</span>
+              )}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">-</span>
+          )}
+        </td>
+        <td className="px-3 py-2 font-mono whitespace-nowrap">
+          {tokens != null ? (
+            <span>{tokens.toLocaleString()}</span>
+          ) : (
+            <span className="text-muted-foreground">-</span>
+          )}
+        </td>
+        <td className="px-3 py-2 font-mono whitespace-nowrap">
+          {log.duration_ms != null ? (
+            <span>
+              {log.duration_ms >= 1000
+                ? `${(log.duration_ms / 1000).toFixed(1)}s`
+                : `${log.duration_ms.toFixed(0)}ms`}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">-</span>
+          )}
+        </td>
+      </tr>
+      {expanded && extra && (
+        <tr>
+          <td colSpan={7} className="px-0 py-0">
+            <LogDetail log={log} extra={extra} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function LogDetail({ log, extra }: { log: LogEntry; extra: Record<string, unknown> }) {
+  const guidance = extra.guidance as string | null | undefined;
+  const requestPrompt = extra.request_prompt as string | undefined;
+  const responseContent = extra.response_content as string | undefined;
+  const error = extra.error as string | undefined;
+
+  // Parse response content if it's JSON
+  let formattedResponse = responseContent;
+  if (responseContent) {
+    try {
+      const parsed = JSON.parse(responseContent);
+      formattedResponse = JSON.stringify(parsed, null, 2);
+    } catch {
+      // not JSON, use as-is
+    }
+  }
+
+  return (
+    <div className="bg-muted/20 border-t border-border px-6 py-4 space-y-4">
+      {/* Metadata row */}
+      <div className="flex flex-wrap gap-4 text-xs">
+        {log.image_id != null && (
+          <div>
+            <span className="text-muted-foreground">Image ID: </span>
+            <span className="font-mono">{log.image_id}</span>
+          </div>
         )}
-      </td>
-    </tr>
+        {log.job_id != null && (
+          <div>
+            <span className="text-muted-foreground">Job ID: </span>
+            <span className="font-mono">{log.job_id}</span>
+          </div>
+        )}
+        {log.operation && (
+          <div>
+            <span className="text-muted-foreground">Operation: </span>
+            <span className="font-mono">{log.operation}</span>
+          </div>
+        )}
+        {log.input_tokens != null && (
+          <div>
+            <span className="text-muted-foreground">Input tokens: </span>
+            <span className="font-mono">{log.input_tokens.toLocaleString()}</span>
+          </div>
+        )}
+        {log.output_tokens != null && (
+          <div>
+            <span className="text-muted-foreground">Output tokens: </span>
+            <span className="font-mono">{log.output_tokens.toLocaleString()}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Guidance */}
+      {guidance !== undefined && (
+        <div>
+          <h4 className="text-xs font-semibold text-muted-foreground mb-1">Guidance Used</h4>
+          {guidance ? (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs whitespace-pre-wrap">
+              {guidance}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground italic">No guidance provided</p>
+          )}
+        </div>
+      )}
+
+      {/* Error */}
+      {error && (
+        <div>
+          <h4 className="text-xs font-semibold text-red-700 mb-1">Error</h4>
+          <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs font-mono whitespace-pre-wrap text-red-800">
+            {error}
+          </div>
+        </div>
+      )}
+
+      {/* Request prompt */}
+      {requestPrompt && (
+        <CollapsibleSection title="Request Prompt" defaultOpen={false}>
+          <div className="bg-white border border-border rounded-lg px-3 py-2 text-xs font-mono whitespace-pre-wrap max-h-[400px] overflow-y-auto">
+            {requestPrompt}
+          </div>
+        </CollapsibleSection>
+      )}
+
+      {/* Response content */}
+      {formattedResponse && (
+        <CollapsibleSection title="Model Response" defaultOpen={true}>
+          <div className="bg-white border border-border rounded-lg px-3 py-2 text-xs font-mono whitespace-pre-wrap max-h-[400px] overflow-y-auto">
+            {formattedResponse}
+          </div>
+        </CollapsibleSection>
+      )}
+
+      {/* Extra fields not already shown */}
+      {Object.keys(extra).filter(k => !['guidance', 'request_prompt', 'response_content', 'error'].includes(k)).length > 0 && (
+        <CollapsibleSection title="Extra Data" defaultOpen={false}>
+          <pre className="bg-white border border-border rounded-lg px-3 py-2 text-xs font-mono whitespace-pre-wrap max-h-[300px] overflow-y-auto">
+            {JSON.stringify(
+              Object.fromEntries(
+                Object.entries(extra).filter(([k]) => !['guidance', 'request_prompt', 'response_content', 'error'].includes(k))
+              ),
+              null,
+              2
+            )}
+          </pre>
+        </CollapsibleSection>
+      )}
+    </div>
+  );
+}
+
+function CollapsibleSection({
+  title,
+  defaultOpen,
+  children,
+}: {
+  title: string;
+  defaultOpen: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <div>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen(!open);
+        }}
+        className="flex items-center gap-1 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors mb-1"
+      >
+        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        {title}
+      </button>
+      {open && children}
+    </div>
   );
 }

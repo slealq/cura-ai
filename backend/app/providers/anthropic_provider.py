@@ -6,12 +6,13 @@ import re
 import time
 
 from anthropic import AsyncAnthropic
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 
 from app.core.config import get_settings
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.services.log_service import write_log
 from app.providers.base import (
+    AIContentError,
     BaseClusterSummarizer,
     BaseDescriber,
     BaseTagger,
@@ -23,51 +24,7 @@ from app.providers.base import (
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-TAGGING_PROMPT_VERSION = "v2.0.0"
-
-TAGGING_PROMPT = """Analyze this image and return a JSON object with a flat list of tags for categorization purposes.
-
-Return ONLY a valid JSON object (no other text) with a single key "tags" containing an array of relevant tags (lowercase, hyphenated for multi-word).
-
-Tags should categorize the image across these dimensions:
-- Framing: full-body, upper-body, lower-body, feet-close-up, face-close-up, hands-close-up, medium-shot, wide-shot
-- People: single-woman, single-man, multiple-people, couple, group
-- Clothing: nude, semi-nude, clothed, lingerie, swimwear, dress, casual, formal, heels, barefoot
-- Body features: soles-visible, toenails-visible, fingernails-visible, tattoos, piercings
-- Activity: standing, sitting, lying-down, walking, posing, kneeling, bending-over
-- Setting: indoor, outdoor, studio, bedroom, bathroom, beach, nature, urban
-- Content: portrait, candid, artistic, professional, selfie, mirror
-
-Only include tags that are clearly present or relevant.
-
-{
-  "tags": ["tag-1", "tag-2", "tag-3"]
-}"""
-
-DESCRIPTION_PROMPT = """Analyze this image and provide a detailed description organized by sections. The goal is that if someone uses this description to generate an image via AI, the result should match the original image as closely as possible.
-
-Sections to cover (include all that are relevant):
-
-**Subject**: Person(s) - clothing, pose, position of hands and legs, action, body position and orientation.
-
-**Face & Hair**: Hair style, color, length. Facial expression, makeup, notable features.
-
-**Body Details**: Nails (fingers/toes) - colors, shape, length. Accessories, jewelry, tattoos.
-
-**Camera**: Camera angle, distance, perspective relative to subject. Framing (close-up, medium shot, full body).
-
-**Background**: Setting description, colors, objects, depth of field.
-
-**Lighting**: Quality, direction, color temperature, shadows.
-
-**Special Focus**: If the image emphasizes feet, describe feet in detail - toenails, nail colors, nail shapes, sole visibility, toe positioning. If adult content, describe what is visible, body positioning, and physical details explicitly.
-
-Be specific, observational, and thorough. Write in plain descriptive language. The description should be long and detailed enough to reproduce the image.
-
-Return ONLY a valid JSON object (no other text):
-{
-  "description": "## Subject\\n...\\n\\n## Face & Hair\\n...\\n\\n## Camera\\n..."
-}"""
+TAGGING_PROMPT_VERSION = "v3.0.0"
 
 CLUSTER_SUMMARY_PROMPT = """You're summarizing a cluster of {size} similar images.
 
@@ -108,9 +65,10 @@ class AnthropicTagger(BaseTagger):
         self.client = AsyncAnthropic(api_key=settings.anthropic_api_key)
         self.model = settings.anthropic_vision_model
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10),
+           retry=retry_if_not_exception_type(AIContentError))
     async def tag_image(
-        self, image_data: bytes, mime_type: str, tag_guidance: str | None = None
+        self, image_data: bytes, mime_type: str, tag_prompt: str | None = None
     ) -> TaggingResult:
         """Tag an image using Anthropic Claude."""
         base64_image = base64.b64encode(image_data).decode("utf-8")
@@ -120,10 +78,8 @@ class AnthropicTagger(BaseTagger):
         if media_type == "image/jpg":
             media_type = "image/jpeg"
 
-        # Build prompt with optional guidance
-        prompt = TAGGING_PROMPT
-        if tag_guidance:
-            prompt = f"{prompt}\n\nAdditional guidance: {tag_guidance}\n\nPlease incorporate this guidance when selecting tags."
+        if not tag_prompt:
+            raise ValueError("tag_prompt is required (composed by task layer)")
 
         start = time.monotonic()
         try:
@@ -142,12 +98,13 @@ class AnthropicTagger(BaseTagger):
                                     "data": base64_image,
                                 },
                             },
-                            {"type": "text", "text": prompt},
+                            {"type": "text", "text": tag_prompt},
                         ],
                     }
                 ],
             )
             elapsed = (time.monotonic() - start) * 1000
+            content = response.content[0].text if response.content else ""
             write_log(
                 category=LogCategory.API_CALL,
                 message=f"Anthropic tagging completed ({self.model})",
@@ -156,6 +113,10 @@ class AnthropicTagger(BaseTagger):
                 input_tokens=response.usage.input_tokens,
                 output_tokens=response.usage.output_tokens,
                 success=True,
+                extra={
+                    "request_prompt": tag_prompt,
+                    "response_content": content,
+                },
             )
         except Exception as e:
             elapsed = (time.monotonic() - start) * 1000
@@ -164,12 +125,23 @@ class AnthropicTagger(BaseTagger):
                 message=f"Anthropic tagging failed: {e}",
                 level=LogLevel.ERROR, provider="anthropic", model=self.model,
                 operation="tag", duration_ms=round(elapsed, 1), success=False,
-                extra={"error": str(e)},
+                extra={"error": str(e), "request_prompt": tag_prompt},
             )
             raise
-
-        content = response.content[0].text if response.content else ""
         result = extract_json(content)
+
+        # Check for AI-reported error
+        if "error" in result and not result.get("tags"):
+            error = AIContentError(result["error"], operation="tag")
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"Anthropic tagging refused: {result['error']}",
+                level=LogLevel.ERROR, provider="anthropic", model=self.model,
+                operation="tag", duration_ms=round(elapsed, 1), success=False,
+                extra={"error": str(error), "ai_reason": result["error"], "response_content": content},
+            )
+            raise error
+
         cleaned_tags = self._clean_tags(result)
 
         return TaggingResult(
@@ -202,9 +174,10 @@ class AnthropicDescriber(BaseDescriber):
         self.client = AsyncAnthropic(api_key=settings.anthropic_api_key)
         self.model = settings.anthropic_vision_model
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10),
+           retry=retry_if_not_exception_type(AIContentError))
     async def describe_image(
-        self, image_data: bytes, mime_type: str, description_guidance: str | None = None
+        self, image_data: bytes, mime_type: str, description_prompt: str | None = None
     ) -> DescriptionResult:
         """Generate a detailed description for an image."""
         base64_image = base64.b64encode(image_data).decode("utf-8")
@@ -213,10 +186,8 @@ class AnthropicDescriber(BaseDescriber):
         if media_type == "image/jpg":
             media_type = "image/jpeg"
 
-        # Build prompt with optional guidance
-        prompt = DESCRIPTION_PROMPT
-        if description_guidance:
-            prompt = f"{prompt}\n\nAdditional guidance: {description_guidance}\n\nPlease incorporate this guidance when generating the description."
+        if not description_prompt:
+            raise ValueError("description_prompt is required (composed by task layer)")
 
         start = time.monotonic()
         try:
@@ -235,12 +206,13 @@ class AnthropicDescriber(BaseDescriber):
                                     "data": base64_image,
                                 },
                             },
-                            {"type": "text", "text": prompt},
+                            {"type": "text", "text": description_prompt},
                         ],
                     }
                 ],
             )
             elapsed = (time.monotonic() - start) * 1000
+            content = response.content[0].text if response.content else ""
             write_log(
                 category=LogCategory.API_CALL,
                 message=f"Anthropic describe completed ({self.model})",
@@ -249,6 +221,10 @@ class AnthropicDescriber(BaseDescriber):
                 input_tokens=response.usage.input_tokens,
                 output_tokens=response.usage.output_tokens,
                 success=True,
+                extra={
+                    "request_prompt": description_prompt,
+                    "response_content": content,
+                },
             )
         except Exception as e:
             elapsed = (time.monotonic() - start) * 1000
@@ -257,12 +233,22 @@ class AnthropicDescriber(BaseDescriber):
                 message=f"Anthropic describe failed: {e}",
                 level=LogLevel.ERROR, provider="anthropic", model=self.model,
                 operation="describe", duration_ms=round(elapsed, 1), success=False,
-                extra={"error": str(e)},
+                extra={"error": str(e), "request_prompt": description_prompt},
             )
             raise
-
-        content = response.content[0].text if response.content else ""
         result = extract_json(content)
+
+        # Check for AI-reported error
+        if "error" in result and not result.get("description"):
+            error = AIContentError(result["error"], operation="describe")
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"Anthropic describe refused: {result['error']}",
+                level=LogLevel.ERROR, provider="anthropic", model=self.model,
+                operation="describe", duration_ms=round(elapsed, 1), success=False,
+                extra={"error": str(error), "ai_reason": result["error"], "response_content": content},
+            )
+            raise error
 
         return DescriptionResult(
             description=result.get("description", ""),

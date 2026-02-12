@@ -74,13 +74,14 @@ function SearchContent() {
             Found {results.total} results for "{results.query}"
           </p>
 
-          {results.images.length > 0 ? (
+          {results.results.length > 0 ? (
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-              {results.images.map((image) => (
+              {results.results.map((r) => (
                 <ImageCard
-                  key={image.id}
-                  image={image}
-                  onClick={() => setSelectedImage(image)}
+                  key={r.image.id}
+                  image={r.image}
+                  score={r.score}
+                  onClick={() => setSelectedImage(r.image)}
                 />
               ))}
             </div>

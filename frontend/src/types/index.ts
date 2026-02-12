@@ -102,8 +102,15 @@ export interface PipelineStats {
   total_clusters: number;
 }
 
+export interface ScoredImage {
+  image: Image;
+  score: number;
+  semantic_score: number;
+  text_score: number;
+}
+
 export interface SearchResponse {
-  images: Image[];
+  results: ScoredImage[];
   query: string;
   total: number;
 }
@@ -153,4 +160,20 @@ export interface LogStats {
   errors: number;
   total_tokens: number;
   avg_duration_ms: number | null;
+}
+
+export interface BatchJobImage {
+  id: number;
+  original_filename: string | null;
+  thumbnail: string | null;
+}
+
+export interface PromptPreset {
+  id: number;
+  name: string;
+  tag_prompt: string;
+  description_prompt: string;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
 }
