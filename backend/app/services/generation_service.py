@@ -28,6 +28,7 @@ class GenerationService:
         trigger_word: str,
         training_provider: str,
         folder_id: int | None = None,
+        cluster_id: int | None = None,
         base_model: str = "flux-dev",
         description: str | None = None,
         training_config: dict | None = None,
@@ -40,6 +41,7 @@ class GenerationService:
             trigger_word=trigger_word,
             training_provider=training_provider,
             folder_id=folder_id,
+            cluster_id=cluster_id,
             base_model=base_model,
             description=description,
             training_config=training_config,
@@ -56,7 +58,7 @@ class GenerationService:
         """Get a LoRA model by ID."""
         return (
             self.db.query(LoraModel)
-            .options(joinedload(LoraModel.folder))
+            .options(joinedload(LoraModel.folder), joinedload(LoraModel.cluster))
             .filter(LoraModel.id == lora_id)
             .first()
         )
@@ -68,7 +70,7 @@ class GenerationService:
         limit: int = 50,
     ) -> list[LoraModel]:
         """Get paginated list of LoRA models."""
-        query = self.db.query(LoraModel).options(joinedload(LoraModel.folder))
+        query = self.db.query(LoraModel).options(joinedload(LoraModel.folder), joinedload(LoraModel.cluster))
         if status:
             query = query.filter(LoraModel.status == status)
         return query.order_by(LoraModel.created_at.desc()).offset(skip).limit(limit).all()

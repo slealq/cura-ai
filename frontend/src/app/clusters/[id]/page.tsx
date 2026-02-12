@@ -12,10 +12,14 @@ import {
   Check,
   X,
   Sparkles,
+  CheckSquare,
+  FolderPlus,
 } from 'lucide-react';
-import { clustersApi, imagesApi } from '@/lib/api';
+import { toast } from 'sonner';
+import { clustersApi } from '@/lib/api';
 import ImageCard from '@/components/ImageCard';
 import ImageDrawer from '@/components/ImageDrawer';
+import AddToFolderDialog from '@/components/AddToFolderDialog';
 import { cn } from '@/lib/utils';
 import type { Image } from '@/types';
 
@@ -28,6 +32,12 @@ export default function ClusterDetailPage() {
   const [selectedImage, setSelectedImage] = useState<Image | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState('');
+
+  // Selection state
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [showAddToFolder, setShowAddToFolder] = useState(false);
+  const [addToFolderIds, setAddToFolderIds] = useState<number[]>([]);
 
   const { data: cluster, isLoading } = useQuery({
     queryKey: ['cluster', clusterId],
@@ -85,6 +95,40 @@ export default function ClusterDetailPage() {
     }
   };
 
+  const handleToggleSelect = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleSelectAll = () => {
+    const allIds = cluster.images.map((img) => img.id);
+    const allSelected = allIds.every((id) => selectedIds.has(id));
+    if (allSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(allIds));
+    }
+  };
+
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  };
+
+  const openAddToFolderSelected = () => {
+    setAddToFolderIds(Array.from(selectedIds));
+    setShowAddToFolder(true);
+  };
+
+  const openAddToFolderAll = () => {
+    setAddToFolderIds(cluster.images.map((img) => img.id));
+    setShowAddToFolder(true);
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -138,6 +182,58 @@ export default function ClusterDetailPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Create Folder from All */}
+          <button
+            onClick={openAddToFolderAll}
+            className={cn(
+              'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors',
+              'border border-border hover:bg-muted'
+            )}
+          >
+            <FolderPlus className="h-4 w-4" />
+            Create Folder from All
+          </button>
+
+          {/* Select mode toggle */}
+          {selectMode ? (
+            <>
+              <button
+                onClick={handleSelectAll}
+                className={cn(
+                  'px-3 py-2 rounded-lg text-sm transition-colors',
+                  'border border-border hover:bg-muted'
+                )}
+              >
+                {cluster.images.every((img) => selectedIds.has(img.id))
+                  ? 'Deselect All'
+                  : 'Select All'}
+              </button>
+              <button
+                onClick={exitSelectMode}
+                className={cn(
+                  'flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm transition-colors',
+                  'border border-border hover:bg-muted'
+                )}
+              >
+                <X className="h-3.5 w-3.5" />
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => setSelectMode(true)}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm transition-colors',
+                'border border-border hover:bg-muted'
+              )}
+            >
+              <CheckSquare className="h-3.5 w-3.5" />
+              Select
+            </button>
+          )}
+
+          <div className="w-px h-6 bg-border" />
+
           <button
             onClick={() => summarizeMutation.mutate()}
             disabled={summarizeMutation.isPending}
@@ -213,11 +309,53 @@ export default function ClusterDetailPage() {
             <ImageCard
               key={image.id}
               image={image}
-              onClick={() => setSelectedImage(image)}
+              onClick={selectMode ? undefined : () => setSelectedImage(image)}
+              selectable={selectMode}
+              selected={selectedIds.has(image.id)}
+              onSelect={handleToggleSelect}
             />
           ))}
         </div>
       </div>
+
+      {/* Floating action bar for selection */}
+      {selectedIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white border border-border rounded-xl shadow-lg px-4 py-3 flex items-center gap-3 z-50">
+          <span className="text-sm font-medium">
+            {selectedIds.size} image{selectedIds.size !== 1 ? 's' : ''} selected
+          </span>
+          <button
+            onClick={openAddToFolderSelected}
+            className={cn(
+              'flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
+              'bg-primary text-primary-foreground hover:bg-primary/90'
+            )}
+          >
+            <FolderPlus className="h-3.5 w-3.5" />
+            Create Folder from Selected
+          </button>
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            className="p-1.5 hover:bg-muted rounded-lg text-muted-foreground transition-colors"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Add to Folder dialog */}
+      {showAddToFolder && (
+        <AddToFolderDialog
+          imageIds={addToFolderIds}
+          onClose={() => setShowAddToFolder(false)}
+          onDone={() => {
+            setShowAddToFolder(false);
+            setSelectedIds(new Set());
+            setSelectMode(false);
+            toast.success('Images added to folder');
+          }}
+        />
+      )}
 
       {/* Image Drawer */}
       {selectedImage && (

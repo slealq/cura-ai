@@ -49,11 +49,20 @@ Automatically ingest, tag, cluster, and browse design inspiration images using A
 - **Log filtering**: Filter by category (API Call, Task, Pipeline, System), level, image, job, or text search
 - **Auto-cleanup**: Daily scheduled cleanup of logs older than 7 days
 
+### LoRA Training & Image Generation
+- **LoRA fine-tuning**: Train LoRA adapters from folders or clusters of images via fal.ai
+- **Cluster or folder source**: Use any image folder or cluster as training data (minimum 5 images)
+- **Per-image captions**: Optionally include AI-generated tags and descriptions as per-image caption files for higher-quality training
+- **Image generation**: Generate images using trained LoRA models with configurable parameters (size, steps, guidance, seed)
+- **Batch generation**: Generate up to 8 images per request
+- **Model management**: Track training status, view model details, delete models
+
 ### Provider Abstraction
 - **Swappable vision providers**: OpenAI (GPT-4o) or Anthropic (Claude Sonnet) for tagging and describing
 - **Swappable summarizers**: OpenAI or Anthropic for cluster summaries
+- **Swappable training/generation**: fal.ai for LoRA training and image generation
 - **Embeddings**: OpenAI text-embedding-3-small (1536 dimensions)
-- **Factory functions**: `get_tagger()`, `get_describer()`, `get_embedder()`, `get_cluster_summarizer()`
+- **Factory functions**: `get_tagger()`, `get_describer()`, `get_embedder()`, `get_cluster_summarizer()`, `get_trainer()`, `get_generator()`
 
 ## Architecture
 
@@ -76,6 +85,12 @@ Automatically ingest, tag, cluster, and browse design inspiration images using A
               │ (GPT-4o/ │ │ (GPT-4o/ │ │ (OpenAI) │
               │  Claude) │ │  Claude) │ │          │
               └──────────┘ └──────────┘ └──────────┘
+
+              ┌──────────┐ ┌──────────┐
+              │  LoRA    │ │  Image   │
+              │ Trainer  │ │Generator │
+              │ (fal.ai) │ │ (fal.ai) │
+              └──────────┘ └──────────┘
 ```
 
 ### Docker Services
@@ -167,13 +182,19 @@ Drag-and-drop upload with file preview grid. Select or create a folder inline be
 Semantic search by natural language query. Results show similarity score badges. Adaptive hybrid search combines embedding similarity with full-text matching.
 
 ### Cluster Detail — `/clusters/[id]`
-View cluster images, AI summary, and common tags. Actions: rename, pin/unpin, archive, export (JSON/ZIP), regenerate summary.
+View cluster images, AI summary, and common tags. Select images individually or all at once to create folders from cluster contents. Actions: rename, pin/unpin, archive, export (JSON/ZIP), regenerate summary, create folder from all/selected images.
 
 ### Jobs — `/jobs`
 Real-time job monitor (5s polling) with pipeline statistics. Trigger individual steps (Tag All, Describe All, Embed All), batch operations (Reprocess All, Reprocess Failed), or clustering (Recluster, Summarize All). Progress bars for batch jobs. Cancel running jobs.
 
 ### Debug — `/debug`
 Structured pipeline logs with filtering by category, level, and text search. Expandable log rows show full detail: token counts, duration, prompts used, model responses, and error messages. Log statistics dashboard.
+
+### Models — `/models`
+LoRA model management page. View all trained models with status badges (pending, training, completed, failed, archived). Train new LoRA models from folders or clusters with configurable steps, style mode, and optional per-image captions using AI-generated tags and descriptions. View training details and delete models.
+
+### Generate — `/generate`
+Image generation page using trained LoRA models. Select a completed LoRA model, write a prompt with the trigger word, configure generation parameters (size, steps, guidance scale, seed), and generate 1-8 images. View generated images in a gallery with thumbnails.
 
 ### Settings — `/settings`
 Three sections:
@@ -263,6 +284,21 @@ Full interactive docs available at http://localhost:8000/api/docs
 | POST | `/pipeline/reprocess-failed` | Reprocess only failed images |
 | POST | `/pipeline/reprocess-selected` | Reprocess specific image IDs |
 
+### Generation (`/api/generation`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/lora/train` | Start LoRA training from a folder or cluster (min 5 images) |
+| GET | `/lora` | List LoRA models (filter by status) |
+| GET | `/lora/{id}` | Get LoRA model details |
+| DELETE | `/lora/{id}` | Delete LoRA model |
+| POST | `/generate` | Generate 1-8 images (optional LoRA, configurable params) |
+| GET | `/images` | List generated images (filter by lora_model_id, status) |
+| GET | `/images/{id}` | Get generated image details |
+| GET | `/images/{id}/file` | Serve generated image file |
+| DELETE | `/images/{id}` | Delete generated image |
+| GET | `/thumbnails/{filename}` | Serve generated image thumbnail |
+
 ### Settings (`/api/settings`)
 
 | Method | Endpoint | Description |
@@ -297,8 +333,14 @@ Core image record with processing status tracking (PENDING → INGESTED → TAGG
 ### Cluster + ClusterMembership
 Clusters from a specific clustering run (identified by `run_id`). Each cluster has a centroid embedding, AI-generated summary, common tags, and representative images. Memberships link images to clusters with distance-to-centroid scores. Supports pinning, archiving, renaming, and user-excluded outliers.
 
+### LoraModel
+Trained LoRA adapter records. Linked to source folder or cluster. Tracks training status (PENDING → TRAINING → COMPLETED/FAILED), provider, config (steps, style mode, caption settings), result URL, and timestamps.
+
+### GeneratedImage
+AI-generated image records linked to LoRA models. Tracks generation status, prompt, parameters, output file, dimensions, thumbnails, and provider metadata.
+
 ### Job
-Tracks async Celery tasks with type (INGEST, TAG, DESCRIBE, EMBED, CLUSTER, SUMMARIZE_CLUSTER, FULL_PIPELINE, REPROCESS, BATCH_REPROCESS), status, progress/total counters, parameters, result data, and error messages.
+Tracks async Celery tasks with type (INGEST, TAG, DESCRIBE, EMBED, CLUSTER, SUMMARIZE_CLUSTER, FULL_PIPELINE, REPROCESS, BATCH_REPROCESS, LORA_TRAIN, GENERATE_IMAGE, BATCH_GENERATE), status, progress/total counters, parameters, result data, and error messages.
 
 ### Folder + FolderImage
 User-created folders for organizing images. Many-to-many relationship — an image can belong to multiple folders. Folder deletion preserves images.
@@ -437,7 +479,8 @@ def get_tagger(provider: str | None = None) -> BaseTagger:
 │   │   │   ├── jobs.py       # Job monitoring, pipeline triggers
 │   │   │   ├── settings.py   # Prompts, presets, clustering config
 │   │   │   ├── logs.py       # Pipeline log queries
-│   │   │   └── folders.py    # Folder management
+│   │   │   ├── folders.py    # Folder management
+│   │   │   └── generation.py # LoRA training, image generation
 │   │   ├── core/             # App configuration
 │   │   ├── db/               # Database session management
 │   │   ├── models/           # SQLAlchemy models
@@ -445,6 +488,8 @@ def get_tagger(provider: str | None = None) -> BaseTagger:
 │   │   │   ├── cluster.py    # Cluster + ClusterMembership
 │   │   │   ├── job.py        # Job tracking
 │   │   │   ├── folder.py     # Folder + FolderImage
+│   │   │   ├── lora_model.py # LoRA adapter tracking
+│   │   │   ├── generated_image.py # AI-generated images
 │   │   │   ├── prompt_preset.py  # Prompt presets
 │   │   │   ├── pipeline_log.py   # Structured logs
 │   │   │   ├── settings.py   # AppSetting key-value
@@ -452,7 +497,8 @@ def get_tagger(provider: str | None = None) -> BaseTagger:
 │   │   ├── providers/        # AI provider abstractions
 │   │   │   ├── base.py       # Interfaces: BaseTagger, BaseDescriber, BaseEmbedder, BaseClusterSummarizer
 │   │   │   ├── openai_provider.py   # OpenAI implementations
-│   │   │   └── anthropic_provider.py # Anthropic implementations
+│   │   │   ├── anthropic_provider.py # Anthropic implementations
+│   │   │   └── fal_provider.py      # fal.ai LoRA training + generation
 │   │   ├── schemas/          # Pydantic request/response models
 │   │   ├── services/         # Business logic layer
 │   │   │   ├── image_service.py      # Image CRUD, metadata
@@ -463,12 +509,14 @@ def get_tagger(provider: str | None = None) -> BaseTagger:
 │   │   │   ├── folder_service.py     # Folder CRUD, image assignment
 │   │   │   ├── log_service.py        # Pipeline log writes/queries
 │   │   │   ├── api_key_service.py    # Encrypted API key management
-│   │   │   └── encryption.py         # Fernet symmetric encryption
+│   │   │   ├── encryption.py         # Fernet symmetric encryption
+│   │   │   └── generation_service.py # LoRA + generation CRUD
 │   │   ├── workers/          # Celery task definitions
 │   │   │   ├── celery_app.py # Celery config, queues, rate limits
-│   │   │   └── tasks.py      # All async tasks
+│   │   │   ├── tasks.py      # Pipeline async tasks
+│   │   │   └── generation_tasks.py # LoRA training + generation tasks
 │   │   └── main.py           # FastAPI app entry point
-│   ├── migrations/           # Alembic migrations (10 versions)
+│   ├── migrations/           # Alembic migrations (14 versions)
 │   ├── scripts/              # Utility scripts
 │   ├── Dockerfile
 │   └── pyproject.toml
@@ -484,6 +532,8 @@ def get_tagger(provider: str | None = None) -> BaseTagger:
 │       │   ├── upload/page.tsx       # Upload page
 │       │   ├── search/page.tsx       # Search page
 │       │   ├── clusters/[id]/page.tsx # Cluster detail
+│       │   ├── models/page.tsx       # LoRA models management
+│       │   ├── generate/page.tsx     # Image generation
 │       │   ├── jobs/page.tsx         # Jobs monitor
 │       │   ├── debug/page.tsx        # Debug logs
 │       │   └── settings/page.tsx     # Settings
@@ -495,6 +545,8 @@ def get_tagger(provider: str | None = None) -> BaseTagger:
 │       │   ├── ImageGrid.tsx         # Paginated grid with filters
 │       │   ├── ClusterCard.tsx       # Cluster summary card
 │       │   ├── FolderCard.tsx        # Folder preview card
+│       │   ├── GeneratedImageCard.tsx # Generated image card
+│       │   ├── AddToFolderDialog.tsx # Reusable add-to-folder modal
 │       │   └── PipelineProgress.tsx  # Visual status indicator
 │       ├── lib/
 │       │   ├── api.ts        # Typed Axios API client
@@ -531,6 +583,7 @@ def get_tagger(provider: str | None = None) -> BaseTagger:
 | Queue | Celery + Redis 7 |
 | AI (Vision) | OpenAI GPT-4o, Anthropic Claude Sonnet |
 | AI (Embeddings) | OpenAI text-embedding-3-small (1536 dims) |
+| AI (Training/Gen) | fal.ai (Flux LoRA training + generation) |
 | ML | HDBSCAN, scikit-learn, UMAP, numpy |
 | Image Processing | Pillow, imagehash |
 | Deployment | Docker Compose |

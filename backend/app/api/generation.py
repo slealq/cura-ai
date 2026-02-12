@@ -25,15 +25,19 @@ router = APIRouter(prefix="/generation", tags=["generation"])
 
 
 class TrainLoraRequest(BaseModel):
-    """Request to start LoRA training from a folder."""
+    """Request to start LoRA training from a folder or cluster."""
 
     name: str = Field(..., min_length=1, max_length=256)
     trigger_word: str = Field(..., min_length=1, max_length=128)
-    folder_id: int
+    folder_id: int | None = None
+    cluster_id: int | None = None
     description: str | None = None
     steps: int | None = None
     is_style: bool | None = None
     base_model: str = "flux-dev"
+    use_captions: bool = False
+    caption_include_tags: bool = True
+    caption_include_description: bool = True
 
 
 class GenerateRequest(BaseModel):
@@ -60,6 +64,8 @@ class LoraModelResponse(BaseModel):
     description: str | None
     folder_id: int | None
     folder_name: str | None
+    cluster_id: int | None
+    cluster_name: str | None
     base_model: str
     training_provider: str
     training_config: dict | None
@@ -129,6 +135,8 @@ def _lora_to_response(lora) -> LoraModelResponse:
         description=lora.description,
         folder_id=lora.folder_id,
         folder_name=lora.folder.name if lora.folder else None,
+        cluster_id=lora.cluster_id,
+        cluster_name=(lora.cluster.display_name or lora.cluster.summary_title or f"Cluster {lora.cluster.id}") if lora.cluster else None,
         base_model=lora.base_model,
         training_provider=lora.training_provider,
         training_config=lora.training_config,
@@ -175,18 +183,42 @@ def _gen_to_response(gen) -> GeneratedImageResponse:
 
 @router.post("/lora/train", status_code=201)
 async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db)):
-    """Start LoRA training from a folder of images."""
-    from app.models.folder import Folder, FolderImage
+    """Start LoRA training from a folder or cluster of images."""
+    if not request.folder_id and not request.cluster_id:
+        raise HTTPException(status_code=400, detail="Either folder_id or cluster_id is required")
+    if request.folder_id and request.cluster_id:
+        raise HTTPException(status_code=400, detail="Provide either folder_id or cluster_id, not both")
 
-    # Validate folder exists
-    folder = db.query(Folder).filter(Folder.id == request.folder_id).first()
-    if not folder:
-        raise HTTPException(status_code=404, detail="Folder not found")
+    image_count = 0
+    job_params: dict = {"trigger_word": request.trigger_word}
 
-    # Validate minimum images
-    image_count = db.query(FolderImage).filter(FolderImage.folder_id == request.folder_id).count()
-    if image_count < 5:
-        raise HTTPException(status_code=400, detail=f"Folder has {image_count} images, minimum 5 required")
+    if request.folder_id:
+        from app.models.folder import Folder, FolderImage
+
+        folder = db.query(Folder).filter(Folder.id == request.folder_id).first()
+        if not folder:
+            raise HTTPException(status_code=404, detail="Folder not found")
+
+        image_count = db.query(FolderImage).filter(FolderImage.folder_id == request.folder_id).count()
+        if image_count < 5:
+            raise HTTPException(status_code=400, detail=f"Folder has {image_count} images, minimum 5 required")
+        job_params["folder_id"] = request.folder_id
+
+    elif request.cluster_id:
+        from app.models.cluster import Cluster, ClusterMembership
+
+        cluster = db.query(Cluster).filter(Cluster.id == request.cluster_id).first()
+        if not cluster:
+            raise HTTPException(status_code=404, detail="Cluster not found")
+
+        image_count = (
+            db.query(ClusterMembership)
+            .filter(ClusterMembership.cluster_id == request.cluster_id, ClusterMembership.is_excluded == False)
+            .count()
+        )
+        if image_count < 5:
+            raise HTTPException(status_code=400, detail=f"Cluster has {image_count} images, minimum 5 required")
+        job_params["cluster_id"] = request.cluster_id
 
     # Get training config from settings
     settings_service = get_settings_service(db)
@@ -201,7 +233,7 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db)):
             job_type=JobType.LORA_TRAIN,
             status=JobStatus.PENDING,
             total_items=1,
-            parameters={"folder_id": request.folder_id, "trigger_word": request.trigger_word},
+            parameters=job_params,
         )
         db.add(job)
         db.commit()
@@ -218,9 +250,16 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db)):
         trigger_word=request.trigger_word,
         training_provider=settings.default_training_provider,
         folder_id=request.folder_id,
+        cluster_id=request.cluster_id,
         base_model=request.base_model,
         description=request.description,
-        training_config={"steps": steps, "is_style": is_style},
+        training_config={
+            "steps": steps,
+            "is_style": is_style,
+            "use_captions": request.use_captions,
+            "caption_include_tags": request.caption_include_tags,
+            "caption_include_description": request.caption_include_description,
+        },
         training_images_count=image_count,
         job_id=job.id,
     )

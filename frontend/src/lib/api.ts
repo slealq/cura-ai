@@ -526,11 +526,15 @@ export const generationApi = {
   trainLora: async (params: {
     name: string;
     trigger_word: string;
-    folder_id: number;
+    folder_id?: number;
+    cluster_id?: number;
     description?: string;
     steps?: number;
     is_style?: boolean;
     base_model?: string;
+    use_captions?: boolean;
+    caption_include_tags?: boolean;
+    caption_include_description?: boolean;
   }): Promise<{ status: string; lora_model_id: number; job_id: number }> => {
     const { data } = await api.post('/generation/lora/train', params);
     return data;

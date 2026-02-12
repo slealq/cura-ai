@@ -226,6 +226,8 @@ export interface LoraModel {
   description: string | null;
   folder_id: number | null;
   folder_name: string | null;
+  cluster_id: number | null;
+  cluster_name: string | null;
   base_model: string;
   training_provider: string;
   training_config: Record<string, unknown> | null;

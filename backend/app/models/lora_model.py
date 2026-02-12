@@ -35,6 +35,9 @@ class LoraModel(Base):
     folder_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("folders.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    cluster_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("clusters.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     # Training config
     base_model: Mapped[str] = mapped_column(String(128), default="flux-dev", nullable=False)
@@ -70,6 +73,7 @@ class LoraModel(Base):
 
     # Relationships
     folder = relationship("Folder", lazy="joined")
+    cluster = relationship("Cluster", lazy="joined")
     job = relationship("Job", lazy="joined")
     generations: Mapped[list["GeneratedImage"]] = relationship(
         "GeneratedImage", back_populates="lora_model"

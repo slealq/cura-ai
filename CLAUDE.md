@@ -121,25 +121,28 @@ npm run lint         # ESLint
 - `search.py` — Hybrid semantic+text search, tag filtering, tag listing
 - `jobs.py` — Job listing/detail/cancel/delete, pipeline triggers (full, tag-all, describe-all, embed-all, reprocess-all, reprocess-failed, reprocess-selected), batch job image listing
 - `settings.py` — Prompt presets CRUD, activate preset, prompt get/update/reset/suggest, clustering config get/update/reset
+- `generation.py` — LoRA training (from folders or clusters, with optional per-image captions), image generation, model/image CRUD
 - `logs.py` — Pipeline log queries, stats, cleanup
 
 **Database models** (`backend/app/models/`):
 - `Image` + `ImageMetadata` (1:1) — Core image data with status tracking, tags, description, embedding, hashes, tsvector
 - `Cluster` + `ClusterMembership` — Clustering results with centroid, summary, pin/archive/rename, outlier exclusion
-- `Job` — Async job tracking (types: INGEST, TAG, DESCRIBE, EMBED, CLUSTER, SUMMARIZE_CLUSTER, FULL_PIPELINE, REPROCESS, BATCH_REPROCESS)
+- `Job` — Async job tracking (types: INGEST, TAG, DESCRIBE, EMBED, CLUSTER, SUMMARIZE_CLUSTER, FULL_PIPELINE, REPROCESS, BATCH_REPROCESS, LORA_TRAIN, GENERATE_IMAGE, BATCH_GENERATE)
 - `Folder` + `FolderImage` — User folders for organizing images (many-to-many)
+- `LoraModel` — Trained LoRA adapters linked to folder or cluster source, with training config and status
+- `GeneratedImage` — AI-generated images linked to LoRA models with prompt, params, and output files
 - `PromptPreset` — Named tag+description prompt pairs with active/default flag
 - `PipelineLog` — Structured logs (category, level, tokens, duration, provider/model)
 - `AppSetting` — Key-value config store
 - `APIKey` — Encrypted API key storage with validation status
 
 **Frontend structure** (`frontend/src/`):
-- Pages: Home (clusters), Folders, Folder Detail, All Images, Upload, Search, Cluster Detail, Jobs, Debug, Settings
-- Components: Header (search+stats), Sidebar (navigation), ImageCard, ImageDrawer (detail slide-over), ImageGrid (paginated with filters+batch actions), ClusterCard, FolderCard, PipelineProgress
+- Pages: Home (clusters), Folders, Folder Detail, All Images, Upload, Search, Cluster Detail, Models, Generate, Jobs, Debug, Settings
+- Components: Header (search+stats), Sidebar (navigation), ImageCard, ImageDrawer (detail slide-over), ImageGrid (paginated with filters+batch actions), ClusterCard, FolderCard, GeneratedImageCard, AddToFolderDialog, PipelineProgress
 - API client: `lib/api.ts` — Typed Axios functions for all endpoints
 - State: TanStack Query with polling (5s jobs, 3s logs, 10s stats)
 
-**Alembic migrations:** 10 versions (001-010) covering initial schema through folders
+**Alembic migrations:** 14 versions (001-014) covering initial schema through LoRA cluster source
 
 ## Environment
 

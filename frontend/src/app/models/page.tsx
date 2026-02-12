@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { generationApi, foldersApi } from '@/lib/api';
+import { generationApi, foldersApi, clustersApi } from '@/lib/api';
 import {
   Loader2,
   Plus,
@@ -28,6 +28,12 @@ const statusConfig: Record<string, { icon: typeof Clock; color: string; label: s
   archived: { icon: Archive, color: 'text-gray-500 bg-gray-100', label: 'Archived' },
 };
 
+function getSourceLabel(model: LoraModel): string | null {
+  if (model.folder_name) return `folder "${model.folder_name}"`;
+  if (model.cluster_name) return `cluster "${model.cluster_name}"`;
+  return null;
+}
+
 function LoraModelCard({
   model,
   onDelete,
@@ -39,6 +45,7 @@ function LoraModelCard({
 }) {
   const config = statusConfig[model.status] || statusConfig.pending;
   const StatusIcon = config.icon;
+  const sourceLabel = getSourceLabel(model);
 
   return (
     <div
@@ -67,7 +74,7 @@ function LoraModelCard({
       <div className="mt-4 flex flex-wrap gap-3 text-xs text-muted-foreground">
         <span>{model.training_images_count} images</span>
         <span>{model.base_model}</span>
-        {model.folder_name && <span>from &ldquo;{model.folder_name}&rdquo;</span>}
+        {sourceLabel && <span>from {sourceLabel}</span>}
       </div>
 
       {model.error_message && (
@@ -105,6 +112,8 @@ function LoraModelCard({
   );
 }
 
+type SourceType = 'folder' | 'cluster';
+
 export default function ModelsPage() {
   const queryClient = useQueryClient();
   const [showTrainModal, setShowTrainModal] = useState(false);
@@ -113,9 +122,14 @@ export default function ModelsPage() {
   // Form state for training
   const [trainName, setTrainName] = useState('');
   const [trainTrigger, setTrainTrigger] = useState('');
+  const [sourceType, setSourceType] = useState<SourceType>('folder');
   const [trainFolderId, setTrainFolderId] = useState<number | undefined>(undefined);
+  const [trainClusterId, setTrainClusterId] = useState<number | undefined>(undefined);
   const [trainSteps, setTrainSteps] = useState(1000);
   const [trainIsStyle, setTrainIsStyle] = useState(false);
+  const [trainUseCaptions, setTrainUseCaptions] = useState(false);
+  const [trainCaptionTags, setTrainCaptionTags] = useState(true);
+  const [trainCaptionDescription, setTrainCaptionDescription] = useState(true);
 
   // Fetch LoRA models
   const { data: loraData, isLoading } = useQuery({
@@ -128,6 +142,12 @@ export default function ModelsPage() {
   const { data: foldersData } = useQuery({
     queryKey: ['folders'],
     queryFn: () => foldersApi.list({ limit: 200 }),
+  });
+
+  // Fetch clusters for dropdown
+  const { data: clustersData } = useQuery({
+    queryKey: ['clusters'],
+    queryFn: () => clustersApi.list({ limit: 200 }),
   });
 
   // Train mutation
@@ -158,22 +178,34 @@ export default function ModelsPage() {
   const resetForm = () => {
     setTrainName('');
     setTrainTrigger('');
+    setSourceType('folder');
     setTrainFolderId(undefined);
+    setTrainClusterId(undefined);
     setTrainSteps(1000);
     setTrainIsStyle(false);
+    setTrainUseCaptions(false);
+    setTrainCaptionTags(true);
+    setTrainCaptionDescription(true);
   };
 
+  const hasValidSource = sourceType === 'folder' ? !!trainFolderId : !!trainClusterId;
+
   const handleTrain = () => {
-    if (!trainName.trim() || !trainTrigger.trim() || !trainFolderId) {
+    if (!trainName.trim() || !trainTrigger.trim() || !hasValidSource) {
       toast.error('Please fill in all required fields');
       return;
     }
     trainMutation.mutate({
       name: trainName.trim(),
       trigger_word: trainTrigger.trim(),
-      folder_id: trainFolderId,
+      ...(sourceType === 'folder'
+        ? { folder_id: trainFolderId }
+        : { cluster_id: trainClusterId }),
       steps: trainSteps,
       is_style: trainIsStyle,
+      use_captions: trainUseCaptions,
+      caption_include_tags: trainCaptionTags,
+      caption_include_description: trainCaptionDescription,
     });
   };
 
@@ -206,7 +238,7 @@ export default function ModelsPage() {
         <div className="text-center py-16 text-muted-foreground">
           <Box className="h-12 w-12 mx-auto mb-3 opacity-30" />
           <p>No LoRA models yet</p>
-          <p className="text-sm mt-1">Train your first model from a folder of images</p>
+          <p className="text-sm mt-1">Train your first model from a folder or cluster of images</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -269,20 +301,67 @@ export default function ModelsPage() {
                   </p>
                 </div>
 
+                {/* Source Type Toggle */}
                 <div>
-                  <label className="block text-sm font-medium mb-1">Source Folder *</label>
-                  <select
-                    value={trainFolderId ?? ''}
-                    onChange={(e) => setTrainFolderId(e.target.value ? parseInt(e.target.value) : undefined)}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm"
-                  >
-                    <option value="">Select a folder...</option>
-                    {foldersData?.items.map((folder) => (
-                      <option key={folder.id} value={folder.id}>
-                        {folder.name} ({folder.image_count} images)
-                      </option>
-                    ))}
-                  </select>
+                  <label className="block text-sm font-medium mb-1">Source *</label>
+                  <div className="flex rounded-lg border border-border overflow-hidden mb-2">
+                    <button
+                      onClick={() => {
+                        setSourceType('folder');
+                        setTrainClusterId(undefined);
+                      }}
+                      className={cn(
+                        'flex-1 px-3 py-1.5 text-sm font-medium transition-colors',
+                        sourceType === 'folder'
+                          ? 'bg-primary text-primary-foreground'
+                          : 'hover:bg-muted'
+                      )}
+                    >
+                      Folder
+                    </button>
+                    <button
+                      onClick={() => {
+                        setSourceType('cluster');
+                        setTrainFolderId(undefined);
+                      }}
+                      className={cn(
+                        'flex-1 px-3 py-1.5 text-sm font-medium transition-colors',
+                        sourceType === 'cluster'
+                          ? 'bg-primary text-primary-foreground'
+                          : 'hover:bg-muted'
+                      )}
+                    >
+                      Cluster
+                    </button>
+                  </div>
+
+                  {sourceType === 'folder' ? (
+                    <select
+                      value={trainFolderId ?? ''}
+                      onChange={(e) => setTrainFolderId(e.target.value ? parseInt(e.target.value) : undefined)}
+                      className="w-full px-3 py-2 border border-border rounded-lg text-sm"
+                    >
+                      <option value="">Select a folder...</option>
+                      {foldersData?.items.map((folder) => (
+                        <option key={folder.id} value={folder.id}>
+                          {folder.name} ({folder.image_count} images)
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <select
+                      value={trainClusterId ?? ''}
+                      onChange={(e) => setTrainClusterId(e.target.value ? parseInt(e.target.value) : undefined)}
+                      className="w-full px-3 py-2 border border-border rounded-lg text-sm"
+                    >
+                      <option value="">Select a cluster...</option>
+                      {clustersData?.items.map((cluster) => (
+                        <option key={cluster.id} value={cluster.id}>
+                          {cluster.display_name || cluster.summary_title || `Cluster ${cluster.id}`} ({cluster.size} images)
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
 
                 <div>
@@ -324,6 +403,58 @@ export default function ModelsPage() {
                     (for artistic styles rather than subjects)
                   </span>
                 </div>
+
+                {/* Per-Image Captions */}
+                <div className="border-t border-border pt-3">
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => setTrainUseCaptions(!trainUseCaptions)}
+                      className={cn(
+                        'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors',
+                        trainUseCaptions ? 'bg-primary' : 'bg-gray-300'
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'inline-block h-4 w-4 transform rounded-full bg-white transition-transform mt-0.5',
+                          trainUseCaptions ? 'translate-x-4 ml-0.5' : 'translate-x-0.5'
+                        )}
+                      />
+                    </button>
+                    <span className="text-sm">Per-image captions</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1.5 ml-12">
+                    Include generated tags and descriptions as captions for each training image
+                  </p>
+
+                  {trainUseCaptions && (
+                    <div className="mt-3 ml-12 space-y-2">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={trainCaptionTags}
+                          onChange={(e) => setTrainCaptionTags(e.target.checked)}
+                          className="rounded border-gray-300"
+                        />
+                        <span className="text-sm">Include tags</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={trainCaptionDescription}
+                          onChange={(e) => setTrainCaptionDescription(e.target.checked)}
+                          className="rounded border-gray-300"
+                        />
+                        <span className="text-sm">Include description</span>
+                      </label>
+                      {!trainCaptionTags && !trainCaptionDescription && (
+                        <p className="text-xs text-red-500">
+                          At least one caption source must be selected
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="flex gap-2 justify-end pt-2">
@@ -335,7 +466,7 @@ export default function ModelsPage() {
                 </button>
                 <button
                   onClick={handleTrain}
-                  disabled={trainMutation.isPending || !trainName.trim() || !trainTrigger.trim() || !trainFolderId}
+                  disabled={trainMutation.isPending || !trainName.trim() || !trainTrigger.trim() || !hasValidSource || (trainUseCaptions && !trainCaptionTags && !trainCaptionDescription)}
                   className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
                 >
                   {trainMutation.isPending ? 'Starting...' : 'Start Training'}
@@ -391,8 +522,14 @@ export default function ModelsPage() {
                     <p>{selectedModel.training_images_count}</p>
                   </div>
                   <div>
-                    <span className="text-muted-foreground">Source Folder</span>
-                    <p>{selectedModel.folder_name || 'N/A'}</p>
+                    <span className="text-muted-foreground">Source</span>
+                    <p>
+                      {selectedModel.folder_name
+                        ? `Folder: ${selectedModel.folder_name}`
+                        : selectedModel.cluster_name
+                          ? `Cluster: ${selectedModel.cluster_name}`
+                          : 'N/A'}
+                    </p>
                   </div>
                 </div>
 

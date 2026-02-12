@@ -1,8 +1,10 @@
 """Celery tasks for LoRA training and image generation."""
 import asyncio
 import base64
+import io
 import logging
 import time
+import zipfile
 from datetime import datetime
 
 from sqlalchemy.orm import Session
@@ -94,48 +96,126 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None) -> dict:
         # Update status to training
         gen_service.update_lora_status(lora_model_id, LoraModelStatus.TRAINING)
 
-        # Load folder images
-        if not lora.folder_id:
-            raise Exception("LoRA model has no associated folder")
-
+        # Load source images (folder or cluster)
         image_service = get_image_service(db)
-        from app.models.folder import FolderImage
-        folder_image_ids = [
-            fi.image_id
-            for fi in db.query(FolderImage).filter(FolderImage.folder_id == lora.folder_id).all()
-        ]
+
+        if lora.folder_id:
+            from app.models.folder import FolderImage
+            folder_image_ids = [
+                fi.image_id
+                for fi in db.query(FolderImage).filter(FolderImage.folder_id == lora.folder_id).all()
+            ]
+        elif lora.cluster_id:
+            from app.models.cluster import ClusterMembership
+            folder_image_ids = [
+                cm.image_id
+                for cm in db.query(ClusterMembership).filter(
+                    ClusterMembership.cluster_id == lora.cluster_id,
+                    ClusterMembership.is_excluded == False,
+                ).all()
+            ]
+        else:
+            raise Exception("LoRA model has no associated folder or cluster")
 
         if len(folder_image_ids) < 5:
-            raise Exception(f"Folder has only {len(folder_image_ids)} images, minimum 5 required")
-
-        # Encode images as base64 data URLs
-        image_urls = []
-        for img_id in folder_image_ids:
-            image_data = _run_async(image_service.get_image_data(img_id))
-            if image_data:
-                image = image_service.get_image(img_id)
-                mime = image.mime_type or "image/jpeg"
-                b64 = base64.b64encode(image_data).decode("utf-8")
-                image_urls.append(f"data:{mime};base64,{b64}")
-
-        if not image_urls:
-            raise Exception("No image data could be loaded from folder")
-
-        logger.info(f"Prepared {len(image_urls)} images for LoRA training")
+            raise Exception(f"Source has only {len(folder_image_ids)} images, minimum 5 required")
 
         # Get training config
         training_config = lora.training_config or {}
         steps = training_config.get("steps", 1000)
         is_style = training_config.get("is_style", False)
+        use_captions = training_config.get("use_captions", False)
+        caption_include_tags = training_config.get("caption_include_tags", True)
+        caption_include_description = training_config.get("caption_include_description", True)
+
+        # Instantiate trainer early so _ensure_fal_key() sets FAL_KEY
+        # before any fal_client calls (e.g. upload)
+        trainer = get_trainer(lora.training_provider, db=db)
+
+        trainer_kwargs = {}
+
+        if use_captions:
+            # Build ZIP with images + per-image caption .txt files
+            zip_buffer = io.BytesIO()
+            image_count = 0
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                for idx, img_id in enumerate(folder_image_ids):
+                    image_data = _run_async(image_service.get_image_data(img_id))
+                    if not image_data:
+                        continue
+
+                    image = image_service.get_image(img_id)
+                    ext = "jpg"
+                    if image.mime_type:
+                        ext_map = {"image/png": "png", "image/webp": "webp", "image/gif": "gif"}
+                        ext = ext_map.get(image.mime_type, "jpg")
+
+                    prefix = f"{idx:04d}"
+                    zf.writestr(f"{prefix}.{ext}", image_data)
+
+                    # Build caption
+                    caption_parts = []
+                    caption_parts.append(lora.trigger_word)
+
+                    metadata = image.image_metadata
+                    if metadata:
+                        tags_str = ""
+                        if caption_include_tags and metadata.tags:
+                            tags_str = ", ".join(metadata.tags)
+
+                        desc_str = ""
+                        if caption_include_description and metadata.description_long:
+                            desc_str = metadata.description_long
+
+                        if tags_str and desc_str:
+                            caption_parts.append(f"{tags_str}. {desc_str}")
+                        elif tags_str:
+                            caption_parts.append(tags_str)
+                        elif desc_str:
+                            caption_parts.append(desc_str)
+
+                    caption = ", ".join(caption_parts)
+                    zf.writestr(f"{prefix}.txt", caption)
+                    image_count += 1
+
+            if image_count == 0:
+                raise Exception("No image data could be loaded from source")
+
+            logger.info(f"Created ZIP with {image_count} captioned images for LoRA training")
+
+            # Upload ZIP to fal CDN
+            import fal_client
+            zip_bytes = zip_buffer.getvalue()
+            zip_url = fal_client.upload(zip_bytes, "application/zip")
+            logger.info(f"Uploaded training ZIP ({len(zip_bytes)} bytes) to fal CDN")
+
+            # Override images_data_url with the ZIP URL
+            trainer_kwargs["images_data_url"] = zip_url
+            image_urls: list[str] = []
+        else:
+            # Default: encode images as base64 data URLs
+            image_urls = []
+            for img_id in folder_image_ids:
+                image_data = _run_async(image_service.get_image_data(img_id))
+                if image_data:
+                    image = image_service.get_image(img_id)
+                    mime = image.mime_type or "image/jpeg"
+                    b64 = base64.b64encode(image_data).decode("utf-8")
+                    image_urls.append(f"data:{mime};base64,{b64}")
+
+            if not image_urls:
+                raise Exception("No image data could be loaded from source")
+
+            logger.info(f"Prepared {len(image_urls)} images for LoRA training")
 
         # Submit training
-        trainer = get_trainer(lora.training_provider, db=db)
         request_id = _run_async(
             trainer.start_training(
                 image_urls=image_urls,
                 trigger_word=lora.trigger_word,
                 steps=steps,
                 is_style=is_style,
+                **trainer_kwargs,
             )
         )
 
