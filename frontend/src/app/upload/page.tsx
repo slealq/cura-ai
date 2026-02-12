@@ -1,10 +1,12 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { useDropzone } from 'react-dropzone';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Upload, X, Check, AlertCircle, Loader2 } from 'lucide-react';
-import { imagesApi } from '@/lib/api';
+import { toast } from 'sonner';
+import { imagesApi, foldersApi } from '@/lib/api';
 import { cn, formatFileSize } from '@/lib/utils';
 
 interface FileWithPreview extends File {
@@ -13,14 +15,42 @@ interface FileWithPreview extends File {
 
 export default function UploadPage() {
   const queryClient = useQueryClient();
+  const router = useRouter();
   const [files, setFiles] = useState<FileWithPreview[]>([]);
+  const [selectedFolderId, setSelectedFolderId] = useState<number | undefined>();
+  const [showNewFolder, setShowNewFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+
+  const { data: folders } = useQuery({
+    queryKey: ['folders'],
+    queryFn: () => foldersApi.list({ limit: 200 }),
+  });
 
   const uploadMutation = useMutation({
-    mutationFn: (files: File[]) => imagesApi.upload(files),
-    onSuccess: () => {
+    mutationFn: async (filesToUpload: File[]) => {
+      let folderId = selectedFolderId;
+
+      // Create a new folder first if needed
+      if (showNewFolder && newFolderName.trim()) {
+        const folder = await foldersApi.create({ name: newFolderName.trim() });
+        folderId = folder.id;
+      }
+
+      return imagesApi.upload(filesToUpload, folderId);
+    },
+    onSuccess: (data) => {
+      toast.success(`${data.uploaded.length} image${data.uploaded.length !== 1 ? 's' : ''} uploaded`, {
+        action: { label: 'View Images', onClick: () => router.push('/images') },
+      });
       queryClient.invalidateQueries({ queryKey: ['images'] });
+      queryClient.invalidateQueries({ queryKey: ['folders'] });
       queryClient.invalidateQueries({ queryKey: ['stats'] });
       setFiles([]);
+      setNewFolderName('');
+      setShowNewFolder(false);
+    },
+    onError: () => {
+      toast.error('Upload failed');
     },
   });
 
@@ -63,6 +93,58 @@ export default function UploadPage() {
         <p className="text-muted-foreground mt-1">
           Upload design inspiration images to process and cluster
         </p>
+      </div>
+
+      {/* Folder selector */}
+      <div>
+        <label className="block text-sm font-medium mb-1">
+          Upload to Folder <span className="text-muted-foreground">(optional)</span>
+        </label>
+        {!showNewFolder ? (
+          <div className="flex items-center gap-2">
+            <select
+              className="flex-1 px-3 py-2 border border-border rounded-lg text-sm"
+              value={selectedFolderId ?? ''}
+              onChange={(e) => setSelectedFolderId(Number(e.target.value) || undefined)}
+            >
+              <option value="">No folder (upload to library only)</option>
+              {folders?.items.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name} ({f.image_count} images)
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => {
+                setShowNewFolder(true);
+                setSelectedFolderId(undefined);
+              }}
+              className="px-3 py-2 text-sm text-primary hover:underline shrink-0"
+            >
+              + New folder
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              placeholder="New folder name"
+              value={newFolderName}
+              onChange={(e) => setNewFolderName(e.target.value)}
+              className="flex-1 px-3 py-2 border border-border rounded-lg text-sm"
+              autoFocus
+            />
+            <button
+              onClick={() => {
+                setShowNewFolder(false);
+                setNewFolderName('');
+              }}
+              className="px-3 py-2 text-sm text-muted-foreground hover:underline shrink-0"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Dropzone */}

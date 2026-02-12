@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.base import get_db
 from app.services.settings_service import (
+    DEFAULT_CLUSTERING_CONFIG,
     DEFAULT_DESCRIPTION_PROMPT,
     DEFAULT_TAG_PROMPT,
     get_settings_service,
@@ -81,6 +82,36 @@ class PresetUpdateRequest(BaseModel):
     name: str | None = None
     tag_prompt: str | None = None
     description_prompt: str | None = None
+
+
+class ClusteringConfigResponse(BaseModel):
+    """Current clustering configuration."""
+
+    method: str
+    use_umap: bool
+    umap_n_components: int
+    umap_n_neighbors: int
+    umap_min_dist: float
+    umap_metric: str
+    hdbscan_min_cluster_size: int
+    hdbscan_min_samples: int
+    hdbscan_cluster_selection_method: str
+    kmeans_max_clusters: int
+
+
+class ClusteringConfigUpdateRequest(BaseModel):
+    """Partial update for clustering configuration."""
+
+    method: str | None = None
+    use_umap: bool | None = None
+    umap_n_components: int | None = None
+    umap_n_neighbors: int | None = None
+    umap_min_dist: float | None = None
+    umap_metric: str | None = None
+    hdbscan_min_cluster_size: int | None = None
+    hdbscan_min_samples: int | None = None
+    hdbscan_cluster_selection_method: str | None = None
+    kmeans_max_clusters: int | None = None
 
 
 def _preset_to_response(preset) -> PresetResponse:
@@ -257,3 +288,32 @@ async def suggest_prompt(request: PromptSuggestRequest):
     except Exception as e:
         logger.error(f"Failed to suggest prompt: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate suggestion: {str(e)}")
+
+
+# --- Clustering config endpoints ---
+
+
+@router.get("/clustering", response_model=ClusteringConfigResponse)
+async def get_clustering_config(db: Session = Depends(get_db)):
+    """Get current clustering configuration."""
+    service = get_settings_service(db)
+    return service.get_clustering_config()
+
+
+@router.put("/clustering", response_model=ClusteringConfigResponse)
+async def update_clustering_config(
+    request: ClusteringConfigUpdateRequest, db: Session = Depends(get_db)
+):
+    """Update clustering configuration (partial update, merges with defaults)."""
+    service = get_settings_service(db)
+    update = {k: v for k, v in request.model_dump().items() if v is not None}
+    config = service.set_clustering_config(update)
+    return config
+
+
+@router.post("/clustering/reset", response_model=ClusteringConfigResponse)
+async def reset_clustering_config(db: Session = Depends(get_db)):
+    """Reset clustering configuration to defaults."""
+    service = get_settings_service(db)
+    service.delete_setting("clustering_config")
+    return DEFAULT_CLUSTERING_CONFIG

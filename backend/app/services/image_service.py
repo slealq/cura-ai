@@ -122,11 +122,11 @@ class ImageService:
         ).filter(Image.id.in_(image_ids)).all()
 
     def get_images_for_clustering(self) -> list[Image]:
-        """Get all images with embeddings for clustering."""
+        """Get all images with embeddings for clustering (includes already-clustered)."""
         return (
             self.db.query(Image)
             .options(joinedload(Image.image_metadata))
-            .filter(Image.status == ImageStatus.EMBEDDED)
+            .filter(Image.status.in_([ImageStatus.EMBEDDED, ImageStatus.CLUSTERED]))
             .all()
         )
 

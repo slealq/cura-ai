@@ -3,8 +3,8 @@
 import Link from 'next/link';
 import { Pin, Image as ImageIcon } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import type { Cluster } from '@/types';
-import { imagesApi } from '@/lib/api';
+import type { Cluster, Image } from '@/types';
+import { imagesApi, clustersApi } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 interface ClusterCardProps {
@@ -12,20 +12,11 @@ interface ClusterCardProps {
 }
 
 export default function ClusterCard({ cluster }: ClusterCardProps) {
-  // Fetch representative images
+  // Fetch representative images from the cluster images endpoint
   const { data: images } = useQuery({
     queryKey: ['cluster-images', cluster.id, 'preview'],
-    queryFn: async () => {
-      if (cluster.representative_image_ids.length === 0) return [];
-      const response = await imagesApi.list({
-        limit: 6,
-      });
-      // Filter to only representative images
-      return response.items.filter((img) =>
-        cluster.representative_image_ids.includes(img.id)
-      );
-    },
-    enabled: cluster.representative_image_ids.length > 0,
+    queryFn: () => clustersApi.getImages(cluster.id, { limit: 6 }),
+    enabled: cluster.size > 0,
   });
 
   const title = cluster.display_name || cluster.summary_title || `Cluster ${cluster.id}`;

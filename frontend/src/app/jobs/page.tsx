@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Play, XCircle, RefreshCw, Tag, FileText, Cpu, Sparkles, Check, AlertTriangle } from 'lucide-react';
+import { toast } from 'sonner';
 import { jobsApi, clustersApi, imagesApi } from '@/lib/api';
 import { cn, formatDate, getStatusColor } from '@/lib/utils';
 import type { BatchJobImage, Job } from '@/types';
@@ -25,53 +26,91 @@ export default function JobsPage() {
 
   const triggerPipelineMutation = useMutation({
     mutationFn: jobsApi.triggerFullPipeline,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
+    onSuccess: (data) => {
+      toast.success('Full pipeline started', { description: `Job #${data.job_id}` });
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
+    onError: () => toast.error('Failed to start pipeline'),
   });
 
   const triggerClusteringMutation = useMutation({
     mutationFn: () => clustersApi.recluster(),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
+    onSuccess: (data) => {
+      toast.success('Clustering started', { description: `Job #${data.job_id}` });
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
+    onError: () => toast.error('Failed to start clustering'),
   });
 
   const triggerBatchTagMutation = useMutation({
     mutationFn: jobsApi.triggerBatchTag,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
+    onSuccess: (data) => {
+      toast.success('Batch tagging started', {
+        description: data.job_id ? `Job #${data.job_id}` : `${data.total} images`,
+      });
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
+    onError: () => toast.error('Failed to start batch tagging'),
   });
 
   const triggerBatchDescribeMutation = useMutation({
     mutationFn: jobsApi.triggerBatchDescribe,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
+    onSuccess: (data) => {
+      toast.success('Batch describing started', {
+        description: data.job_id ? `Job #${data.job_id}` : `${data.total} images`,
+      });
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
+    onError: () => toast.error('Failed to start batch describing'),
   });
 
   const triggerBatchEmbedMutation = useMutation({
     mutationFn: jobsApi.triggerBatchEmbed,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
+    onSuccess: (data) => {
+      toast.success('Batch embedding started', {
+        description: data.job_id ? `Job #${data.job_id}` : `${data.total} images`,
+      });
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
+    onError: () => toast.error('Failed to start batch embedding'),
   });
 
   const triggerSummarizeAllMutation = useMutation({
     mutationFn: () => clustersApi.summarizeAll(),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
+    onSuccess: (data) => {
+      toast.success('Cluster summarization started', { description: `Job #${data.job_id}` });
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
+    onError: () => toast.error('Failed to start summarization'),
   });
 
   const reprocessAllMutation = useMutation({
     mutationFn: jobsApi.reprocessAll,
-    onSuccess: () => {
+    onSuccess: (data) => {
+      toast.success('Reprocessing all images', { description: `Job #${data.job_id}` });
       queryClient.invalidateQueries({ queryKey: ['jobs'] });
       queryClient.invalidateQueries({ queryKey: ['pipeline-stats'] });
     },
+    onError: () => toast.error('Failed to start reprocessing'),
   });
 
   const reprocessFailedMutation = useMutation({
     mutationFn: jobsApi.reprocessFailed,
-    onSuccess: () => {
+    onSuccess: (data) => {
+      toast.success('Reprocessing failed images', { description: `Job #${data.job_id}` });
       queryClient.invalidateQueries({ queryKey: ['jobs'] });
       queryClient.invalidateQueries({ queryKey: ['pipeline-stats'] });
     },
+    onError: () => toast.error('Failed to start reprocessing'),
   });
 
   const cancelJobMutation = useMutation({
     mutationFn: jobsApi.cancel,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
+    onSuccess: () => {
+      toast.success('Job cancelled');
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
+    onError: () => toast.error('Failed to cancel job'),
   });
 
   const hasBatchRunning = jobs?.items.some(

@@ -2,8 +2,9 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { X, ExternalLink, RefreshCw, Tag, FileText, Cpu } from 'lucide-react';
+import { X, ExternalLink, RefreshCw, Tag, FileText, Cpu, FolderOpen } from 'lucide-react';
 import { toast } from 'sonner';
+import Link from 'next/link';
 import type { Image, PromptPreset } from '@/types';
 import { imagesApi, jobsApi, settingsApi } from '@/lib/api';
 import { cn, formatDate, formatFileSize } from '@/lib/utils';
@@ -73,6 +74,11 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
       liveImage.status === 'embedded' || liveImage.status === 'clustered',
   });
 
+  const { data: imageFolders } = useQuery({
+    queryKey: ['image-folders', image.id],
+    queryFn: () => imagesApi.getFolders(image.id),
+  });
+
   const { data: defaultPrompts } = useQuery({
     queryKey: ['prompt-settings'],
     queryFn: settingsApi.getPrompts,
@@ -86,8 +92,8 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
   const tagMutation = useMutation({
     mutationFn: (options?: { tag_prompt?: string }) =>
       imagesApi.tagImage(image.id, options),
-    onSuccess: () => {
-      toast.info('Tagging started');
+    onSuccess: (data) => {
+      toast.success('Tagging started', { description: `Job #${data.job_id}` });
       setIsProcessing(true);
       setStaleSteps((prev) =>
         Array.from(new Set([...prev, 'embedded', 'clustered']))
@@ -95,13 +101,14 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
       setShowTagDialog(false);
       queryClient.invalidateQueries({ queryKey: ['jobs'] });
     },
+    onError: () => toast.error('Failed to start tagging'),
   });
 
   const describeMutation = useMutation({
     mutationFn: (options?: { description_prompt?: string }) =>
       imagesApi.describeImage(image.id, options),
-    onSuccess: () => {
-      toast.info('Describing started');
+    onSuccess: (data) => {
+      toast.success('Describing started', { description: `Job #${data.job_id}` });
       setIsProcessing(true);
       setStaleSteps((prev) =>
         Array.from(new Set([...prev, 'embedded', 'clustered']))
@@ -109,18 +116,20 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
       setShowDescribeDialog(false);
       queryClient.invalidateQueries({ queryKey: ['jobs'] });
     },
+    onError: () => toast.error('Failed to start describing'),
   });
 
   const embedMutation = useMutation({
     mutationFn: () => imagesApi.embedImage(image.id),
-    onSuccess: () => {
-      toast.info('Embedding started');
+    onSuccess: (data) => {
+      toast.success('Embedding started', { description: `Job #${data.job_id}` });
       setIsProcessing(true);
       setStaleSteps((prev) =>
         Array.from(new Set([...prev, 'clustered']))
       );
       queryClient.invalidateQueries({ queryKey: ['jobs'] });
     },
+    onError: () => toast.error('Failed to start embedding'),
   });
 
   const reprocessMutation = useMutation({
@@ -128,13 +137,14 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
       tag_prompt?: string;
       description_prompt?: string;
     }) => imagesApi.reprocess(image.id, options),
-    onSuccess: () => {
-      toast.info('Reprocessing started');
+    onSuccess: (data) => {
+      toast.success('Reprocessing started', { description: `Job #${data.job_id}` });
       setIsProcessing(true);
       setStaleSteps([]);
       setShowReprocessDialog(false);
       queryClient.invalidateQueries({ queryKey: ['jobs'] });
     },
+    onError: () => toast.error('Failed to start reprocessing'),
   });
 
   const canTag =
@@ -283,6 +293,28 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
               {isProcessing ? 'Processing...' : 'Reprocess'}
             </button>
           </div>
+
+          {/* Folders */}
+          {imageFolders && imageFolders.length > 0 && (
+            <div>
+              <h3 className="text-sm font-medium text-muted-foreground mb-2">
+                Folders
+              </h3>
+              <div className="flex flex-wrap gap-1">
+                {imageFolders.map((f) => (
+                  <Link
+                    key={f.id}
+                    href={`/images/folder/${f.id}`}
+                    onClick={onClose}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 bg-muted rounded-full text-xs hover:bg-muted/80 transition-colors"
+                  >
+                    <FolderOpen className="h-3 w-3" />
+                    {f.name}
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Description */}
           {liveImage.metadata?.description_long && (

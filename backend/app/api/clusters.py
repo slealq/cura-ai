@@ -60,7 +60,7 @@ async def get_cluster(cluster_id: int, db: Session = Depends(get_db)):
     if not cluster:
         raise HTTPException(status_code=404, detail="Cluster not found")
 
-    images = cluster_service.get_cluster_images(cluster_id)
+    images = cluster_service.get_cluster_images(cluster_id, limit=cluster.size or 10000)
 
     response = ClusterDetailResponse.model_validate(cluster)
     response.images = [ImageResponse.model_validate(img) for img in images]
@@ -251,7 +251,7 @@ async def export_cluster(
     if not cluster:
         raise HTTPException(status_code=404, detail="Cluster not found")
 
-    images = cluster_service.get_cluster_images(cluster_id)
+    images = cluster_service.get_cluster_images(cluster_id, limit=cluster.size or 10000)
 
     if format == "json":
         export_data = {

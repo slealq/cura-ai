@@ -1,8 +1,23 @@
 """Service for managing application settings."""
+import json
+
 from sqlalchemy.orm import Session
 
 from app.models.prompt_preset import PromptPreset
 from app.models.settings import AppSettings
+
+DEFAULT_CLUSTERING_CONFIG = {
+    "method": "hdbscan",
+    "use_umap": True,
+    "umap_n_components": 15,
+    "umap_n_neighbors": 15,
+    "umap_min_dist": 0.0,
+    "umap_metric": "cosine",
+    "hdbscan_min_cluster_size": 15,
+    "hdbscan_min_samples": 5,
+    "hdbscan_cluster_selection_method": "eom",
+    "kmeans_max_clusters": 50,
+}
 
 
 # Factory-default GUIDANCE (user-controlled portion only).
@@ -189,6 +204,31 @@ class SettingsService:
         self.db.commit()
         self.db.refresh(preset)
         return preset
+
+    # --- Clustering config ---
+
+    def get_clustering_config(self) -> dict:
+        """Get clustering configuration from DB, or return defaults."""
+        raw = self.get_setting("clustering_config")
+        if raw:
+            try:
+                config = json.loads(raw)
+                # Merge with defaults so new keys are always present
+                merged = {**DEFAULT_CLUSTERING_CONFIG, **config}
+                return merged
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return dict(DEFAULT_CLUSTERING_CONFIG)
+
+    def set_clustering_config(self, config: dict) -> dict:
+        """Validate and store clustering config. Accepts partial dict, merges with defaults."""
+        current = self.get_clustering_config()
+        # Only keep known keys
+        for key in config:
+            if key in DEFAULT_CLUSTERING_CONFIG:
+                current[key] = config[key]
+        self.set_setting("clustering_config", json.dumps(current), description="Clustering parameters")
+        return current
 
     # --- Prompt getters (compose system format + guidance from active preset) ---
 

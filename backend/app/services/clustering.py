@@ -10,11 +10,10 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from sklearn.neighbors import NearestNeighbors
 
-from app.core.config import get_settings
 from app.models import ClusteringMethod
+from app.services.settings_service import DEFAULT_CLUSTERING_CONFIG
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
 
 class ClusteringResult:
@@ -40,32 +39,28 @@ class ClusteringResult:
 class ClusteringService:
     """Service for clustering images based on embeddings."""
 
-    def __init__(self):
-        self.method = ClusteringMethod(settings.clustering_method)
-        self.min_cluster_size = settings.hdbscan_min_cluster_size
-        self.min_samples = settings.hdbscan_min_samples
-        self.max_clusters = settings.kmeans_max_clusters
-
     def cluster(
         self,
         embeddings: np.ndarray,
-        method: ClusteringMethod | None = None,
+        params: dict | None = None,
     ) -> ClusteringResult:
         """
         Cluster embeddings into groups.
 
         Args:
             embeddings: 2D array of shape (n_samples, n_features)
-            method: Clustering method to use (defaults to settings)
+            params: Clustering config dict (from settings). Uses defaults if None.
 
         Returns:
             ClusteringResult with cluster assignments and metadata
         """
-        method = method or self.method
+        if params is None:
+            params = dict(DEFAULT_CLUSTERING_CONFIG)
+
+        method = ClusteringMethod(params.get("method", "hdbscan"))
         run_id = uuid.uuid4().hex[:16]
 
         if len(embeddings) < 2:
-            # Not enough data to cluster
             return ClusteringResult(
                 labels=np.array([0] * len(embeddings)),
                 centroids=np.mean(embeddings, axis=0, keepdims=True) if len(embeddings) > 0 else None,
@@ -77,36 +72,88 @@ class ClusteringService:
 
         logger.info(f"Clustering {len(embeddings)} embeddings using {method.value}")
 
+        # Optionally reduce dimensionality with UMAP before clustering
+        original_embeddings = embeddings
+        if params.get("use_umap", False) and embeddings.shape[1] > params.get("umap_n_components", 15):
+            embeddings = self._reduce_umap(embeddings, params)
+
         if method == ClusteringMethod.HDBSCAN:
-            return self._cluster_hdbscan(embeddings, run_id)
+            result = self._cluster_hdbscan(embeddings, original_embeddings, params, run_id)
         elif method == ClusteringMethod.KMEANS:
-            return self._cluster_kmeans(embeddings, run_id)
+            result = self._cluster_kmeans(embeddings, original_embeddings, params, run_id)
         elif method == ClusteringMethod.GRAPH:
-            return self._cluster_graph(embeddings, run_id)
+            result = self._cluster_graph(embeddings, original_embeddings, run_id)
         else:
             raise ValueError(f"Unknown clustering method: {method}")
 
-    def _cluster_hdbscan(self, embeddings: np.ndarray, run_id: str) -> ClusteringResult:
+        return result
+
+    def _reduce_umap(self, embeddings: np.ndarray, params: dict) -> np.ndarray:
+        """Reduce embedding dimensionality using UMAP."""
+        import umap
+
+        n_components = params.get("umap_n_components", 15)
+        n_neighbors = params.get("umap_n_neighbors", 15)
+        min_dist = params.get("umap_min_dist", 0.0)
+        metric = params.get("umap_metric", "cosine")
+
+        logger.info(
+            f"UMAP reducing {embeddings.shape[1]} → {n_components} dims "
+            f"(n_neighbors={n_neighbors}, min_dist={min_dist}, metric={metric})"
+        )
+
+        reducer = umap.UMAP(
+            n_components=n_components,
+            n_neighbors=n_neighbors,
+            min_dist=min_dist,
+            metric=metric,
+            random_state=42,
+        )
+        reduced = reducer.fit_transform(embeddings)
+        logger.info(f"UMAP reduction complete: {embeddings.shape} → {reduced.shape}")
+        return reduced
+
+    def _compute_centroids_original_space(
+        self,
+        labels: np.ndarray,
+        original_embeddings: np.ndarray,
+    ) -> tuple[np.ndarray, int]:
+        """Compute centroids in original embedding space (for pgvector storage)."""
+        unique_labels = set(labels) - {-1}
+        n_clusters = len(unique_labels)
+        centroids = np.zeros((n_clusters, original_embeddings.shape[1]))
+
+        label_to_idx = {label: idx for idx, label in enumerate(sorted(unique_labels))}
+        for label in unique_labels:
+            mask = labels == label
+            centroids[label_to_idx[label]] = original_embeddings[mask].mean(axis=0)
+
+        return centroids, n_clusters
+
+    def _cluster_hdbscan(
+        self,
+        embeddings: np.ndarray,
+        original_embeddings: np.ndarray,
+        params: dict,
+        run_id: str,
+    ) -> ClusteringResult:
         """Cluster using HDBSCAN."""
+        min_cluster_size = max(2, params.get("hdbscan_min_cluster_size", 15))
+        min_samples = max(1, params.get("hdbscan_min_samples", 5))
+        cluster_selection_method = params.get("hdbscan_cluster_selection_method", "eom")
+
         clusterer = hdbscan.HDBSCAN(
-            min_cluster_size=max(2, self.min_cluster_size),
-            min_samples=max(1, self.min_samples),
+            min_cluster_size=min_cluster_size,
+            min_samples=min_samples,
             metric="euclidean",
-            cluster_selection_method="eom",
+            cluster_selection_method=cluster_selection_method,
         )
 
         labels = clusterer.fit_predict(embeddings)
         outlier_scores = clusterer.outlier_scores_ if hasattr(clusterer, "outlier_scores_") else None
 
-        # Compute centroids for each cluster
-        unique_labels = set(labels) - {-1}
-        n_clusters = len(unique_labels)
-        centroids = np.zeros((n_clusters, embeddings.shape[1]))
-
-        label_to_idx = {label: idx for idx, label in enumerate(sorted(unique_labels))}
-        for label in unique_labels:
-            mask = labels == label
-            centroids[label_to_idx[label]] = embeddings[mask].mean(axis=0)
+        # Compute centroids in original space for pgvector
+        centroids, n_clusters = self._compute_centroids_original_space(labels, original_embeddings)
 
         logger.info(f"HDBSCAN found {n_clusters} clusters, {(labels == -1).sum()} noise points")
 
@@ -119,17 +166,22 @@ class ClusteringService:
             n_clusters=n_clusters,
         )
 
-    def _cluster_kmeans(self, embeddings: np.ndarray, run_id: str) -> ClusteringResult:
+    def _cluster_kmeans(
+        self,
+        embeddings: np.ndarray,
+        original_embeddings: np.ndarray,
+        params: dict,
+        run_id: str,
+    ) -> ClusteringResult:
         """Cluster using K-means with automatic K selection."""
-        # Find optimal K using silhouette score
-        max_k = min(self.max_clusters, len(embeddings) - 1, 20)
+        max_clusters = params.get("kmeans_max_clusters", 50)
+        max_k = min(max_clusters, len(embeddings) - 1, 20)
         min_k = 2
 
         if max_k < min_k:
-            # Not enough data for proper clustering
             return ClusteringResult(
                 labels=np.zeros(len(embeddings), dtype=int),
-                centroids=np.mean(embeddings, axis=0, keepdims=True),
+                centroids=np.mean(original_embeddings, axis=0, keepdims=True),
                 outlier_scores=None,
                 method=ClusteringMethod.KMEANS,
                 run_id=run_id,
@@ -154,30 +206,39 @@ class ClusteringService:
         kmeans = KMeans(n_clusters=best_k, random_state=42, n_init=10)
         labels = kmeans.fit_predict(embeddings)
 
-        # Compute distances to centroids for outlier detection
+        # Compute centroids in original space for pgvector
+        centroids, n_clusters = self._compute_centroids_original_space(labels, original_embeddings)
+
+        # Compute distances for outlier scoring (in clustering space)
         distances = np.linalg.norm(
             embeddings - kmeans.cluster_centers_[labels], axis=1
         )
-        # Normalize distances to 0-1 scale
         outlier_scores = (distances - distances.min()) / (distances.max() - distances.min() + 1e-8)
 
         return ClusteringResult(
             labels=labels,
-            centroids=kmeans.cluster_centers_,
+            centroids=centroids,
             outlier_scores=outlier_scores,
             method=ClusteringMethod.KMEANS,
             run_id=run_id,
-            n_clusters=best_k,
+            n_clusters=n_clusters,
         )
 
-    def _cluster_graph(self, embeddings: np.ndarray, run_id: str) -> ClusteringResult:
+    def _cluster_graph(
+        self,
+        embeddings: np.ndarray,
+        original_embeddings: np.ndarray,
+        run_id: str,
+    ) -> ClusteringResult:
         """Cluster using kNN graph with Louvain community detection."""
         try:
             import networkx as nx
             from networkx.algorithms.community import louvain_communities
         except ImportError:
             logger.warning("NetworkX not installed, falling back to HDBSCAN")
-            return self._cluster_hdbscan(embeddings, run_id)
+            return self._cluster_hdbscan(
+                embeddings, original_embeddings, dict(DEFAULT_CLUSTERING_CONFIG), run_id
+            )
 
         # Build kNN graph
         k = min(10, len(embeddings) - 1)
@@ -191,8 +252,8 @@ class ClusteringService:
 
         for i in range(len(embeddings)):
             for j, dist in zip(indices[i][1:], distances[i][1:]):
-                weight = 1 - dist  # Convert distance to similarity
-                if weight > 0.5:  # Only connect similar nodes
+                weight = 1 - dist
+                if weight > 0.5:
                     G.add_edge(i, j, weight=weight)
 
         # Find communities using Louvain
@@ -206,12 +267,12 @@ class ClusteringService:
 
         n_clusters = len(communities)
 
-        # Compute centroids
-        centroids = np.zeros((n_clusters, embeddings.shape[1]))
+        # Compute centroids in original space for pgvector
+        centroids = np.zeros((n_clusters, original_embeddings.shape[1]))
         for i in range(n_clusters):
             mask = labels == i
             if mask.any():
-                centroids[i] = embeddings[mask].mean(axis=0)
+                centroids[i] = original_embeddings[mask].mean(axis=0)
 
         logger.info(f"Graph clustering found {n_clusters} communities")
 
@@ -257,13 +318,6 @@ class ClusteringService:
         return [tag for tag, _ in counter.most_common(top_n)]
 
 
-# Singleton instance
-_clustering_service: ClusteringService | None = None
-
-
 def get_clustering_service() -> ClusteringService:
-    """Get clustering service singleton."""
-    global _clustering_service
-    if _clustering_service is None:
-        _clustering_service = ClusteringService()
-    return _clustering_service
+    """Get clustering service instance."""
+    return ClusteringService()

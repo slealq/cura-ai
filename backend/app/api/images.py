@@ -19,6 +19,7 @@ from app.schemas import (
     PipelineStats,
     UploadResponse,
 )
+from app.services.folder_service import get_folder_service
 from app.services.image_service import get_image_service
 from app.workers.tasks import (
     describe_image,
@@ -35,6 +36,7 @@ router = APIRouter(prefix="/images", tags=["images"])
 @router.post("/upload", response_model=UploadResponse)
 async def upload_image(
     file: UploadFile = File(...),
+    folder_id: int | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """Upload a single image for processing."""
@@ -51,6 +53,10 @@ async def upload_image(
             source=ImageSource.UPLOAD,
         )
 
+        if folder_id:
+            folder_service = get_folder_service(db)
+            folder_service.add_images_to_folder(folder_id, [image.id])
+
         return UploadResponse(
             image_id=image.id,
             filename=file.filename or "upload.jpg",
@@ -65,12 +71,14 @@ async def upload_image(
 @router.post("/upload/batch", response_model=BatchUploadResponse)
 async def upload_images_batch(
     files: list[UploadFile] = File(...),
+    folder_id: int | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """Upload multiple images for processing."""
     image_service = get_image_service(db)
     uploaded = []
     failed = []
+    uploaded_image_ids = []
 
     for file in files:
         if not file.content_type or not file.content_type.startswith("image/"):
@@ -93,9 +101,14 @@ async def upload_images_batch(
                     message="Image uploaded successfully",
                 )
             )
+            uploaded_image_ids.append(image.id)
         except Exception as e:
             logger.error(f"Failed to upload {file.filename}: {e}")
             failed.append({"filename": file.filename, "error": str(e)})
+
+    if folder_id and uploaded_image_ids:
+        folder_service = get_folder_service(db)
+        folder_service.add_images_to_folder(folder_id, uploaded_image_ids)
 
     return BatchUploadResponse(uploaded=uploaded, failed=failed)
 
@@ -158,6 +171,14 @@ async def get_image(image_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Image not found")
 
     return ImageResponse.model_validate(image)
+
+
+@router.get("/{image_id}/folders")
+async def get_image_folders(image_id: int, db: Session = Depends(get_db)):
+    """Get folders that contain this image."""
+    folder_service = get_folder_service(db)
+    folders = folder_service.get_image_folders(image_id)
+    return [{"id": f.id, "name": f.name} for f in folders]
 
 
 @router.delete("/{image_id}")

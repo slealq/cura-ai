@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   LayoutGrid,
-  Image as ImageIcon,
+  FolderOpen,
   Folder,
   Settings,
   Activity,
@@ -15,7 +15,7 @@ import { cn } from '@/lib/utils';
 
 const navigation = [
   { name: 'Clusters', href: '/', icon: LayoutGrid },
-  { name: 'All Images', href: '/images', icon: ImageIcon },
+  { name: 'Folders', href: '/images', icon: FolderOpen },
   { name: 'Upload', href: '/upload', icon: Upload },
   { name: 'Jobs', href: '/jobs', icon: Activity },
   { name: 'Debug', href: '/debug', icon: Bug },

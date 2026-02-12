@@ -2,11 +2,11 @@
 
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { imagesApi, settingsApi } from '@/lib/api';
-import { RotateCcw, Plus, Trash2, Check, Copy } from 'lucide-react';
+import { imagesApi, settingsApi, clustersApi } from '@/lib/api';
+import { RotateCcw, Plus, Trash2, Check, Copy, Play, HelpCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { getStatusColor, cn } from '@/lib/utils';
-import type { PromptPreset } from '@/types';
+import type { ClusteringConfig, PromptPreset } from '@/types';
 
 function PromptSuggest({
   promptType,
@@ -432,6 +432,9 @@ export default function SettingsPage() {
         </div>
       </section>
 
+      {/* Clustering Settings */}
+      <ClusteringSettings />
+
       {/* Configuration Info */}
       <section className="bg-white rounded-xl border border-border p-6">
         <h2 className="font-semibold mb-4">Configuration</h2>
@@ -451,18 +454,6 @@ export default function SettingsPage() {
 
           <div>
             <h3 className="text-sm font-medium text-muted-foreground">
-              Clustering
-            </h3>
-            <p className="text-sm mt-1">
-              Default method: HDBSCAN (auto-detect clusters)
-            </p>
-            <p className="text-sm text-muted-foreground">
-              Alternatives: K-means, Graph clustering
-            </p>
-          </div>
-
-          <div>
-            <h3 className="text-sm font-medium text-muted-foreground">
               Storage
             </h3>
             <p className="text-sm mt-1">Local filesystem (./storage)</p>
@@ -473,5 +464,369 @@ export default function SettingsPage() {
         </div>
       </section>
     </div>
+  );
+}
+
+function Hint({ text }: { text: string }) {
+  return (
+    <span className="relative group inline-flex ml-1 align-middle">
+      <HelpCircle className="h-3.5 w-3.5 text-muted-foreground/60 hover:text-muted-foreground cursor-help" />
+      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 rounded-lg bg-gray-900 text-white text-xs leading-relaxed px-3 py-2 opacity-0 group-hover:opacity-100 transition-opacity z-50 shadow-lg">
+        {text}
+        <span className="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-gray-900" />
+      </span>
+    </span>
+  );
+}
+
+function ClusteringSettings() {
+  const queryClient = useQueryClient();
+
+  const { data: config, isLoading } = useQuery({
+    queryKey: ['clustering-config'],
+    queryFn: settingsApi.getClusteringConfig,
+  });
+
+  const [draft, setDraft] = useState<ClusteringConfig | null>(null);
+
+  useEffect(() => {
+    if (config && !draft) {
+      setDraft(config);
+    }
+  }, [config, draft]);
+
+  const saveMutation = useMutation({
+    mutationFn: (cfg: Partial<ClusteringConfig>) =>
+      settingsApi.updateClusteringConfig(cfg),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['clustering-config'] });
+      setDraft(data);
+      toast.success('Clustering settings saved');
+    },
+    onError: () => toast.error('Failed to save clustering settings'),
+  });
+
+  const resetMutation = useMutation({
+    mutationFn: settingsApi.resetClusteringConfig,
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['clustering-config'] });
+      setDraft(data);
+      toast.success('Clustering settings reset to defaults');
+    },
+  });
+
+  const reclusterMutation = useMutation({
+    mutationFn: async () => {
+      if (draft) {
+        await settingsApi.updateClusteringConfig(draft);
+      }
+      return clustersApi.recluster();
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['clustering-config'] });
+      queryClient.invalidateQueries({ queryKey: ['clusters'] });
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+      toast.success(`Reclustering started (job #${result.job_id})`);
+    },
+    onError: () => toast.error('Failed to start reclustering'),
+  });
+
+  if (isLoading || !draft) {
+    return (
+      <section className="bg-white rounded-xl border border-border p-6">
+        <h2 className="font-semibold mb-4">Clustering</h2>
+        <p className="text-muted-foreground text-sm">Loading...</p>
+      </section>
+    );
+  }
+
+  const update = (partial: Partial<ClusteringConfig>) =>
+    setDraft((prev) => (prev ? { ...prev, ...partial } : prev));
+
+  return (
+    <section className="bg-white rounded-xl border border-border p-6">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 className="font-semibold">Clustering</h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            Configure dimensionality reduction (UMAP) and clustering algorithm parameters.
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-6">
+        {/* Method selector */}
+        <div>
+          <label className="flex items-center text-sm font-medium mb-1">
+            Method
+            <Hint text="HDBSCAN automatically discovers the number of clusters and handles noise well — best for most cases. K-Means forces every image into a cluster and needs you to set a max K. Graph uses community detection on a similarity network." />
+          </label>
+          <select
+            value={draft.method}
+            onChange={(e) => update({ method: e.target.value })}
+            className="w-48 px-3 py-2 border border-border rounded-lg text-sm"
+          >
+            <option value="hdbscan">HDBSCAN</option>
+            <option value="kmeans">K-Means</option>
+            <option value="graph">Graph (Louvain)</option>
+          </select>
+        </div>
+
+        {/* UMAP section */}
+        <div className="border border-border rounded-lg p-4">
+          <div className="flex items-center gap-3 mb-1">
+            <label className="flex items-center text-sm font-medium">
+              UMAP Dimensionality Reduction
+              <Hint text="Reduces high-dimensional embeddings (1536 dims) to fewer dimensions before clustering. Strongly recommended — without it, distances become uniform in high dimensions and clustering produces one giant cluster." />
+            </label>
+            <button
+              onClick={() => update({ use_umap: !draft.use_umap })}
+              className={cn(
+                'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors',
+                draft.use_umap ? 'bg-primary' : 'bg-gray-300'
+              )}
+            >
+              <span
+                className={cn(
+                  'inline-block h-4 w-4 transform rounded-full bg-white transition-transform mt-0.5',
+                  draft.use_umap ? 'translate-x-4 ml-0.5' : 'translate-x-0.5'
+                )}
+              />
+            </button>
+            <span className="text-xs text-muted-foreground">
+              {draft.use_umap ? 'Enabled' : 'Disabled'}
+            </span>
+          </div>
+          {!draft.use_umap && (
+            <p className="text-xs text-amber-600 mb-3">
+              Disabling UMAP on high-dimensional embeddings often results in poor cluster separation. Only disable if you know your embeddings are already low-dimensional.
+            </p>
+          )}
+
+          {draft.use_umap && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
+              <div>
+                <label className="flex items-center text-xs text-muted-foreground mb-1">
+                  Components (output dims): {draft.umap_n_components}
+                  <Hint text="Number of dimensions after reduction. Lower values (5-10) create tighter, more distinct clusters but may lose nuance. Higher values (15-30) preserve more detail. Start with 10-15 for ~1000 images." />
+                </label>
+                <input
+                  type="range"
+                  min={2}
+                  max={50}
+                  value={draft.umap_n_components}
+                  onChange={(e) =>
+                    update({ umap_n_components: parseInt(e.target.value) })
+                  }
+                  className="w-full"
+                />
+                <div className="flex justify-between text-[10px] text-muted-foreground">
+                  <span>2</span>
+                  <span>50</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="flex items-center text-xs text-muted-foreground mb-1">
+                  Neighbors: {draft.umap_n_neighbors}
+                  <Hint text="How many nearby points UMAP considers when building its graph. Low values (5-10) focus on very local structure, creating many small tight clusters. High values (30-50) capture broader patterns, merging similar groups. For ~900 images, 10-20 is a good range." />
+                </label>
+                <input
+                  type="range"
+                  min={2}
+                  max={100}
+                  value={draft.umap_n_neighbors}
+                  onChange={(e) =>
+                    update({ umap_n_neighbors: parseInt(e.target.value) })
+                  }
+                  className="w-full"
+                />
+                <div className="flex justify-between text-[10px] text-muted-foreground">
+                  <span>2</span>
+                  <span>100</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="flex items-center text-xs text-muted-foreground mb-1">
+                  Min Distance: {draft.umap_min_dist.toFixed(2)}
+                  <Hint text="How tightly UMAP packs points together. 0.0 allows maximum compression, producing dense clumps that are easier to cluster. Higher values (0.3-0.5) spread points out more evenly. For clustering, keep this at or near 0.0." />
+                </label>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={Math.round(draft.umap_min_dist * 100)}
+                  onChange={(e) =>
+                    update({ umap_min_dist: parseInt(e.target.value) / 100 })
+                  }
+                  className="w-full"
+                />
+                <div className="flex justify-between text-[10px] text-muted-foreground">
+                  <span>0.0</span>
+                  <span>1.0</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="flex items-center text-xs text-muted-foreground mb-1">
+                  Metric
+                  <Hint text="Distance metric for comparing embeddings. Cosine measures angle between vectors (ignoring magnitude) — best for text/AI embeddings. Euclidean measures straight-line distance — use if your embeddings are already normalized." />
+                </label>
+                <select
+                  value={draft.umap_metric}
+                  onChange={(e) => update({ umap_metric: e.target.value })}
+                  className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
+                >
+                  <option value="cosine">Cosine</option>
+                  <option value="euclidean">Euclidean</option>
+                </select>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* HDBSCAN params */}
+        {draft.method === 'hdbscan' && (
+          <div className="border border-border rounded-lg p-4">
+            <h3 className="flex items-center text-sm font-medium mb-3">
+              HDBSCAN Parameters
+              <Hint text="HDBSCAN finds clusters of varying density and automatically determines how many clusters exist. Images that don't fit any cluster are marked as noise/outliers." />
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="flex items-center text-xs text-muted-foreground mb-1">
+                  Min Cluster Size: {draft.hdbscan_min_cluster_size}
+                  <Hint text="The smallest group of images that can form a cluster. Increase this if you're getting too many tiny clusters. Decrease if meaningful small groups are being treated as noise. For ~900 images, try 10-30." />
+                </label>
+                <input
+                  type="range"
+                  min={2}
+                  max={100}
+                  value={draft.hdbscan_min_cluster_size}
+                  onChange={(e) =>
+                    update({
+                      hdbscan_min_cluster_size: parseInt(e.target.value),
+                    })
+                  }
+                  className="w-full"
+                />
+                <div className="flex justify-between text-[10px] text-muted-foreground">
+                  <span>2</span>
+                  <span>100</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="flex items-center text-xs text-muted-foreground mb-1">
+                  Min Samples: {draft.hdbscan_min_samples}
+                  <Hint text="How conservative the clustering is. Higher values require denser neighborhoods to form a cluster, pushing more borderline images into noise. Lower values are more permissive. Try keeping this at or below min_cluster_size." />
+                </label>
+                <input
+                  type="range"
+                  min={1}
+                  max={50}
+                  value={draft.hdbscan_min_samples}
+                  onChange={(e) =>
+                    update({ hdbscan_min_samples: parseInt(e.target.value) })
+                  }
+                  className="w-full"
+                />
+                <div className="flex justify-between text-[10px] text-muted-foreground">
+                  <span>1</span>
+                  <span>50</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="flex items-center text-xs text-muted-foreground mb-1">
+                  Selection Method
+                  <Hint text="How HDBSCAN picks clusters from its hierarchy. EOM (Excess of Mass) favors larger, more stable clusters — good for finding broad themes. Leaf picks the finest-grained clusters at the bottom of the tree — produces more, smaller groups." />
+                </label>
+                <select
+                  value={draft.hdbscan_cluster_selection_method}
+                  onChange={(e) =>
+                    update({
+                      hdbscan_cluster_selection_method: e.target.value,
+                    })
+                  }
+                  className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
+                >
+                  <option value="eom">EOM (Excess of Mass)</option>
+                  <option value="leaf">Leaf</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Quick tuning tips */}
+            <div className="mt-4 p-3 bg-blue-50 rounded-lg text-xs text-blue-800 space-y-1">
+              <p className="font-medium">Quick tuning guide:</p>
+              <p>Too many small clusters? Increase min_cluster_size or switch to EOM.</p>
+              <p>Everything in one big cluster? Decrease min_cluster_size, lower UMAP components, or try Leaf selection.</p>
+              <p>Too many images marked as noise? Lower min_samples or decrease min_cluster_size.</p>
+            </div>
+          </div>
+        )}
+
+        {/* K-Means params */}
+        {draft.method === 'kmeans' && (
+          <div className="border border-border rounded-lg p-4">
+            <h3 className="flex items-center text-sm font-medium mb-3">
+              K-Means Parameters
+              <Hint text="K-Means partitions all images into exactly K groups. The optimal K is automatically selected using silhouette scoring up to your max. Every image is assigned to a cluster (no noise concept)." />
+            </h3>
+            <div>
+              <label className="flex items-center text-xs text-muted-foreground mb-1">
+                Max Clusters: {draft.kmeans_max_clusters}
+                <Hint text="Upper bound for automatic K selection. The algorithm tests K=2 up to this value (capped at 20 for speed) and picks the K with the best silhouette score. Set higher if you expect many distinct groups in your collection." />
+              </label>
+              <input
+                type="range"
+                min={2}
+                max={200}
+                value={draft.kmeans_max_clusters}
+                onChange={(e) =>
+                  update({ kmeans_max_clusters: parseInt(e.target.value) })
+                }
+                className="w-full max-w-md"
+              />
+              <div className="flex justify-between text-[10px] text-muted-foreground max-w-md">
+                <span>2</span>
+                <span>200</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Action buttons */}
+        <div className="flex items-center gap-2 flex-wrap pt-2">
+          <button
+            onClick={() => saveMutation.mutate(draft)}
+            disabled={saveMutation.isPending}
+            className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            {saveMutation.isPending ? 'Saving...' : 'Save'}
+          </button>
+
+          <button
+            onClick={() => resetMutation.mutate()}
+            disabled={resetMutation.isPending}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Reset to Defaults
+          </button>
+
+          <button
+            onClick={() => reclusterMutation.mutate()}
+            disabled={reclusterMutation.isPending}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+          >
+            <Play className="h-3.5 w-3.5" />
+            {reclusterMutation.isPending ? 'Starting...' : 'Recluster Now'}
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }

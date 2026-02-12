@@ -389,7 +389,7 @@ def cluster_all_images(self, job_id: int | None = None) -> dict:
         image_ids = []
 
         for image in images:
-            if image.image_metadata and image.image_metadata.embedding:
+            if image.image_metadata and image.image_metadata.embedding is not None:
                 embeddings.append(image.image_metadata.embedding)
                 image_ids.append(image.id)
 
@@ -398,8 +398,12 @@ def cluster_all_images(self, job_id: int | None = None) -> dict:
 
         embeddings_array = np.array(embeddings)
 
+        # Read clustering config from DB
+        settings_service = get_settings_service(db)
+        clustering_config = settings_service.get_clustering_config()
+
         # Run clustering
-        result = clustering_service.cluster(embeddings_array)
+        result = clustering_service.cluster(embeddings_array, params=clustering_config)
 
         # Delete old clusters (keep only latest run)
         cluster_service.delete_old_clusters()
@@ -426,6 +430,12 @@ def cluster_all_images(self, job_id: int | None = None) -> dict:
                 }
                 db.commit()
 
+        # Auto-chain: summarize all new clusters
+        cluster_ids = [c.id for c in clusters]
+        if cluster_ids:
+            logger.info(f"Auto-dispatching summarization for {len(cluster_ids)} clusters")
+            summarize_clusters.delay(cluster_ids)
+
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(category=LogCategory.TASK,
                   message=f"Task cluster_all_images completed in {elapsed:.0f}ms ({len(image_ids)} images, {result.n_clusters} clusters)",
@@ -435,7 +445,7 @@ def cluster_all_images(self, job_id: int | None = None) -> dict:
             "n_clusters": result.n_clusters,
             "n_images": len(image_ids),
             "run_id": result.run_id,
-            "cluster_ids": [c.id for c in clusters],
+            "cluster_ids": cluster_ids,
         }
 
     except Exception as e:

@@ -177,3 +177,44 @@ export interface PromptPreset {
   created_at: string;
   updated_at: string;
 }
+
+export interface FolderPreviewImage {
+  id: number;
+  thumbnail_uri_small: string | null;
+  thumbnail_uri_medium: string | null;
+}
+
+export interface Folder {
+  id: number;
+  name: string;
+  description: string | null;
+  image_count: number;
+  created_at: string;
+  updated_at: string;
+  preview_images: FolderPreviewImage[];
+}
+
+export interface FolderListResponse {
+  items: Folder[];
+  total: number;
+  skip: number;
+  limit: number;
+}
+
+export interface FolderBrief {
+  id: number;
+  name: string;
+}
+
+export interface ClusteringConfig {
+  method: string;
+  use_umap: boolean;
+  umap_n_components: number;
+  umap_n_neighbors: number;
+  umap_min_dist: number;
+  umap_metric: string;
+  hdbscan_min_cluster_size: number;
+  hdbscan_min_samples: number;
+  hdbscan_cluster_selection_method: string;
+  kmeans_max_clusters: number;
+}

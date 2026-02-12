@@ -23,6 +23,7 @@ from app.db.base import Base
 
 if TYPE_CHECKING:
     from app.models.cluster import ClusterMembership
+    from app.models.folder import FolderImage
 
 
 class ImageStatus(str, enum.Enum):
@@ -107,6 +108,9 @@ class Image(Base):
     )
     cluster_memberships: Mapped[list["ClusterMembership"]] = relationship(
         "ClusterMembership", back_populates="image", cascade="all, delete-orphan"
+    )
+    folder_images: Mapped[list["FolderImage"]] = relationship(
+        "FolderImage", back_populates="image", cascade="all, delete-orphan"
     )
 
     __table_args__ = (
