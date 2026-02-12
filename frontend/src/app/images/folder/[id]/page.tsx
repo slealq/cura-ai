@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Loader2, ArrowLeft, Pencil, Trash2 } from 'lucide-react';
+import { Loader2, ArrowLeft, Pencil, Trash2, Box } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import { foldersApi } from '@/lib/api';
@@ -120,6 +120,13 @@ export default function FolderDetailPage() {
             )}
           </div>
           <div className="flex items-center gap-1">
+            <Link
+              href={`/models?train_folder=${folderId}`}
+              className="p-2 hover:bg-purple-50 rounded-lg transition-colors text-muted-foreground hover:text-purple-600"
+              title="Train LoRA from this folder"
+            >
+              <Box className="h-4 w-4" />
+            </Link>
             <button
               onClick={startEditing}
               className="p-2 hover:bg-muted rounded-lg transition-colors text-muted-foreground"

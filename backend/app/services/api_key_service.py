@@ -11,6 +11,7 @@ from openai import AuthenticationError as OpenAIAuthError
 from openai import RateLimitError as OpenAIRateLimitError
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models.api_key import APIKey, APIKeyStatus, APIProvider
 from app.services.encryption import decrypt_api_key, encrypt_api_key
 
@@ -34,7 +35,7 @@ class APIKeyService:
 
     def get_key(self, provider: APIProvider) -> APIKey | None:
         """Get API key for a provider."""
-        return self.db.query(APIKey).filter(APIKey.provider == provider).first()
+        return self.db.query(APIKey).filter(APIKey.provider == provider.value).first()
 
     def get_all_keys(self) -> list[APIKey]:
         """Get all stored API keys."""
@@ -46,6 +47,26 @@ class APIKeyService:
         if key:
             return decrypt_api_key(key.encrypted_key)
         return None
+
+    def resolve_key(self, provider: APIProvider) -> str | None:
+        """Resolve API key: DB first, then env var fallback.
+
+        This is the single source of truth for which key to use.
+        """
+        # Try DB first
+        db_key = self.get_decrypted_key(provider)
+        if db_key:
+            return db_key
+
+        # Fall back to env var
+        settings = get_settings()
+        env_keys = {
+            APIProvider.OPENAI: settings.openai_api_key,
+            APIProvider.ANTHROPIC: settings.anthropic_api_key,
+            APIProvider.FAL: settings.fal_api_key,
+        }
+        key = env_keys.get(provider, "")
+        return key if key else None
 
     def save_key(
         self,
@@ -62,7 +83,7 @@ class APIKeyService:
         if existing:
             existing.encrypted_key = encrypted
             existing.key_suffix = key_suffix
-            existing.status = status
+            existing.status = status.value
             existing.last_error = error
             existing.last_validated_at = datetime.utcnow() if status != APIKeyStatus.UNKNOWN else None
             existing.updated_at = datetime.utcnow()
@@ -71,10 +92,10 @@ class APIKeyService:
             return existing
         else:
             new_key = APIKey(
-                provider=provider,
+                provider=provider.value,
                 encrypted_key=encrypted,
                 key_suffix=key_suffix,
-                status=status,
+                status=status.value,
                 last_error=error,
                 last_validated_at=datetime.utcnow() if status != APIKeyStatus.UNKNOWN else None,
             )
@@ -146,6 +167,27 @@ class APIKeyService:
                 valid=False, status=APIKeyStatus.UNKNOWN, error=str(e)
             )
 
+    async def validate_fal_key(self, key_value: str) -> APIKeyValidationResult:
+        """Validate a fal.ai API key by making a lightweight API call."""
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    "https://queue.fal.run/fal-ai/flux/dev/requests",
+                    headers={"Authorization": f"Key {key_value}"},
+                )
+                if resp.status_code == 401:
+                    return APIKeyValidationResult(
+                        valid=False, status=APIKeyStatus.INVALID, error="Invalid API key"
+                    )
+                # Any non-401 response means the key is accepted
+                return APIKeyValidationResult(valid=True, status=APIKeyStatus.ACTIVE)
+        except Exception as e:
+            logger.error(f"fal.ai validation error: {e}")
+            return APIKeyValidationResult(
+                valid=False, status=APIKeyStatus.UNKNOWN, error=str(e)
+            )
+
     async def validate_and_save_key(
         self,
         provider: APIProvider,
@@ -156,6 +198,8 @@ class APIKeyService:
             result = await self.validate_openai_key(key_value)
         elif provider == APIProvider.ANTHROPIC:
             result = await self.validate_anthropic_key(key_value)
+        elif provider == APIProvider.FAL:
+            result = await self.validate_fal_key(key_value)
         else:
             raise ValueError(f"Unknown provider: {provider}")
 

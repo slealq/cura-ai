@@ -218,3 +218,98 @@ export interface ClusteringConfig {
   hdbscan_cluster_selection_method: string;
   kmeans_max_clusters: number;
 }
+
+export interface LoraModel {
+  id: number;
+  name: string;
+  trigger_word: string;
+  description: string | null;
+  folder_id: number | null;
+  folder_name: string | null;
+  base_model: string;
+  training_provider: string;
+  training_config: Record<string, unknown> | null;
+  status: string;
+  error_message: string | null;
+  lora_url: string | null;
+  training_images_count: number;
+  job_id: number | null;
+  created_at: string;
+  training_started_at: string | null;
+  training_completed_at: string | null;
+  updated_at: string;
+}
+
+export interface LoraListResponse {
+  items: LoraModel[];
+  total: number;
+  skip: number;
+  limit: number;
+}
+
+export interface GeneratedImage {
+  id: number;
+  prompt: string;
+  negative_prompt: string | null;
+  base_model: string;
+  generation_provider: string;
+  lora_model_id: number | null;
+  lora_model_name: string | null;
+  lora_scale: number | null;
+  generation_params: Record<string, unknown> | null;
+  status: string;
+  error_message: string | null;
+  object_key: string | null;
+  width: number | null;
+  height: number | null;
+  file_size: number | null;
+  mime_type: string | null;
+  thumbnail_uri_small: string | null;
+  thumbnail_uri_medium: string | null;
+  job_id: number | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface GeneratedImageListResponse {
+  items: GeneratedImage[];
+  total: number;
+  skip: number;
+  limit: number;
+}
+
+export interface GenerationConfig {
+  base_model: string;
+  width: number;
+  height: number;
+  num_inference_steps: number;
+  guidance_scale: number;
+  default_lora_scale: number;
+}
+
+export interface TrainingConfig {
+  steps: number;
+  is_style: boolean;
+}
+
+export interface APIKeyInfo {
+  provider: string;
+  key_suffix: string | null;
+  status: string;
+  last_validated_at: string | null;
+  last_error: string | null;
+}
+
+export interface ProviderConfig {
+  vision_provider: string;
+  embedding_provider: string;
+  openai_vision_model: string;
+  openai_embedding_model: string;
+  anthropic_vision_model: string;
+}
+
+export interface ProviderModel {
+  id: string;
+  name: string;
+  capabilities: string[];
+}

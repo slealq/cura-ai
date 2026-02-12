@@ -3,6 +3,7 @@ from fastapi import APIRouter
 
 from app.api.clusters import router as clusters_router
 from app.api.folders import router as folders_router
+from app.api.generation import router as generation_router
 from app.api.images import router as images_router
 from app.api.jobs import router as jobs_router
 from app.api.logs import router as logs_router
@@ -18,3 +19,4 @@ api_router.include_router(search_router)
 api_router.include_router(jobs_router)
 api_router.include_router(logs_router)
 api_router.include_router(settings_router)
+api_router.include_router(generation_router)

@@ -6,6 +6,28 @@ from sqlalchemy.orm import Session
 from app.models.prompt_preset import PromptPreset
 from app.models.settings import AppSettings
 
+DEFAULT_GENERATION_CONFIG = {
+    "base_model": "flux-dev",
+    "width": 1024,
+    "height": 1024,
+    "num_inference_steps": 28,
+    "guidance_scale": 3.5,
+    "default_lora_scale": 1.0,
+}
+
+DEFAULT_TRAINING_CONFIG = {
+    "steps": 1000,
+    "is_style": False,
+}
+
+DEFAULT_PROVIDER_CONFIG = {
+    "vision_provider": "openai",
+    "embedding_provider": "openai",
+    "openai_vision_model": "gpt-4o",
+    "openai_embedding_model": "text-embedding-3-small",
+    "anthropic_vision_model": "claude-sonnet-4-20250514",
+}
+
 DEFAULT_CLUSTERING_CONFIG = {
     "method": "hdbscan",
     "use_umap": True,
@@ -228,6 +250,70 @@ class SettingsService:
             if key in DEFAULT_CLUSTERING_CONFIG:
                 current[key] = config[key]
         self.set_setting("clustering_config", json.dumps(current), description="Clustering parameters")
+        return current
+
+    # --- Generation / Training config ---
+
+    def get_generation_config(self) -> dict:
+        """Get generation configuration from DB, or return defaults."""
+        raw = self.get_setting("generation_config")
+        if raw:
+            try:
+                config = json.loads(raw)
+                return {**DEFAULT_GENERATION_CONFIG, **config}
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return dict(DEFAULT_GENERATION_CONFIG)
+
+    def set_generation_config(self, config: dict) -> dict:
+        """Validate and store generation config. Accepts partial dict, merges with defaults."""
+        current = self.get_generation_config()
+        for key in config:
+            if key in DEFAULT_GENERATION_CONFIG:
+                current[key] = config[key]
+        self.set_setting("generation_config", json.dumps(current), description="Generation parameters")
+        return current
+
+    def get_training_config(self) -> dict:
+        """Get training configuration from DB, or return defaults."""
+        raw = self.get_setting("training_config")
+        if raw:
+            try:
+                config = json.loads(raw)
+                return {**DEFAULT_TRAINING_CONFIG, **config}
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return dict(DEFAULT_TRAINING_CONFIG)
+
+    def set_training_config(self, config: dict) -> dict:
+        """Validate and store training config. Accepts partial dict, merges with defaults."""
+        current = self.get_training_config()
+        for key in config:
+            if key in DEFAULT_TRAINING_CONFIG:
+                current[key] = config[key]
+        self.set_setting("training_config", json.dumps(current), description="Training parameters")
+        return current
+
+    # --- Provider config ---
+
+    def get_provider_config(self) -> dict:
+        """Get provider configuration from DB, or return defaults."""
+        raw = self.get_setting("provider_config")
+        if raw:
+            try:
+                config = json.loads(raw)
+                return {**DEFAULT_PROVIDER_CONFIG, **config}
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return dict(DEFAULT_PROVIDER_CONFIG)
+
+    def set_provider_config(self, config: dict) -> dict:
+        """Validate and store provider config. Accepts partial dict, merges with defaults."""
+        current = self.get_provider_config()
+        for key in config:
+            if key in DEFAULT_PROVIDER_CONFIG:
+                current[key] = config[key]
+        self.set_setting("provider_config", json.dumps(current), description="Provider configuration")
         return current
 
     # --- Prompt getters (compose system format + guidance from active preset) ---

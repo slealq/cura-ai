@@ -11,6 +11,7 @@ celery_app = Celery(
     backend=settings.celery_result_backend,
     include=[
         "app.workers.tasks",
+        "app.workers.generation_tasks",
     ],
 )
 
@@ -38,12 +39,16 @@ celery_app.conf.update(
         "app.workers.tasks.tag_image": {"rate_limit": "30/m"},
         "app.workers.tasks.describe_image": {"rate_limit": "30/m"},
         "app.workers.tasks.embed_image": {"rate_limit": "60/m"},
+        "app.workers.generation_tasks.generate_image": {"rate_limit": "20/m"},
     },
 
     # Routing
     task_routes={
         "app.workers.tasks.cluster_all_images": {"queue": "clustering"},
         "app.workers.tasks.summarize_clusters": {"queue": "clustering"},
+        "app.workers.generation_tasks.train_lora": {"queue": "generation"},
+        "app.workers.generation_tasks.generate_image": {"queue": "generation"},
+        "app.workers.generation_tasks.batch_generate": {"queue": "generation"},
     },
 
     # Beat schedule

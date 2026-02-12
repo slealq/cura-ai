@@ -145,6 +145,84 @@ class BaseEmbedder(ABC):
         pass
 
 
+@dataclass
+class TrainingResult:
+    """Result from LoRA training."""
+
+    lora_url: str
+    request_id: str
+    provider: str
+    metadata: dict[str, Any] | None = None
+
+
+@dataclass
+class GenerationResult:
+    """Result from image generation."""
+
+    image_data: bytes
+    width: int
+    height: int
+    seed: int | None = None
+    provider: str = ""
+    metadata: dict[str, Any] | None = None
+
+
+class BaseTrainer(ABC):
+    """Abstract base class for LoRA training providers."""
+
+    @abstractmethod
+    async def start_training(
+        self,
+        image_urls: list[str],
+        trigger_word: str,
+        steps: int = 1000,
+        is_style: bool = False,
+        **kwargs: Any,
+    ) -> str:
+        """Start a LoRA training job. Returns request_id."""
+        pass
+
+    @abstractmethod
+    async def check_training_status(self, request_id: str) -> dict[str, Any]:
+        """Check training job status. Returns status dict."""
+        pass
+
+    @abstractmethod
+    async def get_training_result(self, request_id: str) -> TrainingResult:
+        """Get completed training result."""
+        pass
+
+    @abstractmethod
+    def get_provider_name(self) -> str:
+        """Get the provider identifier."""
+        pass
+
+
+class BaseGenerator(ABC):
+    """Abstract base class for image generation providers."""
+
+    @abstractmethod
+    async def generate(
+        self,
+        prompt: str,
+        negative_prompt: str | None = None,
+        width: int = 1024,
+        height: int = 1024,
+        num_inference_steps: int = 28,
+        guidance_scale: float = 3.5,
+        seed: int | None = None,
+        lora_url: str | None = None,
+        lora_scale: float = 1.0,
+    ) -> GenerationResult:
+        """Generate an image. Returns GenerationResult with image bytes."""
+        pass
+
+    @abstractmethod
+    def get_provider_name(self) -> str:
+        """Get the provider identifier."""
+        pass
+
+
 class BaseClusterSummarizer(ABC):
     """Abstract base class for cluster summarization providers."""
 

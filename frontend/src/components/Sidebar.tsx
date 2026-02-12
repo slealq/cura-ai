@@ -10,6 +10,8 @@ import {
   Activity,
   Upload,
   Bug,
+  Sparkles,
+  Box,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -17,6 +19,8 @@ const navigation = [
   { name: 'Clusters', href: '/', icon: LayoutGrid },
   { name: 'Folders', href: '/images', icon: FolderOpen },
   { name: 'Upload', href: '/upload', icon: Upload },
+  { name: 'Generate', href: '/generate', icon: Sparkles },
+  { name: 'Models', href: '/models', icon: Box },
   { name: 'Jobs', href: '/jobs', icon: Activity },
   { name: 'Debug', href: '/debug', icon: Bug },
   { name: 'Settings', href: '/settings', icon: Settings },

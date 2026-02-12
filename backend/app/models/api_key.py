@@ -2,7 +2,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, Index, Integer, String, Text
+from sqlalchemy import DateTime, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -12,6 +12,7 @@ class APIProvider(str, enum.Enum):
     """Supported API providers."""
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
+    FAL = "fal"
 
 
 class APIKeyStatus(str, enum.Enum):
@@ -28,7 +29,7 @@ class APIKey(Base):
     __tablename__ = "api_keys"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    provider: Mapped[APIProvider] = mapped_column(Enum(APIProvider), unique=True, nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
 
     # Encrypted key value (using Fernet symmetric encryption)
     encrypted_key: Mapped[str] = mapped_column(Text, nullable=False)
@@ -37,9 +38,7 @@ class APIKey(Base):
     key_suffix: Mapped[str] = mapped_column(String(8), nullable=False)
 
     # Validation status
-    status: Mapped[APIKeyStatus] = mapped_column(
-        Enum(APIKeyStatus), default=APIKeyStatus.UNKNOWN, nullable=False
-    )
+    status: Mapped[str] = mapped_column(String(32), default="unknown", nullable=False)
     last_validated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 

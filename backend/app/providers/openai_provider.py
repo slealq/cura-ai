@@ -56,9 +56,9 @@ Return as JSON:
 class OpenAITagger(BaseTagger):
     """OpenAI vision-based image tagger."""
 
-    def __init__(self):
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
-        self.model = settings.openai_vision_model
+    def __init__(self, api_key: str | None = None, model: str | None = None):
+        self.client = AsyncOpenAI(api_key=api_key or settings.openai_api_key)
+        self.model = model or settings.openai_vision_model
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10),
            retry=retry_if_not_exception_type(AIContentError))
@@ -162,9 +162,9 @@ class OpenAITagger(BaseTagger):
 class OpenAIDescriber(BaseDescriber):
     """OpenAI vision-based image describer."""
 
-    def __init__(self):
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
-        self.model = settings.openai_vision_model
+    def __init__(self, api_key: str | None = None, model: str | None = None):
+        self.client = AsyncOpenAI(api_key=api_key or settings.openai_api_key)
+        self.model = model or settings.openai_vision_model
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10),
            retry=retry_if_not_exception_type(AIContentError))
@@ -255,9 +255,9 @@ class OpenAIDescriber(BaseDescriber):
 class OpenAIEmbedder(BaseEmbedder):
     """OpenAI text embedding provider."""
 
-    def __init__(self):
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
-        self.model = settings.openai_embedding_model
+    def __init__(self, api_key: str | None = None, model: str | None = None):
+        self.client = AsyncOpenAI(api_key=api_key or settings.openai_api_key)
+        self.model = model or settings.openai_embedding_model
         self._dimensions = 1536  # text-embedding-3-small default
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
@@ -323,9 +323,9 @@ class OpenAIEmbedder(BaseEmbedder):
 class OpenAIClusterSummarizer(BaseClusterSummarizer):
     """OpenAI-based cluster summarizer."""
 
-    def __init__(self):
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
-        self.model = settings.openai_vision_model
+    def __init__(self, api_key: str | None = None, model: str | None = None):
+        self.client = AsyncOpenAI(api_key=api_key or settings.openai_api_key)
+        self.model = model or settings.openai_vision_model
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def summarize_cluster(

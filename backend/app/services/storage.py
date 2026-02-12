@@ -31,6 +31,8 @@ class StorageService:
         """Create necessary directories for local storage."""
         (self.local_path / "images").mkdir(parents=True, exist_ok=True)
         (self.local_path / "thumbnails").mkdir(parents=True, exist_ok=True)
+        (self.local_path / "generated").mkdir(parents=True, exist_ok=True)
+        (self.local_path / "generated_thumbnails").mkdir(parents=True, exist_ok=True)
 
     def compute_file_hash(self, file_data: bytes) -> str:
         """Compute SHA-256 hash of file data."""
@@ -165,6 +167,66 @@ class StorageService:
         base_name = Path(object_key).stem
         ext = Path(object_key).suffix
         return f"/api/images/thumbnails/{base_name}_{actual_size}{ext}"
+
+    async def save_generated_image(
+        self, file_data: bytes, object_key: str, mime_type: str
+    ) -> str:
+        """Save a generated image to storage."""
+        if self.storage_backend == "local":
+            return await self._save_local(file_data, object_key, "generated")
+        elif self.storage_backend == "s3":
+            return await self._save_s3(file_data, f"generated/{object_key}", mime_type)
+        else:
+            raise ValueError(f"Unsupported storage backend: {self.storage_backend}")
+
+    async def get_generated_image(self, object_key: str) -> bytes:
+        """Retrieve generated image data from storage."""
+        if self.storage_backend == "local":
+            file_path = self.local_path / "generated" / object_key
+            return file_path.read_bytes()
+        elif self.storage_backend == "s3":
+            import boto3
+            s3 = boto3.client("s3", region_name=settings.s3_region)
+            response = s3.get_object(
+                Bucket=settings.s3_bucket,
+                Key=f"generated/{object_key}"
+            )
+            return response["Body"].read()
+        else:
+            raise ValueError(f"Unsupported storage backend: {self.storage_backend}")
+
+    async def generate_generated_thumbnails(
+        self, file_data: bytes, object_key: str
+    ) -> dict[str, str]:
+        """Generate thumbnails for a generated image (small + medium only)."""
+        thumbnails = {}
+        base_name = Path(object_key).stem
+        ext = Path(object_key).suffix
+
+        try:
+            img = Image.open(BytesIO(file_data))
+            img = img.convert("RGB")
+
+            for size in [200, 400]:
+                thumb_key = f"{base_name}_{size}{ext}"
+                thumb_img = img.copy()
+                thumb_img.thumbnail((size, size), Image.Resampling.LANCZOS)
+
+                buffer = BytesIO()
+                thumb_img.save(buffer, format="JPEG", quality=85)
+                thumb_data = buffer.getvalue()
+
+                if self.storage_backend == "local":
+                    uri = await self._save_local(thumb_data, thumb_key, "generated_thumbnails")
+                else:
+                    uri = await self._save_s3(thumb_data, f"generated_thumbnails/{thumb_key}", "image/jpeg")
+
+                thumbnails[str(size)] = uri
+
+        except Exception as e:
+            logger.error(f"Failed to generate thumbnails for generated image: {e}")
+
+        return thumbnails
 
 
 # Singleton instance

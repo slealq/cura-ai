@@ -37,7 +37,7 @@ async def semantic_search(
 
     Short queries lean towards keyword matching; longer queries lean towards semantic.
     """
-    embedder = get_embedder()
+    embedder = get_embedder(db=db)
     query_embedding = await embedder.embed_text(request.query)
     embedding_str = "[" + ",".join(str(x) for x in query_embedding.embedding) + "]"
 

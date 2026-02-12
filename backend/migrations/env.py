@@ -8,7 +8,7 @@ from app.core.config import get_settings
 from app.db.base import Base
 
 # Import all models to ensure they're registered with Base.metadata
-from app.models import Cluster, ClusterMembership, Image, ImageMetadata, Job, PromptPreset
+from app.models import APIKey, Cluster, ClusterMembership, GeneratedImage, Image, ImageMetadata, Job, LoraModel, PromptPreset
 
 config = context.config
 settings = get_settings()

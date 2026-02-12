@@ -9,10 +9,15 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.base import get_db
+from app.models.api_key import APIKeyStatus, APIProvider
+from app.services.api_key_service import get_api_key_service
 from app.services.settings_service import (
     DEFAULT_CLUSTERING_CONFIG,
     DEFAULT_DESCRIPTION_PROMPT,
+    DEFAULT_GENERATION_CONFIG,
+    DEFAULT_PROVIDER_CONFIG,
     DEFAULT_TAG_PROMPT,
+    DEFAULT_TRAINING_CONFIG,
     get_settings_service,
 )
 
@@ -82,6 +87,50 @@ class PresetUpdateRequest(BaseModel):
     name: str | None = None
     tag_prompt: str | None = None
     description_prompt: str | None = None
+
+
+class APIKeyResponse(BaseModel):
+    """Response for a stored API key (never exposes the actual key)."""
+
+    provider: str
+    key_suffix: str | None
+    status: str
+    last_validated_at: str | None
+    last_error: str | None
+
+
+class APIKeySaveRequest(BaseModel):
+    """Request to save/update an API key."""
+
+    key: str
+
+
+class ProviderConfigResponse(BaseModel):
+    """Current provider configuration."""
+
+    vision_provider: str
+    embedding_provider: str
+    openai_vision_model: str
+    openai_embedding_model: str
+    anthropic_vision_model: str
+
+
+class ProviderConfigUpdateRequest(BaseModel):
+    """Partial update for provider configuration."""
+
+    vision_provider: str | None = None
+    embedding_provider: str | None = None
+    openai_vision_model: str | None = None
+    openai_embedding_model: str | None = None
+    anthropic_vision_model: str | None = None
+
+
+class ProviderModelInfo(BaseModel):
+    """Info about a model available from a provider."""
+
+    id: str
+    name: str
+    capabilities: list[str]
 
 
 class ClusteringConfigResponse(BaseModel):
@@ -290,6 +339,217 @@ async def suggest_prompt(request: PromptSuggestRequest):
         raise HTTPException(status_code=500, detail=f"Failed to generate suggestion: {str(e)}")
 
 
+# --- API Key endpoints ---
+
+
+def _api_key_to_response(key) -> APIKeyResponse:
+    return APIKeyResponse(
+        provider=key.provider,
+        key_suffix=key.key_suffix,
+        status=key.status,
+        last_validated_at=key.last_validated_at.isoformat() if key.last_validated_at else None,
+        last_error=key.last_error,
+    )
+
+
+@router.get("/api-keys", response_model=list[APIKeyResponse])
+async def list_api_keys(db: Session = Depends(get_db)):
+    """List all stored API keys (returns metadata only, never the actual key)."""
+    service = get_api_key_service(db)
+    keys = service.get_all_keys()
+
+    # Build response including providers with no stored key
+    stored = {k.provider: k for k in keys}
+    result = []
+    for provider in APIProvider:
+        if provider.value in stored:
+            result.append(_api_key_to_response(stored[provider.value]))
+        else:
+            # Check if env var is set
+            settings = get_settings()
+            env_keys = {
+                "openai": settings.openai_api_key,
+                "anthropic": settings.anthropic_api_key,
+                "fal": settings.fal_api_key,
+            }
+            env_key = env_keys.get(provider.value, "")
+            if env_key:
+                result.append(APIKeyResponse(
+                    provider=provider.value,
+                    key_suffix=env_key[-4:] if len(env_key) >= 4 else None,
+                    status="active",
+                    last_validated_at=None,
+                    last_error=None,
+                ))
+            else:
+                result.append(APIKeyResponse(
+                    provider=provider.value,
+                    key_suffix=None,
+                    status="not_set",
+                    last_validated_at=None,
+                    last_error=None,
+                ))
+    return result
+
+
+@router.put("/api-keys/{provider}", response_model=APIKeyResponse)
+async def save_api_key(provider: str, request: APIKeySaveRequest, db: Session = Depends(get_db)):
+    """Save or update an API key (validates first)."""
+    try:
+        api_provider = APIProvider(provider)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+
+    service = get_api_key_service(db)
+    api_key, result = await service.validate_and_save_key(api_provider, request.key)
+    return _api_key_to_response(api_key)
+
+
+@router.delete("/api-keys/{provider}", status_code=204)
+async def delete_api_key(provider: str, db: Session = Depends(get_db)):
+    """Remove a stored API key."""
+    try:
+        api_provider = APIProvider(provider)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+
+    service = get_api_key_service(db)
+    if not service.delete_key(api_provider):
+        raise HTTPException(status_code=404, detail="No stored key for this provider")
+
+
+@router.post("/api-keys/{provider}/validate", response_model=APIKeyResponse)
+async def validate_api_key(provider: str, db: Session = Depends(get_db)):
+    """Re-validate an existing stored key."""
+    try:
+        api_provider = APIProvider(provider)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+
+    service = get_api_key_service(db)
+    key_value = service.resolve_key(api_provider)
+    if not key_value:
+        raise HTTPException(status_code=404, detail="No key configured for this provider")
+
+    api_key, result = await service.validate_and_save_key(api_provider, key_value)
+    return _api_key_to_response(api_key)
+
+
+# --- Provider config endpoints ---
+
+
+@router.get("/providers", response_model=ProviderConfigResponse)
+async def get_provider_config(db: Session = Depends(get_db)):
+    """Get current provider configuration."""
+    service = get_settings_service(db)
+    return service.get_provider_config()
+
+
+@router.put("/providers", response_model=ProviderConfigResponse)
+async def update_provider_config(
+    request: ProviderConfigUpdateRequest, db: Session = Depends(get_db)
+):
+    """Update provider configuration (partial update, merges with defaults)."""
+    service = get_settings_service(db)
+    update = {k: v for k, v in request.model_dump().items() if v is not None}
+    return service.set_provider_config(update)
+
+
+@router.post("/providers/reset", response_model=ProviderConfigResponse)
+async def reset_provider_config(db: Session = Depends(get_db)):
+    """Reset provider configuration to defaults."""
+    service = get_settings_service(db)
+    service.delete_setting("provider_config")
+    return DEFAULT_PROVIDER_CONFIG
+
+
+# --- Model discovery endpoint ---
+
+
+@router.get("/models/{provider}", response_model=list[ProviderModelInfo])
+async def get_provider_models(provider: str, db: Session = Depends(get_db)):
+    """Get available models for a provider."""
+    if provider == "openai":
+        return await _get_openai_models(db)
+    elif provider == "anthropic":
+        return _get_anthropic_models()
+    elif provider == "fal":
+        return _get_fal_models()
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+
+
+async def _get_openai_models(db: Session) -> list[ProviderModelInfo]:
+    """Fetch available OpenAI models via API."""
+    from app.services.api_key_service import get_api_key_service as get_aks
+
+    key_service = get_aks(db)
+    api_key = key_service.resolve_key(APIProvider.OPENAI)
+    if not api_key:
+        # Return known defaults if no key available
+        return [
+            ProviderModelInfo(id="gpt-4o", name="GPT-4o", capabilities=["vision", "chat"]),
+            ProviderModelInfo(id="gpt-4o-mini", name="GPT-4o Mini", capabilities=["vision", "chat"]),
+            ProviderModelInfo(id="text-embedding-3-small", name="Text Embedding 3 Small", capabilities=["embedding"]),
+            ProviderModelInfo(id="text-embedding-3-large", name="Text Embedding 3 Large", capabilities=["embedding"]),
+        ]
+
+    try:
+        client = AsyncOpenAI(api_key=api_key)
+        models_resp = await client.models.list()
+        result = []
+        for m in models_resp.data:
+            mid = m.id
+            # Vision-capable models
+            if any(mid.startswith(p) for p in ("gpt-4o", "gpt-4.1", "gpt-4.5", "gpt-5", "chatgpt-4o")):
+                if "audio" in mid or "realtime" in mid or "transcribe" in mid or "tts" in mid:
+                    continue
+                caps = ["vision", "chat"]
+                name = mid.replace("-", " ").title()
+                result.append(ProviderModelInfo(id=mid, name=name, capabilities=caps))
+            # Embedding models
+            elif mid.startswith("text-embedding-"):
+                result.append(ProviderModelInfo(
+                    id=mid,
+                    name=mid.replace("-", " ").title(),
+                    capabilities=["embedding"],
+                ))
+        # Sort: vision models first, then embedding
+        result.sort(key=lambda x: (0 if "vision" in x.capabilities else 1, x.id))
+        return result if result else [
+            ProviderModelInfo(id="gpt-4o", name="GPT-4o", capabilities=["vision", "chat"]),
+            ProviderModelInfo(id="text-embedding-3-small", name="Text Embedding 3 Small", capabilities=["embedding"]),
+        ]
+    except Exception as e:
+        logger.warning(f"Failed to fetch OpenAI models: {e}")
+        return [
+            ProviderModelInfo(id="gpt-4o", name="GPT-4o", capabilities=["vision", "chat"]),
+            ProviderModelInfo(id="gpt-4o-mini", name="GPT-4o Mini", capabilities=["vision", "chat"]),
+            ProviderModelInfo(id="text-embedding-3-small", name="Text Embedding 3 Small", capabilities=["embedding"]),
+            ProviderModelInfo(id="text-embedding-3-large", name="Text Embedding 3 Large", capabilities=["embedding"]),
+        ]
+
+
+def _get_anthropic_models() -> list[ProviderModelInfo]:
+    """Return curated list of Anthropic Claude models with vision support."""
+    return [
+        ProviderModelInfo(id="claude-sonnet-4-20250514", name="Claude Sonnet 4", capabilities=["vision", "chat"]),
+        ProviderModelInfo(id="claude-haiku-4-20250414", name="Claude Haiku 4", capabilities=["vision", "chat"]),
+        ProviderModelInfo(id="claude-3-5-sonnet-20241022", name="Claude 3.5 Sonnet", capabilities=["vision", "chat"]),
+        ProviderModelInfo(id="claude-3-5-haiku-20241022", name="Claude 3.5 Haiku", capabilities=["vision", "chat"]),
+        ProviderModelInfo(id="claude-3-haiku-20240307", name="Claude 3 Haiku", capabilities=["vision", "chat"]),
+    ]
+
+
+def _get_fal_models() -> list[ProviderModelInfo]:
+    """Return supported fal.ai endpoints."""
+    return [
+        ProviderModelInfo(id="fal-ai/flux/dev", name="Flux.1 Dev", capabilities=["generation"]),
+        ProviderModelInfo(id="fal-ai/flux-lora", name="Flux LoRA", capabilities=["generation", "lora"]),
+        ProviderModelInfo(id="fal-ai/flux-lora-fast-training", name="Flux LoRA Fast Training", capabilities=["training"]),
+    ]
+
+
 # --- Clustering config endpoints ---
 
 
@@ -317,3 +577,95 @@ async def reset_clustering_config(db: Session = Depends(get_db)):
     service = get_settings_service(db)
     service.delete_setting("clustering_config")
     return DEFAULT_CLUSTERING_CONFIG
+
+
+# --- Generation config endpoints ---
+
+
+class GenerationConfigResponse(BaseModel):
+    """Current generation configuration."""
+
+    base_model: str
+    width: int
+    height: int
+    num_inference_steps: int
+    guidance_scale: float
+    default_lora_scale: float
+
+
+class GenerationConfigUpdateRequest(BaseModel):
+    """Partial update for generation configuration."""
+
+    base_model: str | None = None
+    width: int | None = None
+    height: int | None = None
+    num_inference_steps: int | None = None
+    guidance_scale: float | None = None
+    default_lora_scale: float | None = None
+
+
+@router.get("/generation", response_model=GenerationConfigResponse)
+async def get_generation_config(db: Session = Depends(get_db)):
+    """Get current generation configuration."""
+    service = get_settings_service(db)
+    return service.get_generation_config()
+
+
+@router.put("/generation", response_model=GenerationConfigResponse)
+async def update_generation_config(
+    request: GenerationConfigUpdateRequest, db: Session = Depends(get_db)
+):
+    """Update generation configuration."""
+    service = get_settings_service(db)
+    update = {k: v for k, v in request.model_dump().items() if v is not None}
+    return service.set_generation_config(update)
+
+
+@router.post("/generation/reset", response_model=GenerationConfigResponse)
+async def reset_generation_config(db: Session = Depends(get_db)):
+    """Reset generation configuration to defaults."""
+    service = get_settings_service(db)
+    service.delete_setting("generation_config")
+    return DEFAULT_GENERATION_CONFIG
+
+
+# --- Training config endpoints ---
+
+
+class TrainingConfigResponse(BaseModel):
+    """Current training configuration."""
+
+    steps: int
+    is_style: bool
+
+
+class TrainingConfigUpdateRequest(BaseModel):
+    """Partial update for training configuration."""
+
+    steps: int | None = None
+    is_style: bool | None = None
+
+
+@router.get("/training", response_model=TrainingConfigResponse)
+async def get_training_config(db: Session = Depends(get_db)):
+    """Get current training configuration."""
+    service = get_settings_service(db)
+    return service.get_training_config()
+
+
+@router.put("/training", response_model=TrainingConfigResponse)
+async def update_training_config(
+    request: TrainingConfigUpdateRequest, db: Session = Depends(get_db)
+):
+    """Update training configuration."""
+    service = get_settings_service(db)
+    update = {k: v for k, v in request.model_dump().items() if v is not None}
+    return service.set_training_config(update)
+
+
+@router.post("/training/reset", response_model=TrainingConfigResponse)
+async def reset_training_config(db: Session = Depends(get_db)):
+    """Reset training configuration to defaults."""
+    service = get_settings_service(db)
+    service.delete_setting("training_config")
+    return DEFAULT_TRAINING_CONFIG

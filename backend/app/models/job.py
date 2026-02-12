@@ -21,6 +21,9 @@ class JobType(str, enum.Enum):
     FULL_PIPELINE = "full_pipeline"
     REPROCESS = "reprocess"
     BATCH_REPROCESS = "batch_reprocess"
+    LORA_TRAIN = "lora_train"
+    GENERATE_IMAGE = "generate_image"
+    BATCH_GENERATE = "batch_generate"
 
 
 class JobStatus(str, enum.Enum):

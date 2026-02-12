@@ -3,10 +3,10 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { imagesApi, settingsApi, clustersApi } from '@/lib/api';
-import { RotateCcw, Plus, Trash2, Check, Copy, Play, HelpCircle } from 'lucide-react';
+import { RotateCcw, Plus, Trash2, Check, Copy, Play, HelpCircle, Eye, EyeOff, Shield, ShieldAlert, ShieldCheck, ShieldX, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getStatusColor, cn } from '@/lib/utils';
-import type { ClusteringConfig, PromptPreset } from '@/types';
+import type { APIKeyInfo, ClusteringConfig, GenerationConfig, ProviderConfig, ProviderModel, TrainingConfig, PromptPreset } from '@/types';
 
 function PromptSuggest({
   promptType,
@@ -432,37 +432,17 @@ export default function SettingsPage() {
         </div>
       </section>
 
+      {/* API Keys */}
+      <APIKeysSettings />
+
+      {/* Provider & Model Selection */}
+      <ProviderModelSettings />
+
+      {/* Generation Settings */}
+      <GenerationSettings />
+
       {/* Clustering Settings */}
       <ClusteringSettings />
-
-      {/* Configuration Info */}
-      <section className="bg-white rounded-xl border border-border p-6">
-        <h2 className="font-semibold mb-4">Configuration</h2>
-        <div className="space-y-4">
-          <div>
-            <h3 className="text-sm font-medium text-muted-foreground">
-              AI Providers
-            </h3>
-            <p className="text-sm mt-1">
-              Configure API keys in the backend .env file
-            </p>
-            <ul className="mt-2 text-sm space-y-1">
-              <li>- Vision: OpenAI GPT-4o or Anthropic Claude</li>
-              <li>- Embeddings: OpenAI text-embedding-3-small</li>
-            </ul>
-          </div>
-
-          <div>
-            <h3 className="text-sm font-medium text-muted-foreground">
-              Storage
-            </h3>
-            <p className="text-sm mt-1">Local filesystem (./storage)</p>
-            <p className="text-sm text-muted-foreground">
-              Thumbnails: 200px, 400px, 800px
-            </p>
-          </div>
-        </div>
-      </section>
     </div>
   );
 }
@@ -476,6 +456,239 @@ function Hint({ text }: { text: string }) {
         <span className="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-gray-900" />
       </span>
     </span>
+  );
+}
+
+function GenerationSettings() {
+  const queryClient = useQueryClient();
+
+  const { data: genConfig, isLoading: genLoading } = useQuery({
+    queryKey: ['generation-config'],
+    queryFn: settingsApi.getGenerationConfig,
+  });
+
+  const { data: trainConfig, isLoading: trainLoading } = useQuery({
+    queryKey: ['training-config'],
+    queryFn: settingsApi.getTrainingConfig,
+  });
+
+  const [genDraft, setGenDraft] = useState<GenerationConfig | null>(null);
+  const [trainDraft, setTrainDraft] = useState<TrainingConfig | null>(null);
+
+  useEffect(() => {
+    if (genConfig && !genDraft) setGenDraft(genConfig);
+  }, [genConfig, genDraft]);
+
+  useEffect(() => {
+    if (trainConfig && !trainDraft) setTrainDraft(trainConfig);
+  }, [trainConfig, trainDraft]);
+
+  const saveGenMutation = useMutation({
+    mutationFn: (cfg: Partial<GenerationConfig>) => settingsApi.updateGenerationConfig(cfg),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['generation-config'] });
+      setGenDraft(data);
+      toast.success('Generation settings saved');
+    },
+    onError: () => toast.error('Failed to save generation settings'),
+  });
+
+  const resetGenMutation = useMutation({
+    mutationFn: settingsApi.resetGenerationConfig,
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['generation-config'] });
+      setGenDraft(data);
+      toast.success('Generation settings reset');
+    },
+  });
+
+  const saveTrainMutation = useMutation({
+    mutationFn: (cfg: Partial<TrainingConfig>) => settingsApi.updateTrainingConfig(cfg),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['training-config'] });
+      setTrainDraft(data);
+      toast.success('Training settings saved');
+    },
+    onError: () => toast.error('Failed to save training settings'),
+  });
+
+  const resetTrainMutation = useMutation({
+    mutationFn: settingsApi.resetTrainingConfig,
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['training-config'] });
+      setTrainDraft(data);
+      toast.success('Training settings reset');
+    },
+  });
+
+  if (genLoading || trainLoading || !genDraft || !trainDraft) {
+    return (
+      <section className="bg-white rounded-xl border border-border p-6">
+        <h2 className="font-semibold mb-4">Generation &amp; Training</h2>
+        <p className="text-muted-foreground text-sm">Loading...</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="bg-white rounded-xl border border-border p-6">
+      <div className="mb-4">
+        <h2 className="font-semibold">Generation &amp; Training</h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          Default parameters for image generation and LoRA training
+        </p>
+      </div>
+
+      <div className="space-y-6">
+        {/* Generation defaults */}
+        <div className="border border-border rounded-lg p-4">
+          <h3 className="text-sm font-medium mb-3">Generation Defaults</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Base Model</label>
+              <select
+                value={genDraft.base_model}
+                onChange={(e) => setGenDraft({ ...genDraft, base_model: e.target.value })}
+                className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
+              >
+                <option value="flux-dev">Flux.1 Dev</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Width: {genDraft.width}</label>
+              <input
+                type="range"
+                min={256}
+                max={2048}
+                step={64}
+                value={genDraft.width}
+                onChange={(e) => setGenDraft({ ...genDraft, width: parseInt(e.target.value) })}
+                className="w-full"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Height: {genDraft.height}</label>
+              <input
+                type="range"
+                min={256}
+                max={2048}
+                step={64}
+                value={genDraft.height}
+                onChange={(e) => setGenDraft({ ...genDraft, height: parseInt(e.target.value) })}
+                className="w-full"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Steps: {genDraft.num_inference_steps}</label>
+              <input
+                type="range"
+                min={1}
+                max={50}
+                value={genDraft.num_inference_steps}
+                onChange={(e) => setGenDraft({ ...genDraft, num_inference_steps: parseInt(e.target.value) })}
+                className="w-full"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Guidance: {genDraft.guidance_scale.toFixed(1)}</label>
+              <input
+                type="range"
+                min={0}
+                max={200}
+                value={Math.round(genDraft.guidance_scale * 10)}
+                onChange={(e) => setGenDraft({ ...genDraft, guidance_scale: parseInt(e.target.value) / 10 })}
+                className="w-full"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Default LoRA Scale: {genDraft.default_lora_scale.toFixed(1)}</label>
+              <input
+                type="range"
+                min={0}
+                max={20}
+                value={Math.round(genDraft.default_lora_scale * 10)}
+                onChange={(e) => setGenDraft({ ...genDraft, default_lora_scale: parseInt(e.target.value) / 10 })}
+                className="w-full"
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-2 mt-4">
+            <button
+              onClick={() => saveGenMutation.mutate(genDraft)}
+              disabled={saveGenMutation.isPending}
+              className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+            >
+              {saveGenMutation.isPending ? 'Saving...' : 'Save'}
+            </button>
+            <button
+              onClick={() => resetGenMutation.mutate()}
+              disabled={resetGenMutation.isPending}
+              className="flex items-center gap-1.5 px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Reset
+            </button>
+          </div>
+        </div>
+
+        {/* Training defaults */}
+        <div className="border border-border rounded-lg p-4">
+          <h3 className="text-sm font-medium mb-3">Training Defaults</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Steps: {trainDraft.steps}</label>
+              <input
+                type="range"
+                min={100}
+                max={4000}
+                step={100}
+                value={trainDraft.steps}
+                onChange={(e) => setTrainDraft({ ...trainDraft, steps: parseInt(e.target.value) })}
+                className="w-full"
+              />
+              <div className="flex justify-between text-[10px] text-muted-foreground">
+                <span>100</span>
+                <span>4000</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 pt-4">
+              <button
+                onClick={() => setTrainDraft({ ...trainDraft, is_style: !trainDraft.is_style })}
+                className={cn(
+                  'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors',
+                  trainDraft.is_style ? 'bg-primary' : 'bg-gray-300'
+                )}
+              >
+                <span
+                  className={cn(
+                    'inline-block h-4 w-4 transform rounded-full bg-white transition-transform mt-0.5',
+                    trainDraft.is_style ? 'translate-x-4 ml-0.5' : 'translate-x-0.5'
+                  )}
+                />
+              </button>
+              <span className="text-sm">Style mode by default</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 mt-4">
+            <button
+              onClick={() => saveTrainMutation.mutate(trainDraft)}
+              disabled={saveTrainMutation.isPending}
+              className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+            >
+              {saveTrainMutation.isPending ? 'Saving...' : 'Save'}
+            </button>
+            <button
+              onClick={() => resetTrainMutation.mutate()}
+              disabled={resetTrainMutation.isPending}
+              className="flex items-center gap-1.5 px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Reset
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -824,6 +1037,414 @@ function ClusteringSettings() {
           >
             <Play className="h-3.5 w-3.5" />
             {reclusterMutation.isPending ? 'Starting...' : 'Recluster Now'}
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+const PROVIDER_LABELS: Record<string, string> = {
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+  fal: 'fal.ai',
+};
+
+function StatusBadge({ status }: { status: string }) {
+  if (status === 'active') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 rounded-full">
+        <ShieldCheck className="h-3 w-3" /> Active
+      </span>
+    );
+  }
+  if (status === 'invalid') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-red-100 text-red-700 rounded-full">
+        <ShieldX className="h-3 w-3" /> Invalid
+      </span>
+    );
+  }
+  if (status === 'quota_exceeded') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 rounded-full">
+        <ShieldAlert className="h-3 w-3" /> Quota Exceeded
+      </span>
+    );
+  }
+  if (status === 'not_set') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-500 rounded-full border border-dashed border-gray-300">
+        <Shield className="h-3 w-3" /> Not Set
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-600 rounded-full">
+      <Shield className="h-3 w-3" /> Unknown
+    </span>
+  );
+}
+
+function APIKeysSettings() {
+  const queryClient = useQueryClient();
+
+  const { data: keys, isLoading } = useQuery({
+    queryKey: ['api-keys'],
+    queryFn: settingsApi.getApiKeys,
+  });
+
+  const [editingProvider, setEditingProvider] = useState<string | null>(null);
+  const [keyInput, setKeyInput] = useState('');
+  const [showKey, setShowKey] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  const saveMutation = useMutation({
+    mutationFn: ({ provider, key }: { provider: string; key: string }) =>
+      settingsApi.saveApiKey(provider, key),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['api-keys'] });
+      setEditingProvider(null);
+      setKeyInput('');
+      setShowKey(false);
+      if (data.status === 'active') {
+        toast.success(`${PROVIDER_LABELS[data.provider] || data.provider} key saved and validated`);
+      } else if (data.status === 'invalid') {
+        toast.error(`Key saved but validation failed: ${data.last_error || 'Invalid key'}`);
+      } else {
+        toast.success(`${PROVIDER_LABELS[data.provider] || data.provider} key saved (status: ${data.status})`);
+      }
+    },
+    onError: () => toast.error('Failed to save API key'),
+  });
+
+  const validateMutation = useMutation({
+    mutationFn: (provider: string) => settingsApi.validateApiKey(provider),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['api-keys'] });
+      if (data.status === 'active') {
+        toast.success(`${PROVIDER_LABELS[data.provider] || data.provider} key is valid`);
+      } else {
+        toast.error(`Validation result: ${data.status}${data.last_error ? ` - ${data.last_error}` : ''}`);
+      }
+    },
+    onError: () => toast.error('Validation failed'),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (provider: string) => settingsApi.deleteApiKey(provider),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['api-keys'] });
+      setConfirmDelete(null);
+      toast.success('API key removed');
+    },
+    onError: () => toast.error('Failed to remove key'),
+  });
+
+  if (isLoading) {
+    return (
+      <section className="bg-white rounded-xl border border-border p-6">
+        <h2 className="font-semibold mb-4">API Keys</h2>
+        <p className="text-muted-foreground text-sm">Loading...</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="bg-white rounded-xl border border-border p-6">
+      <div className="mb-4">
+        <h2 className="font-semibold">API Keys</h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          Manage API keys for AI providers. Keys are encrypted at rest and never exposed after saving.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        {(keys || []).map((key) => (
+          <div
+            key={key.provider}
+            className="border border-border rounded-lg p-4"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="font-medium text-sm">
+                  {PROVIDER_LABELS[key.provider] || key.provider}
+                </span>
+                <StatusBadge status={key.status} />
+              </div>
+              <div className="flex items-center gap-2">
+                {key.key_suffix && (
+                  <span className="text-xs text-muted-foreground font-mono">
+                    ...{key.key_suffix}
+                  </span>
+                )}
+                {key.status !== 'not_set' && (
+                  <>
+                    <button
+                      onClick={() => validateMutation.mutate(key.provider)}
+                      disabled={validateMutation.isPending}
+                      className="px-2.5 py-1 text-xs border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
+                    >
+                      {validateMutation.isPending && validateMutation.variables === key.provider ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        'Validate'
+                      )}
+                    </button>
+                    {confirmDelete === key.provider ? (
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => deleteMutation.mutate(key.provider)}
+                          className="px-2.5 py-1 text-xs bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                        >
+                          Confirm
+                        </button>
+                        <button
+                          onClick={() => setConfirmDelete(null)}
+                          className="px-2.5 py-1 text-xs border border-border rounded-lg hover:bg-muted transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setConfirmDelete(key.provider)}
+                        className="px-2.5 py-1 text-xs border border-red-200 text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </>
+                )}
+                <button
+                  onClick={() => {
+                    if (editingProvider === key.provider) {
+                      setEditingProvider(null);
+                      setKeyInput('');
+                      setShowKey(false);
+                    } else {
+                      setEditingProvider(key.provider);
+                      setKeyInput('');
+                      setShowKey(false);
+                    }
+                  }}
+                  className="px-2.5 py-1 text-xs border border-border rounded-lg hover:bg-muted transition-colors"
+                >
+                  {editingProvider === key.provider ? 'Cancel' : key.status === 'not_set' ? 'Add Key' : 'Edit Key'}
+                </button>
+              </div>
+            </div>
+
+            {key.last_validated_at && (
+              <p className="text-[10px] text-muted-foreground mt-1">
+                Last validated: {new Date(key.last_validated_at).toLocaleString()}
+              </p>
+            )}
+
+            {editingProvider === key.provider && (
+              <div className="mt-3 flex gap-2">
+                <div className="relative flex-1">
+                  <input
+                    type={showKey ? 'text' : 'password'}
+                    value={keyInput}
+                    onChange={(e) => setKeyInput(e.target.value)}
+                    placeholder={`Enter ${PROVIDER_LABELS[key.provider] || key.provider} API key...`}
+                    className="w-full px-3 py-1.5 pr-8 border border-border rounded-lg text-sm font-mono"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && keyInput.trim()) {
+                        saveMutation.mutate({ provider: key.provider, key: keyInput.trim() });
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowKey(!showKey)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
+                <button
+                  onClick={() => saveMutation.mutate({ provider: key.provider, key: keyInput.trim() })}
+                  disabled={saveMutation.isPending || !keyInput.trim()}
+                  className="px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+                >
+                  {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ProviderModelSettings() {
+  const queryClient = useQueryClient();
+
+  const { data: config, isLoading } = useQuery({
+    queryKey: ['provider-config'],
+    queryFn: settingsApi.getProviderConfig,
+  });
+
+  const [draft, setDraft] = useState<ProviderConfig | null>(null);
+
+  useEffect(() => {
+    if (config && !draft) setDraft(config);
+  }, [config, draft]);
+
+  // Fetch models for the selected vision provider
+  const visionProvider = draft?.vision_provider || 'openai';
+  const embeddingProvider = draft?.embedding_provider || 'openai';
+
+  const { data: visionModels } = useQuery({
+    queryKey: ['provider-models', visionProvider],
+    queryFn: () => settingsApi.getProviderModels(visionProvider),
+    enabled: !!draft,
+  });
+
+  const { data: embeddingModels } = useQuery({
+    queryKey: ['provider-models', embeddingProvider],
+    queryFn: () => settingsApi.getProviderModels(embeddingProvider),
+    enabled: !!draft,
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: (cfg: Partial<ProviderConfig>) => settingsApi.updateProviderConfig(cfg),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['provider-config'] });
+      setDraft(data);
+      toast.success('Provider settings saved');
+    },
+    onError: () => toast.error('Failed to save provider settings'),
+  });
+
+  const resetMutation = useMutation({
+    mutationFn: settingsApi.resetProviderConfig,
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['provider-config'] });
+      setDraft(data);
+      toast.success('Provider settings reset to defaults');
+    },
+  });
+
+  if (isLoading || !draft) {
+    return (
+      <section className="bg-white rounded-xl border border-border p-6">
+        <h2 className="font-semibold mb-4">Provider &amp; Model Selection</h2>
+        <p className="text-muted-foreground text-sm">Loading...</p>
+      </section>
+    );
+  }
+
+  const visionCapableModels = (visionModels || []).filter((m) =>
+    m.capabilities.includes('vision') || m.capabilities.includes('chat')
+  );
+  const embeddingCapableModels = (embeddingModels || []).filter((m) =>
+    m.capabilities.includes('embedding')
+  );
+
+  const currentVisionModel = visionProvider === 'openai' ? draft.openai_vision_model : draft.anthropic_vision_model;
+
+  return (
+    <section className="bg-white rounded-xl border border-border p-6">
+      <div className="mb-4">
+        <h2 className="font-semibold">Provider &amp; Model Selection</h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          Choose which AI providers and models to use for vision (tagging/description) and embeddings.
+        </p>
+      </div>
+
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Vision Provider */}
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Vision Provider</label>
+            <select
+              value={draft.vision_provider}
+              onChange={(e) => setDraft({ ...draft, vision_provider: e.target.value })}
+              className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
+            >
+              <option value="openai">OpenAI</option>
+              <option value="anthropic">Anthropic</option>
+            </select>
+          </div>
+
+          {/* Vision Model */}
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Vision Model</label>
+            <select
+              value={currentVisionModel}
+              onChange={(e) => {
+                if (draft.vision_provider === 'openai') {
+                  setDraft({ ...draft, openai_vision_model: e.target.value });
+                } else {
+                  setDraft({ ...draft, anthropic_vision_model: e.target.value });
+                }
+              }}
+              className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
+            >
+              {visionCapableModels.length > 0 ? (
+                visionCapableModels.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))
+              ) : (
+                <option value={currentVisionModel}>{currentVisionModel}</option>
+              )}
+            </select>
+          </div>
+
+          {/* Embedding Provider */}
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Embedding Provider</label>
+            <select
+              value={draft.embedding_provider}
+              onChange={(e) => setDraft({ ...draft, embedding_provider: e.target.value })}
+              className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
+            >
+              <option value="openai">OpenAI</option>
+            </select>
+          </div>
+
+          {/* Embedding Model */}
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Embedding Model</label>
+            <select
+              value={draft.openai_embedding_model}
+              onChange={(e) => setDraft({ ...draft, openai_embedding_model: e.target.value })}
+              className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
+            >
+              {embeddingCapableModels.length > 0 ? (
+                embeddingCapableModels.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))
+              ) : (
+                <option value={draft.openai_embedding_model}>{draft.openai_embedding_model}</option>
+              )}
+            </select>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 pt-2">
+          <button
+            onClick={() => saveMutation.mutate(draft)}
+            disabled={saveMutation.isPending}
+            className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            {saveMutation.isPending ? 'Saving...' : 'Save'}
+          </button>
+          <button
+            onClick={() => resetMutation.mutate()}
+            disabled={resetMutation.isPending}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Reset to Defaults
           </button>
         </div>
       </div>

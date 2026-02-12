@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_vision_model: str = "claude-sonnet-4-20250514"
 
+    # fal.ai
+    fal_api_key: str = ""
+
+    # Generation / Training providers
+    default_training_provider: str = "fal"
+    default_generation_provider: str = "fal"
+    default_base_model: str = "flux-dev"
+
     # Clustering
     clustering_method: Literal["hdbscan", "kmeans", "graph"] = "hdbscan"
     hdbscan_min_cluster_size: int = 3

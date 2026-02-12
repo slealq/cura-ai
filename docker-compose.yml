@@ -47,6 +47,7 @@ services:
       WATCH_FOLDER_PATH: /app/watch_folder
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      FAL_API_KEY: ${FAL_API_KEY}
     ports:
       - "8000:8000"
     volumes:
@@ -73,6 +74,7 @@ services:
       LOCAL_STORAGE_PATH: /app/storage
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      FAL_API_KEY: ${FAL_API_KEY}
     volumes:
       - ./storage:/app/storage
       - ./watch_folder:/app/watch_folder
@@ -97,6 +99,7 @@ services:
       LOCAL_STORAGE_PATH: /app/storage
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      FAL_API_KEY: ${FAL_API_KEY}
     volumes:
       - ./storage:/app/storage
     depends_on:
@@ -105,6 +108,28 @@ services:
       redis:
         condition: service_healthy
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2 -Q clustering
+
+  # Celery worker for generation (separate queue)
+  celery-worker-generation:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: design-pipeline-celery-generation
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/design_pipeline
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      LOCAL_STORAGE_PATH: /app/storage
+      FAL_API_KEY: ${FAL_API_KEY}
+    volumes:
+      - ./storage:/app/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2 -Q generation
 
   # Celery Beat for scheduled tasks (optional)
   celery-beat:

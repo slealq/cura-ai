@@ -103,7 +103,7 @@ def tag_image(self, image_id: int, tag_prompt: str | None = None, job_id: int | 
             tag_prompt = compose_tag_prompt(tag_prompt)
 
         # Tag image
-        tagger = get_tagger()
+        tagger = get_tagger(db=db)
         result = run_async(tagger.tag_image(image_data, image.mime_type, tag_prompt))
 
         # Save metadata
@@ -177,7 +177,7 @@ def describe_image(self, image_id: int, description_prompt: str | None = None, j
             description_prompt = compose_description_prompt(description_prompt)
 
         # Generate description
-        describer = get_describer()
+        describer = get_describer(db=db)
         result = run_async(describer.describe_image(image_data, image.mime_type, description_prompt))
 
         # Save metadata
@@ -252,7 +252,7 @@ def embed_image(self, image_id: int, job_id: int | None = None) -> dict:
         text = "\n".join(text_parts)
 
         # Generate embedding
-        embedder = get_embedder()
+        embedder = get_embedder(db=db)
         result = run_async(embedder.embed_text(text))
 
         # Save embedding
@@ -318,11 +318,11 @@ def tag_and_describe_image(
             description_prompt = compose_description_prompt(description_prompt)
 
         # Tag image
-        tagger = get_tagger()
+        tagger = get_tagger(db=db)
         tag_result = run_async(tagger.tag_image(image_data, image.mime_type, tag_prompt))
 
         # Describe image
-        describer = get_describer()
+        describer = get_describer(db=db)
         description_result = run_async(describer.describe_image(image_data, image.mime_type, description_prompt))
 
         # Save metadata
@@ -505,7 +505,7 @@ def summarize_cluster(self, cluster_id: int) -> dict:
         common_tags = clustering_service.compute_common_tags(all_tags)
 
         # Generate summary
-        summarizer = get_cluster_summarizer()
+        summarizer = get_cluster_summarizer(db=db)
         result = run_async(
             summarizer.summarize_cluster(common_tags, descriptions, cluster.size)
         )
@@ -624,11 +624,11 @@ def process_image_pipeline(
             description_prompt = compose_description_prompt(description_prompt)
 
         # Tag
-        tagger = get_tagger()
+        tagger = get_tagger(db=db)
         tag_result = run_async(tagger.tag_image(image_data, image.mime_type, tag_prompt))
 
         # Describe
-        describer = get_describer()
+        describer = get_describer(db=db)
         description_result = run_async(describer.describe_image(image_data, image.mime_type, description_prompt))
 
         # Build text for embedding
@@ -639,7 +639,7 @@ def process_image_pipeline(
         text = "\n".join(text_parts)
 
         # Embed
-        embedder = get_embedder()
+        embedder = get_embedder(db=db)
         embed_result = run_async(embedder.embed_text(text))
 
         # Save all metadata at once
