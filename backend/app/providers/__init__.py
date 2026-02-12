@@ -148,12 +148,13 @@ def get_cluster_summarizer(
 def get_trainer(
     provider: Literal["fal"] | None = None,
     db: Session | None = None,
+    base_model: str = "flux-dev",
 ) -> BaseTrainer:
     """Get trainer instance for the specified provider."""
     keys, _ = _resolve_config(db)
     provider = provider or settings.default_training_provider
     if provider == "fal":
-        return FalTrainer(api_key=keys.get("fal"))
+        return FalTrainer(api_key=keys.get("fal"), base_model=base_model)
     else:
         raise ValueError(f"Unknown trainer provider: {provider}")
 
@@ -161,12 +162,13 @@ def get_trainer(
 def get_generator(
     provider: Literal["fal"] | None = None,
     db: Session | None = None,
+    base_model: str = "flux-dev",
 ) -> BaseGenerator:
     """Get generator instance for the specified provider."""
     keys, _ = _resolve_config(db)
     provider = provider or settings.default_generation_provider
     if provider == "fal":
-        return FalGenerator(api_key=keys.get("fal"))
+        return FalGenerator(api_key=keys.get("fal"), base_model=base_model)
     else:
         raise ValueError(f"Unknown generator provider: {provider}")
 

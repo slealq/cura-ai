@@ -128,13 +128,23 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None) -> dict:
         caption_include_tags = training_config.get("caption_include_tags", True)
         caption_include_description = training_config.get("caption_include_description", True)
 
+        # Get model config to determine ZIP requirements and param names
+        from app.providers.fal_provider import FAL_MODEL_CONFIG
+        model_config = FAL_MODEL_CONFIG.get(lora.base_model, FAL_MODEL_CONFIG["flux-dev"])
+        requires_zip = not model_config["supports_base64"]
+        zip_param_name = model_config["zip_param"]
+
         # Instantiate trainer early so _ensure_fal_key() sets FAL_KEY
         # before any fal_client calls (e.g. upload)
-        trainer = get_trainer(lora.training_provider, db=db)
+        trainer = get_trainer(lora.training_provider, db=db, base_model=lora.base_model)
 
         trainer_kwargs = {}
 
-        if use_captions:
+        # Pass learning_rate from training_config if present
+        if "learning_rate" in training_config:
+            trainer_kwargs["learning_rate"] = training_config["learning_rate"]
+
+        if use_captions or requires_zip:
             # Build ZIP with images + per-image caption .txt files
             zip_buffer = io.BytesIO()
             image_count = 0
@@ -153,35 +163,40 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None) -> dict:
                     prefix = f"{idx:04d}"
                     zf.writestr(f"{prefix}.{ext}", image_data)
 
-                    # Build caption
-                    caption_parts = []
-                    caption_parts.append(lora.trigger_word)
+                    if use_captions:
+                        # Build caption from trigger word + tags/description
+                        caption_parts = []
+                        caption_parts.append(lora.trigger_word)
 
-                    metadata = image.image_metadata
-                    if metadata:
-                        tags_str = ""
-                        if caption_include_tags and metadata.tags:
-                            tags_str = ", ".join(metadata.tags)
+                        metadata = image.image_metadata
+                        if metadata:
+                            tags_str = ""
+                            if caption_include_tags and metadata.tags:
+                                tags_str = ", ".join(metadata.tags)
 
-                        desc_str = ""
-                        if caption_include_description and metadata.description_long:
-                            desc_str = metadata.description_long
+                            desc_str = ""
+                            if caption_include_description and metadata.description_long:
+                                desc_str = metadata.description_long
 
-                        if tags_str and desc_str:
-                            caption_parts.append(f"{tags_str}. {desc_str}")
-                        elif tags_str:
-                            caption_parts.append(tags_str)
-                        elif desc_str:
-                            caption_parts.append(desc_str)
+                            if tags_str and desc_str:
+                                caption_parts.append(f"{tags_str}. {desc_str}")
+                            elif tags_str:
+                                caption_parts.append(tags_str)
+                            elif desc_str:
+                                caption_parts.append(desc_str)
 
-                    caption = ", ".join(caption_parts)
-                    zf.writestr(f"{prefix}.txt", caption)
+                        caption = ", ".join(caption_parts)
+                        zf.writestr(f"{prefix}.txt", caption)
+                    elif requires_zip:
+                        # ZIP-only model without captions: use trigger word as caption
+                        zf.writestr(f"{prefix}.txt", lora.trigger_word)
+
                     image_count += 1
 
             if image_count == 0:
                 raise Exception("No image data could be loaded from source")
 
-            logger.info(f"Created ZIP with {image_count} captioned images for LoRA training")
+            logger.info(f"Created ZIP with {image_count} images for LoRA training (captions={use_captions})")
 
             # Upload ZIP to fal CDN
             import fal_client
@@ -189,8 +204,8 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None) -> dict:
             zip_url = fal_client.upload(zip_bytes, "application/zip")
             logger.info(f"Uploaded training ZIP ({len(zip_bytes)} bytes) to fal CDN")
 
-            # Override images_data_url with the ZIP URL
-            trainer_kwargs["images_data_url"] = zip_url
+            # Use the correct ZIP param name for the model
+            trainer_kwargs[zip_param_name] = zip_url
             image_urls: list[str] = []
         else:
             # Default: encode images as base64 data URLs
@@ -329,7 +344,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None) -> 
         params = gen.generation_params or {}
 
         # Generate
-        generator = get_generator(gen.generation_provider, db=db)
+        generator = get_generator(gen.generation_provider, db=db, base_model=gen.base_model)
         result = _run_async(
             generator.generate(
                 prompt=gen.prompt,

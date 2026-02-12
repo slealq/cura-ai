@@ -219,6 +219,11 @@ export interface ClusteringConfig {
   kmeans_max_clusters: number;
 }
 
+export interface LoraPreviewImage {
+  id: number;
+  thumbnail_uri_small: string | null;
+}
+
 export interface LoraModel {
   id: number;
   name: string;
@@ -236,6 +241,7 @@ export interface LoraModel {
   lora_url: string | null;
   training_images_count: number;
   job_id: number | null;
+  source_preview_images: LoraPreviewImage[];
   created_at: string;
   training_started_at: string | null;
   training_completed_at: string | null;

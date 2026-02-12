@@ -47,12 +47,20 @@ class GenerateRequest(BaseModel):
     negative_prompt: str | None = None
     lora_model_id: int | None = None
     lora_scale: float = Field(1.0, ge=0.0, le=2.0)
+    base_model: str | None = None
     width: int = Field(1024, ge=256, le=2048)
     height: int = Field(1024, ge=256, le=2048)
     num_inference_steps: int = Field(28, ge=1, le=100)
     guidance_scale: float = Field(3.5, ge=0.0, le=20.0)
     seed: int | None = None
     num_images: int = Field(1, ge=1, le=8)
+
+
+class LoraPreviewImage(BaseModel):
+    """A preview thumbnail for a LoRA model's source images."""
+
+    id: int
+    thumbnail_uri_small: str | None
 
 
 class LoraModelResponse(BaseModel):
@@ -74,6 +82,7 @@ class LoraModelResponse(BaseModel):
     lora_url: str | None
     training_images_count: int
     job_id: int | None
+    source_preview_images: list[LoraPreviewImage] = Field(default_factory=list)
     created_at: str
     training_started_at: str | None
     training_completed_at: str | None
@@ -127,7 +136,35 @@ class GeneratedImageListResponse(BaseModel):
 # --- Helpers ---
 
 
-def _lora_to_response(lora) -> LoraModelResponse:
+def _get_source_preview_images(lora, db: Session) -> list[LoraPreviewImage]:
+    """Get up to 4 preview thumbnails from the LoRA's source folder or cluster."""
+    from app.models.image import Image
+
+    if lora.folder_id and lora.folder:
+        from app.models.folder import FolderImage
+
+        images = (
+            db.query(Image)
+            .join(FolderImage, FolderImage.image_id == Image.id)
+            .filter(FolderImage.folder_id == lora.folder_id)
+            .order_by(Image.id)
+            .limit(4)
+            .all()
+        )
+        return [LoraPreviewImage(id=img.id, thumbnail_uri_small=img.thumbnail_uri_small) for img in images]
+
+    if lora.cluster_id and lora.cluster:
+        rep_ids = (lora.cluster.representative_image_ids or [])[:4]
+        if rep_ids:
+            images = db.query(Image).filter(Image.id.in_(rep_ids)).all()
+            id_order = {img_id: i for i, img_id in enumerate(rep_ids)}
+            images.sort(key=lambda img: id_order.get(img.id, 999))
+            return [LoraPreviewImage(id=img.id, thumbnail_uri_small=img.thumbnail_uri_small) for img in images]
+
+    return []
+
+
+def _lora_to_response(lora, db: Session) -> LoraModelResponse:
     return LoraModelResponse(
         id=lora.id,
         name=lora.name,
@@ -145,6 +182,7 @@ def _lora_to_response(lora) -> LoraModelResponse:
         lora_url=lora.lora_url,
         training_images_count=lora.training_images_count,
         job_id=lora.job_id,
+        source_preview_images=_get_source_preview_images(lora, db),
         created_at=lora.created_at.isoformat(),
         training_started_at=lora.training_started_at.isoformat() if lora.training_started_at else None,
         training_completed_at=lora.training_completed_at.isoformat() if lora.training_completed_at else None,
@@ -224,7 +262,10 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db)):
     settings_service = get_settings_service(db)
     training_defaults = settings_service.get_training_config()
 
-    steps = request.steps or training_defaults.get("steps", 1000)
+    # Use model-aware default steps
+    from app.providers.fal_provider import FAL_MODEL_CONFIG
+    model_config = FAL_MODEL_CONFIG.get(request.base_model, FAL_MODEL_CONFIG["flux-dev"])
+    steps = request.steps or training_defaults.get("steps", model_config["default_steps"])
     is_style = request.is_style if request.is_style is not None else training_defaults.get("is_style", False)
 
     # Create job
@@ -281,6 +322,7 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db)):
 @router.get("/lora", response_model=LoraListResponse)
 async def list_lora_models(
     status: str | None = None,
+    base_model: str | None = None,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -288,10 +330,10 @@ async def list_lora_models(
     """List LoRA models."""
     gen_service = get_generation_service(db)
     status_filter = LoraModelStatus(status) if status else None
-    items = gen_service.get_lora_models(status=status_filter, skip=skip, limit=limit)
-    total = gen_service.count_lora_models(status=status_filter)
+    items = gen_service.get_lora_models(status=status_filter, base_model=base_model, skip=skip, limit=limit)
+    total = gen_service.count_lora_models(status=status_filter, base_model=base_model)
     return LoraListResponse(
-        items=[_lora_to_response(m) for m in items],
+        items=[_lora_to_response(m, db) for m in items],
         total=total,
         skip=skip,
         limit=limit,
@@ -305,7 +347,7 @@ async def get_lora_model(lora_id: int, db: Session = Depends(get_db)):
     lora = gen_service.get_lora_model(lora_id)
     if not lora:
         raise HTTPException(status_code=404, detail="LoRA model not found")
-    return _lora_to_response(lora)
+    return _lora_to_response(lora, db)
 
 
 @router.delete("/lora/{lora_id}", status_code=204)
@@ -324,6 +366,9 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
     """Generate 1-8 images."""
     gen_service = get_generation_service(db)
 
+    # Determine effective base_model
+    effective_base_model = request.base_model or "flux-dev"
+
     # Validate LoRA if specified
     if request.lora_model_id:
         lora = gen_service.get_lora_model(request.lora_model_id)
@@ -331,6 +376,14 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
             raise HTTPException(status_code=404, detail="LoRA model not found")
         if lora.status != LoraModelStatus.COMPLETED:
             raise HTTPException(status_code=400, detail="LoRA model is not ready (not completed)")
+        # Infer base_model from LoRA if not explicitly set
+        if not request.base_model:
+            effective_base_model = lora.base_model
+        elif lora.base_model != effective_base_model:
+            raise HTTPException(
+                status_code=400,
+                detail=f"LoRA model is trained on '{lora.base_model}' but generation requested '{effective_base_model}'. They must match.",
+            )
 
     # Get generation defaults from settings
     settings_service = get_settings_service(db)
@@ -363,7 +416,7 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
         gen = gen_service.create_generated_image(
             prompt=request.prompt,
             negative_prompt=request.negative_prompt,
-            base_model=gen_defaults.get("base_model", "flux-dev"),
+            base_model=effective_base_model,
             generation_provider=provider,
             lora_model_id=request.lora_model_id,
             lora_scale=request.lora_scale,

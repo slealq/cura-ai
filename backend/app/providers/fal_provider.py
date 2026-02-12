@@ -15,6 +15,32 @@ from app.models.pipeline_log import LogCategory, LogLevel
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# Model configuration: maps base_model keys to fal.ai endpoints and parameter differences
+FAL_MODEL_CONFIG = {
+    "flux-dev": {
+        "training_endpoint": "fal-ai/flux-lora-fast-training",
+        "generation_lora_endpoint": "fal-ai/flux-lora",
+        "generation_base_endpoint": "fal-ai/flux/dev",
+        "zip_param": "images_data_url",
+        "supports_trigger_word": True,
+        "supports_is_style": True,
+        "supports_base64": True,
+        "default_steps": 1000,
+        "default_guidance": 3.5,
+    },
+    "qwen-2.5": {
+        "training_endpoint": "fal-ai/qwen-image-2512-trainer-v2",
+        "generation_lora_endpoint": "fal-ai/qwen-image-2512/lora",
+        "generation_base_endpoint": "fal-ai/qwen-image-2512",
+        "zip_param": "image_data_url",
+        "supports_trigger_word": False,
+        "supports_is_style": False,
+        "supports_base64": False,
+        "default_steps": 2000,
+        "default_guidance": 4.0,
+    },
+}
+
 
 def _ensure_fal_key(api_key: str | None = None):
     """Set FAL_KEY env var for fal_client if not already set."""
@@ -25,10 +51,12 @@ def _ensure_fal_key(api_key: str | None = None):
 
 
 class FalTrainer(BaseTrainer):
-    """fal.ai LoRA training provider using flux-lora-fast-training."""
+    """fal.ai LoRA training provider supporting multiple base models."""
 
-    def __init__(self, api_key: str | None = None):
+    def __init__(self, api_key: str | None = None, base_model: str = "flux-dev"):
         _ensure_fal_key(api_key)
+        self.config = FAL_MODEL_CONFIG.get(base_model, FAL_MODEL_CONFIG["flux-dev"])
+        self.base_model = base_model
 
     async def start_training(
         self,
@@ -40,18 +68,33 @@ class FalTrainer(BaseTrainer):
     ) -> str:
         """Submit LoRA training job to fal.ai."""
         task_start = time.monotonic()
+        endpoint = self.config["training_endpoint"]
 
-        arguments = {
-            "images_data_url": image_urls,
-            "trigger_word": trigger_word,
+        arguments: dict[str, Any] = {
             "steps": steps,
-            "is_style": is_style,
         }
+
+        # Only include trigger_word and is_style for models that support them
+        if self.config["supports_trigger_word"]:
+            arguments["trigger_word"] = trigger_word
+        if self.config["supports_is_style"]:
+            arguments["is_style"] = is_style
+
+        # Use the correct ZIP param name from config if provided in kwargs
+        zip_param = self.config["zip_param"]
+        if zip_param in kwargs:
+            arguments[zip_param] = kwargs.pop(zip_param)
+        elif "images_data_url" in kwargs and zip_param != "images_data_url":
+            # Remap if caller used the flux param name but we need the qwen one
+            arguments[zip_param] = kwargs.pop("images_data_url")
+        elif image_urls:
+            arguments[zip_param] = image_urls
+
         arguments.update(kwargs)
 
         try:
             handle = fal_client.submit(
-                "fal-ai/flux-lora-fast-training",
+                endpoint,
                 arguments=arguments,
             )
             request_id = handle.request_id
@@ -61,11 +104,11 @@ class FalTrainer(BaseTrainer):
                 category=LogCategory.API_CALL,
                 message=f"fal.ai training submitted: {request_id}",
                 provider="fal",
-                model="flux-lora-fast-training",
+                model=endpoint,
                 operation="start_training",
                 duration_ms=round(elapsed, 1),
                 success=True,
-                extra={"request_id": request_id, "steps": steps, "trigger_word": trigger_word},
+                extra={"request_id": request_id, "steps": steps, "trigger_word": trigger_word, "base_model": self.base_model},
             )
 
             return request_id
@@ -77,7 +120,7 @@ class FalTrainer(BaseTrainer):
                 message=f"fal.ai training submission failed: {e}",
                 level=LogLevel.ERROR,
                 provider="fal",
-                model="flux-lora-fast-training",
+                model=endpoint,
                 operation="start_training",
                 duration_ms=round(elapsed, 1),
                 success=False,
@@ -87,9 +130,10 @@ class FalTrainer(BaseTrainer):
 
     async def check_training_status(self, request_id: str) -> dict[str, Any]:
         """Check fal.ai training job status."""
+        endpoint = self.config["training_endpoint"]
         try:
             status = fal_client.status(
-                "fal-ai/flux-lora-fast-training",
+                endpoint,
                 request_id,
                 with_logs=True,
             )
@@ -104,10 +148,11 @@ class FalTrainer(BaseTrainer):
     async def get_training_result(self, request_id: str) -> TrainingResult:
         """Get completed training result from fal.ai."""
         task_start = time.monotonic()
+        endpoint = self.config["training_endpoint"]
 
         try:
             result = fal_client.result(
-                "fal-ai/flux-lora-fast-training",
+                endpoint,
                 request_id,
             )
 
@@ -120,7 +165,7 @@ class FalTrainer(BaseTrainer):
                 category=LogCategory.API_CALL,
                 message=f"fal.ai training result retrieved: {request_id}",
                 provider="fal",
-                model="flux-lora-fast-training",
+                model=endpoint,
                 operation="get_training_result",
                 duration_ms=round(elapsed, 1),
                 success=True,
@@ -140,7 +185,7 @@ class FalTrainer(BaseTrainer):
                 message=f"fal.ai training result retrieval failed: {e}",
                 level=LogLevel.ERROR,
                 provider="fal",
-                model="flux-lora-fast-training",
+                model=endpoint,
                 operation="get_training_result",
                 duration_ms=round(elapsed, 1),
                 success=False,
@@ -152,10 +197,12 @@ class FalTrainer(BaseTrainer):
 
 
 class FalGenerator(BaseGenerator):
-    """fal.ai image generation provider using Flux models."""
+    """fal.ai image generation provider supporting multiple base models."""
 
-    def __init__(self, api_key: str | None = None):
+    def __init__(self, api_key: str | None = None, base_model: str = "flux-dev"):
         _ensure_fal_key(api_key)
+        self.config = FAL_MODEL_CONFIG.get(base_model, FAL_MODEL_CONFIG["flux-dev"])
+        self.base_model = base_model
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
     async def generate(
@@ -170,12 +217,12 @@ class FalGenerator(BaseGenerator):
         lora_url: str | None = None,
         lora_scale: float = 1.0,
     ) -> GenerationResult:
-        """Generate an image via fal.ai Flux."""
+        """Generate an image via fal.ai."""
         task_start = time.monotonic()
 
         # Choose endpoint based on LoRA
         if lora_url:
-            endpoint = "fal-ai/flux-lora"
+            endpoint = self.config["generation_lora_endpoint"]
             arguments: dict[str, Any] = {
                 "prompt": prompt,
                 "image_size": {"width": width, "height": height},
@@ -186,7 +233,7 @@ class FalGenerator(BaseGenerator):
                 "enable_safety_checker": False,
             }
         else:
-            endpoint = "fal-ai/flux/dev"
+            endpoint = self.config["generation_base_endpoint"]
             arguments = {
                 "prompt": prompt,
                 "image_size": {"width": width, "height": height},
@@ -232,7 +279,7 @@ class FalGenerator(BaseGenerator):
                 operation="generate",
                 duration_ms=round(elapsed, 1),
                 success=True,
-                extra={"seed": result_seed, "lora": bool(lora_url)},
+                extra={"seed": result_seed, "lora": bool(lora_url), "base_model": self.base_model},
             )
 
             return GenerationResult(
@@ -254,7 +301,7 @@ class FalGenerator(BaseGenerator):
                 message=f"fal.ai generation failed: {e}",
                 level=LogLevel.ERROR,
                 provider="fal",
-                model=endpoint if lora_url else "fal-ai/flux/dev",
+                model=endpoint if lora_url else self.config["generation_base_endpoint"],
                 operation="generate",
                 duration_ms=round(elapsed, 1),
                 success=False,

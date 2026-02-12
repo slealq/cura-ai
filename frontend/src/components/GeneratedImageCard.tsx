@@ -12,6 +12,16 @@ const statusStyles: Record<string, string> = {
   failed: 'bg-red-100 text-red-700',
 };
 
+const modelBadgeStyles: Record<string, string> = {
+  'flux-dev': 'bg-blue-100 text-blue-700',
+  'qwen-2.5': 'bg-orange-100 text-orange-700',
+};
+
+const modelLabels: Record<string, string> = {
+  'flux-dev': 'Flux',
+  'qwen-2.5': 'Qwen',
+};
+
 export default function GeneratedImageCard({
   image,
   onClick,
@@ -73,6 +83,18 @@ export default function GeneratedImageCard({
           </div>
         )}
       </div>
+
+      {/* Model badge */}
+      {image.base_model && (
+        <div className="absolute bottom-2 left-2 group-hover:opacity-0 transition-opacity">
+          <span className={cn(
+            'px-1.5 py-0.5 rounded-full text-[10px] font-semibold',
+            modelBadgeStyles[image.base_model] || 'bg-gray-100 text-gray-700'
+          )}>
+            {modelLabels[image.base_model] || image.base_model}
+          </span>
+        </div>
+      )}
 
       {/* Prompt preview on hover */}
       <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-3 opacity-0 group-hover:opacity-100 transition-opacity">

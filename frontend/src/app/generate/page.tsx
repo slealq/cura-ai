@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { generationApi } from '@/lib/api';
 import { Loader2, Sparkles, ChevronDown, ChevronUp, X } from 'lucide-react';
 import { toast } from 'sonner';
+import Link from 'next/link';
 import GeneratedImageCard from '@/components/GeneratedImageCard';
 import { cn } from '@/lib/utils';
 import type { GeneratedImage } from '@/types';
@@ -18,6 +19,11 @@ const SIZE_PRESETS = [
   { label: '1344 x 768', w: 1344, h: 768 },
 ];
 
+const BASE_MODELS = [
+  { value: 'flux-dev', label: 'Flux', defaultGuidance: 3.5 },
+  { value: 'qwen-2.5', label: 'Qwen 2.5', defaultGuidance: 4.0 },
+];
+
 export default function GeneratePage() {
   const queryClient = useQueryClient();
 
@@ -25,6 +31,7 @@ export default function GeneratePage() {
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [baseModel, setBaseModel] = useState('flux-dev');
   const [loraId, setLoraId] = useState<number | undefined>(undefined);
   const [loraScale, setLoraScale] = useState(1.0);
   const [width, setWidth] = useState(1024);
@@ -37,10 +44,10 @@ export default function GeneratePage() {
   // Full-size modal
   const [selectedImage, setSelectedImage] = useState<GeneratedImage | null>(null);
 
-  // Fetch completed LoRA models
+  // Fetch completed LoRA models filtered by base model
   const { data: loraList } = useQuery({
-    queryKey: ['lora-models', 'completed'],
-    queryFn: () => generationApi.listLora({ status: 'completed' }),
+    queryKey: ['lora-models', 'completed', baseModel],
+    queryFn: () => generationApi.listLora({ status: 'completed', base_model: baseModel }),
   });
 
   // Fetch generated images with polling
@@ -73,6 +80,7 @@ export default function GeneratePage() {
       negative_prompt: negativePrompt.trim() || undefined,
       lora_model_id: loraId,
       lora_scale: loraId ? loraScale : undefined,
+      base_model: baseModel,
       width,
       height,
       num_inference_steps: steps,
@@ -94,7 +102,7 @@ export default function GeneratePage() {
       <div>
         <h1 className="text-2xl font-bold">Generate</h1>
         <p className="text-muted-foreground mt-1">
-          Create images with Flux models and your trained LoRAs
+          Create images with your trained LoRAs
         </p>
       </div>
 
@@ -116,8 +124,33 @@ export default function GeneratePage() {
           />
         </div>
 
-        {/* LoRA selector + quick params */}
+        {/* Model selector + LoRA + quick params */}
         <div className="flex flex-wrap gap-4 items-end">
+          {/* Base Model */}
+          <div>
+            <label className="block text-xs text-muted-foreground mb-1">Model</label>
+            <div className="flex rounded-lg border border-border overflow-hidden">
+              {BASE_MODELS.map((m) => (
+                <button
+                  key={m.value}
+                  onClick={() => {
+                    setBaseModel(m.value);
+                    setLoraId(undefined);
+                    setGuidance(m.defaultGuidance);
+                  }}
+                  className={cn(
+                    'px-3 py-2 text-sm font-medium transition-colors',
+                    baseModel === m.value
+                      ? 'bg-primary text-primary-foreground'
+                      : 'hover:bg-muted'
+                  )}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* LoRA */}
           <div className="min-w-[200px]">
             <label className="block text-xs text-muted-foreground mb-1">LoRA Model</label>
@@ -351,11 +384,17 @@ export default function GeneratePage() {
                     </div>
                   )}
                   <div className="flex flex-wrap gap-4">
+                    <span><span className="font-medium">Model:</span> {selectedImage.base_model}</span>
                     {selectedImage.width && selectedImage.height && (
                       <span><span className="font-medium">Size:</span> {selectedImage.width}x{selectedImage.height}</span>
                     )}
-                    {selectedImage.lora_model_name && (
-                      <span><span className="font-medium">LoRA:</span> {selectedImage.lora_model_name}</span>
+                    {selectedImage.lora_model_name && selectedImage.lora_model_id && (
+                      <span>
+                        <span className="font-medium">LoRA:</span>{' '}
+                        <Link href="/models" className="text-primary hover:underline" onClick={() => setSelectedImage(null)}>
+                          {selectedImage.lora_model_name}
+                        </Link>
+                      </span>
                     )}
                     {selectedImage.generation_params && (
                       <>

@@ -542,6 +542,7 @@ export const generationApi = {
 
   listLora: async (params?: {
     status?: string;
+    base_model?: string;
     skip?: number;
     limit?: number;
   }): Promise<LoraListResponse> => {
@@ -564,6 +565,7 @@ export const generationApi = {
     negative_prompt?: string;
     lora_model_id?: number;
     lora_scale?: number;
+    base_model?: string;
     width?: number;
     height?: number;
     num_inference_steps?: number;

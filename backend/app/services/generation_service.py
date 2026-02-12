@@ -66,6 +66,7 @@ class GenerationService:
     def get_lora_models(
         self,
         status: LoraModelStatus | None = None,
+        base_model: str | None = None,
         skip: int = 0,
         limit: int = 50,
     ) -> list[LoraModel]:
@@ -73,13 +74,17 @@ class GenerationService:
         query = self.db.query(LoraModel).options(joinedload(LoraModel.folder), joinedload(LoraModel.cluster))
         if status:
             query = query.filter(LoraModel.status == status)
+        if base_model:
+            query = query.filter(LoraModel.base_model == base_model)
         return query.order_by(LoraModel.created_at.desc()).offset(skip).limit(limit).all()
 
-    def count_lora_models(self, status: LoraModelStatus | None = None) -> int:
+    def count_lora_models(self, status: LoraModelStatus | None = None, base_model: str | None = None) -> int:
         """Count LoRA models with optional status filter."""
         query = self.db.query(LoraModel)
         if status:
             query = query.filter(LoraModel.status == status)
+        if base_model:
+            query = query.filter(LoraModel.base_model == base_model)
         return query.count()
 
     def update_lora_status(

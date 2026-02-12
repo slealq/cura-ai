@@ -19,6 +19,17 @@ import { toast } from 'sonner';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import type { LoraModel } from '@/types';
+import { imagesApi } from '@/lib/api';
+
+const BASE_MODELS = [
+  { value: 'flux-dev', label: 'Flux', defaultSteps: 1000 },
+  { value: 'qwen-2.5', label: 'Qwen 2.5', defaultSteps: 2000 },
+];
+
+const baseModelBadge: Record<string, string> = {
+  'flux-dev': 'bg-blue-100 text-blue-700',
+  'qwen-2.5': 'bg-orange-100 text-orange-700',
+};
 
 const statusConfig: Record<string, { icon: typeof Clock; color: string; label: string }> = {
   pending: { icon: Clock, color: 'text-gray-500 bg-gray-100', label: 'Pending' },
@@ -28,9 +39,13 @@ const statusConfig: Record<string, { icon: typeof Clock; color: string; label: s
   archived: { icon: Archive, color: 'text-gray-500 bg-gray-100', label: 'Archived' },
 };
 
-function getSourceLabel(model: LoraModel): string | null {
-  if (model.folder_name) return `folder "${model.folder_name}"`;
-  if (model.cluster_name) return `cluster "${model.cluster_name}"`;
+function getSourceInfo(model: LoraModel): { label: string; href: string } | null {
+  if (model.folder_id && model.folder_name) {
+    return { label: `folder "${model.folder_name}"`, href: `/images/folder/${model.folder_id}` };
+  }
+  if (model.cluster_id && model.cluster_name) {
+    return { label: `cluster "${model.cluster_name}"`, href: `/clusters/${model.cluster_id}` };
+  }
   return null;
 }
 
@@ -45,67 +60,94 @@ function LoraModelCard({
 }) {
   const config = statusConfig[model.status] || statusConfig.pending;
   const StatusIcon = config.icon;
-  const sourceLabel = getSourceLabel(model);
+  const sourceInfo = getSourceInfo(model);
+  const previews = model.source_preview_images?.filter((p) => p.thumbnail_uri_small) || [];
 
   return (
     <div
-      className="bg-white border border-border rounded-xl p-5 hover:shadow-md transition-shadow cursor-pointer"
+      className="bg-white border border-border rounded-xl overflow-hidden hover:shadow-md transition-shadow cursor-pointer"
       onClick={onClick}
     >
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-purple-50 rounded-lg">
-            <Box className="h-5 w-5 text-purple-600" />
-          </div>
+      {/* Preview images strip */}
+      {previews.length > 0 ? (
+        <div className="flex h-24 bg-muted/30">
+          {previews.map((img) => (
+            <div key={img.id} className="flex-1 min-w-0 relative">
+              <img
+                src={imagesApi.getThumbnailUrl(img.thumbnail_uri_small!.split('/').pop()!)}
+                alt=""
+                className="absolute inset-0 w-full h-full object-cover"
+              />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="flex h-24 bg-muted/30 items-center justify-center">
+          <Box className="h-8 w-8 text-muted-foreground/30" />
+        </div>
+      )}
+
+      <div className="p-5">
+        <div className="flex items-start justify-between">
           <div>
             <h3 className="font-semibold text-sm">{model.name}</h3>
             <p className="text-xs text-muted-foreground mt-0.5">
               Trigger: <code className="bg-muted px-1 py-0.5 rounded">{model.trigger_word}</code>
             </p>
           </div>
+
+          <span className={cn('flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium', config.color)}>
+            <StatusIcon className={cn('h-3 w-3', model.status === 'training' && 'animate-spin')} />
+            {config.label}
+          </span>
         </div>
 
-        <span className={cn('flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium', config.color)}>
-          <StatusIcon className={cn('h-3 w-3', model.status === 'training' && 'animate-spin')} />
-          {config.label}
-        </span>
-      </div>
-
-      <div className="mt-4 flex flex-wrap gap-3 text-xs text-muted-foreground">
-        <span>{model.training_images_count} images</span>
-        <span>{model.base_model}</span>
-        {sourceLabel && <span>from {sourceLabel}</span>}
-      </div>
-
-      {model.error_message && (
-        <p className="mt-2 text-xs text-red-600 line-clamp-1">{model.error_message}</p>
-      )}
-
-      <div className="mt-3 flex items-center justify-between">
-        <span className="text-[10px] text-muted-foreground">
-          {new Date(model.created_at).toLocaleDateString()}
-        </span>
-        <div className="flex items-center gap-1">
-          {model.status === 'completed' && (
+        <div className="mt-3 flex flex-wrap gap-3 text-xs text-muted-foreground items-center">
+          <span>{model.training_images_count} images</span>
+          <span className={cn('px-1.5 py-0.5 rounded-full text-[10px] font-semibold', baseModelBadge[model.base_model] || 'bg-gray-100 text-gray-700')}>
+            {BASE_MODELS.find((m) => m.value === model.base_model)?.label || model.base_model}
+          </span>
+          {sourceInfo && (
             <Link
-              href={`/generate?lora=${model.id}`}
+              href={sourceInfo.href}
               onClick={(e) => e.stopPropagation()}
-              className="p-1.5 hover:bg-muted rounded-lg transition-colors text-purple-600"
-              title="Generate with this LoRA"
+              className="text-primary hover:underline"
             >
-              <Sparkles className="h-4 w-4" />
+              from {sourceInfo.label}
             </Link>
           )}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete();
-            }}
-            className="p-1.5 hover:bg-red-50 rounded-lg transition-colors text-muted-foreground hover:text-red-600"
-            title="Delete"
-          >
-            <Trash2 className="h-4 w-4" />
-          </button>
+        </div>
+
+        {model.error_message && (
+          <p className="mt-2 text-xs text-red-600 line-clamp-1">{model.error_message}</p>
+        )}
+
+        <div className="mt-3 flex items-center justify-between">
+          <span className="text-[10px] text-muted-foreground">
+            {new Date(model.created_at).toLocaleDateString()}
+          </span>
+          <div className="flex items-center gap-1">
+            {model.status === 'completed' && (
+              <Link
+                href={`/generate?lora=${model.id}`}
+                onClick={(e) => e.stopPropagation()}
+                className="p-1.5 hover:bg-muted rounded-lg transition-colors text-purple-600"
+                title="Generate with this LoRA"
+              >
+                <Sparkles className="h-4 w-4" />
+              </Link>
+            )}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete();
+              }}
+              className="p-1.5 hover:bg-red-50 rounded-lg transition-colors text-muted-foreground hover:text-red-600"
+              title="Delete"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -122,6 +164,7 @@ export default function ModelsPage() {
   // Form state for training
   const [trainName, setTrainName] = useState('');
   const [trainTrigger, setTrainTrigger] = useState('');
+  const [trainBaseModel, setTrainBaseModel] = useState('flux-dev');
   const [sourceType, setSourceType] = useState<SourceType>('folder');
   const [trainFolderId, setTrainFolderId] = useState<number | undefined>(undefined);
   const [trainClusterId, setTrainClusterId] = useState<number | undefined>(undefined);
@@ -178,6 +221,7 @@ export default function ModelsPage() {
   const resetForm = () => {
     setTrainName('');
     setTrainTrigger('');
+    setTrainBaseModel('flux-dev');
     setSourceType('folder');
     setTrainFolderId(undefined);
     setTrainClusterId(undefined);
@@ -198,11 +242,12 @@ export default function ModelsPage() {
     trainMutation.mutate({
       name: trainName.trim(),
       trigger_word: trainTrigger.trim(),
+      base_model: trainBaseModel,
       ...(sourceType === 'folder'
         ? { folder_id: trainFolderId }
         : { cluster_id: trainClusterId }),
       steps: trainSteps,
-      is_style: trainIsStyle,
+      is_style: trainBaseModel === 'flux-dev' ? trainIsStyle : undefined,
       use_captions: trainUseCaptions,
       caption_include_tags: trainCaptionTags,
       caption_include_description: trainCaptionDescription,
@@ -297,8 +342,38 @@ export default function ModelsPage() {
                     className="w-full px-3 py-2 border border-border rounded-lg text-sm"
                   />
                   <p className="text-xs text-muted-foreground mt-1">
-                    Use this word in your prompts to activate the LoRA
+                    {trainBaseModel === 'qwen-2.5'
+                      ? 'Used in per-image captions during training'
+                      : 'Use this word in your prompts to activate the LoRA'}
                   </p>
+                </div>
+
+                {/* Base Model Selector */}
+                <div>
+                  <label className="block text-sm font-medium mb-1">Base Model *</label>
+                  <div className="flex rounded-lg border border-border overflow-hidden">
+                    {BASE_MODELS.map((m) => (
+                      <button
+                        key={m.value}
+                        onClick={() => {
+                          setTrainBaseModel(m.value);
+                          setTrainSteps(m.defaultSteps);
+                          if (m.value === 'qwen-2.5') {
+                            setTrainUseCaptions(true);
+                            setTrainIsStyle(false);
+                          }
+                        }}
+                        className={cn(
+                          'flex-1 px-3 py-1.5 text-sm font-medium transition-colors',
+                          trainBaseModel === m.value
+                            ? 'bg-primary text-primary-foreground'
+                            : 'hover:bg-muted'
+                        )}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 {/* Source Type Toggle */}
@@ -383,35 +458,42 @@ export default function ModelsPage() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => setTrainIsStyle(!trainIsStyle)}
-                    className={cn(
-                      'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors',
-                      trainIsStyle ? 'bg-primary' : 'bg-gray-300'
-                    )}
-                  >
-                    <span
+                {trainBaseModel === 'flux-dev' && (
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => setTrainIsStyle(!trainIsStyle)}
                       className={cn(
-                        'inline-block h-4 w-4 transform rounded-full bg-white transition-transform mt-0.5',
-                        trainIsStyle ? 'translate-x-4 ml-0.5' : 'translate-x-0.5'
+                        'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors',
+                        trainIsStyle ? 'bg-primary' : 'bg-gray-300'
                       )}
-                    />
-                  </button>
-                  <span className="text-sm">Style mode</span>
-                  <span className="text-xs text-muted-foreground">
-                    (for artistic styles rather than subjects)
-                  </span>
-                </div>
+                    >
+                      <span
+                        className={cn(
+                          'inline-block h-4 w-4 transform rounded-full bg-white transition-transform mt-0.5',
+                          trainIsStyle ? 'translate-x-4 ml-0.5' : 'translate-x-0.5'
+                        )}
+                      />
+                    </button>
+                    <span className="text-sm">Style mode</span>
+                    <span className="text-xs text-muted-foreground">
+                      (for artistic styles rather than subjects)
+                    </span>
+                  </div>
+                )}
 
                 {/* Per-Image Captions */}
                 <div className="border-t border-border pt-3">
                   <div className="flex items-center gap-3">
                     <button
-                      onClick={() => setTrainUseCaptions(!trainUseCaptions)}
+                      onClick={() => {
+                        if (trainBaseModel !== 'qwen-2.5') {
+                          setTrainUseCaptions(!trainUseCaptions);
+                        }
+                      }}
                       className={cn(
-                        'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors',
-                        trainUseCaptions ? 'bg-primary' : 'bg-gray-300'
+                        'relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors',
+                        trainUseCaptions ? 'bg-primary' : 'bg-gray-300',
+                        trainBaseModel === 'qwen-2.5' ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'
                       )}
                     >
                       <span
@@ -422,6 +504,9 @@ export default function ModelsPage() {
                       />
                     </button>
                     <span className="text-sm">Per-image captions</span>
+                    {trainBaseModel === 'qwen-2.5' && (
+                      <span className="text-xs text-orange-600">(required for Qwen)</span>
+                    )}
                   </div>
                   <p className="text-xs text-muted-foreground mt-1.5 ml-12">
                     Include generated tags and descriptions as captions for each training image
@@ -523,15 +608,45 @@ export default function ModelsPage() {
                   </div>
                   <div>
                     <span className="text-muted-foreground">Source</span>
-                    <p>
-                      {selectedModel.folder_name
-                        ? `Folder: ${selectedModel.folder_name}`
-                        : selectedModel.cluster_name
-                          ? `Cluster: ${selectedModel.cluster_name}`
-                          : 'N/A'}
-                    </p>
+                    {(() => {
+                      const info = getSourceInfo(selectedModel);
+                      return info ? (
+                        <p>
+                          <Link
+                            href={info.href}
+                            className="text-primary hover:underline"
+                            onClick={() => setSelectedModel(null)}
+                          >
+                            {selectedModel.folder_name
+                              ? `Folder: ${selectedModel.folder_name}`
+                              : `Cluster: ${selectedModel.cluster_name}`}
+                          </Link>
+                        </p>
+                      ) : (
+                        <p>N/A</p>
+                      );
+                    })()}
                   </div>
                 </div>
+
+                {selectedModel.source_preview_images?.filter((p) => p.thumbnail_uri_small).length > 0 && (
+                  <div>
+                    <span className="text-muted-foreground text-sm">Sample Training Images</span>
+                    <div className="flex gap-2 mt-1.5">
+                      {selectedModel.source_preview_images
+                        .filter((p) => p.thumbnail_uri_small)
+                        .map((img) => (
+                          <div key={img.id} className="w-16 h-16 rounded-lg overflow-hidden bg-muted">
+                            <img
+                              src={imagesApi.getThumbnailUrl(img.thumbnail_uri_small!.split('/').pop()!)}
+                              alt=""
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
 
                 {selectedModel.training_config && (
                   <div>
