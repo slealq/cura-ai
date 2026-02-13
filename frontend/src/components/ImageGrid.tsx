@@ -346,19 +346,17 @@ function ImageGridContent({ title, queryKeyPrefix, fetchImages, folderId }: Imag
             Reprocess
           </button>
 
-          {/* Add to folder (when NOT in a folder view) */}
-          {!folderId && (
-            <button
-              onClick={() => setShowAddToFolder(true)}
-              className={cn(
-                'flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
-                'border border-border hover:bg-muted'
-              )}
-            >
-              <FolderPlus className="h-3.5 w-3.5" />
-              Add to Folder
-            </button>
-          )}
+          {/* Add to folder */}
+          <button
+            onClick={() => setShowAddToFolder(true)}
+            className={cn(
+              'flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
+              'border border-border hover:bg-muted'
+            )}
+          >
+            <FolderPlus className="h-3.5 w-3.5" />
+            Add to Folder
+          </button>
 
           {/* Remove from folder (when IN a folder view) */}
           {folderId && (
