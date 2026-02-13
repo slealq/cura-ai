@@ -3,7 +3,6 @@ import logging
 import time
 from datetime import datetime
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import Image, ImageMetadata, ImageSource, ImageStatus

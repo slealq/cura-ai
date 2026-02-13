@@ -1,6 +1,6 @@
 """Pydantic schemas for API request/response models."""
 from datetime import datetime
-from typing import Any
+from typing import Any  # noqa: F401
 
 from pydantic import BaseModel, Field
 

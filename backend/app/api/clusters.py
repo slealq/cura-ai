@@ -2,7 +2,6 @@
 import io
 import logging
 import zipfile
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -11,8 +10,8 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.security import get_current_user
 from app.db.base import get_db
-from app.models.user import User
 from app.models import Job, JobStatus, JobType
+from app.models.user import User
 from app.schemas import (
     ClusterDetailResponse,
     ClusterListResponse,

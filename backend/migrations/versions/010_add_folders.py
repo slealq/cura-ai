@@ -3,8 +3,8 @@
 Revision ID: 010_add_folders
 Revises: 009_add_search_vector
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "010_add_folders"
 down_revision = "009_add_search_vector"

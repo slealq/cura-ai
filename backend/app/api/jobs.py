@@ -6,10 +6,16 @@ from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
 from app.db.base import get_db
-from app.models.user import User
 from app.models import Image, ImageStatus, Job, JobStatus, JobType
+from app.models.user import User
 from app.schemas import BatchJobImageInfo, BatchReprocessRequest, JobListResponse, JobResponse
-from app.workers.tasks import describe_image, embed_image, run_batch_reprocess, run_full_pipeline, tag_image
+from app.workers.tasks import (
+    describe_image,
+    embed_image,
+    run_batch_reprocess,
+    run_full_pipeline,
+    tag_image,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/jobs", tags=["jobs"])

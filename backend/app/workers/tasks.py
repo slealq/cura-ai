@@ -5,11 +5,10 @@ import time
 from datetime import datetime
 
 import numpy as np
-from celery import chain, chord, group
 from sqlalchemy.orm import Session
 
 from app.db.base import SessionLocal
-from app.models import Image, ImageMetadata, ImageStatus, Job, JobStatus, JobType
+from app.models import Image, ImageStatus, Job, JobStatus
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers import get_cluster_summarizer, get_describer, get_embedder, get_tagger
 from app.providers.base import AIContentError
@@ -17,7 +16,11 @@ from app.services.cluster_service import get_cluster_service
 from app.services.clustering import get_clustering_service
 from app.services.image_service import get_image_service
 from app.services.log_service import write_log
-from app.services.settings_service import compose_description_prompt, compose_tag_prompt, get_settings_service
+from app.services.settings_service import (
+    compose_description_prompt,
+    compose_tag_prompt,
+    get_settings_service,
+)
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -28,7 +31,7 @@ def _unwrap_error(e: Exception) -> str:
     # tenacity wraps the real exception in RetryError
     if hasattr(e, 'last_attempt'):
         try:
-            real = e.last_attempt.result()
+            e.last_attempt.result()
         except Exception as inner:
             return str(inner)
     return str(e)

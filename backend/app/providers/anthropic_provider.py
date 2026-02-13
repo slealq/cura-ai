@@ -10,7 +10,6 @@ from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wai
 
 from app.core.config import get_settings
 from app.models.pipeline_log import LogCategory, LogLevel
-from app.services.log_service import write_log
 from app.providers.base import (
     AIContentError,
     BaseClusterSummarizer,
@@ -22,6 +21,7 @@ from app.providers.base import (
     TaggingResult,
     VisionEvalResult,
 )
+from app.services.log_service import write_log
 
 logger = logging.getLogger(__name__)
 settings = get_settings()

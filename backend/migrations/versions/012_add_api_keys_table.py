@@ -3,8 +3,8 @@
 Revision ID: 012_add_api_keys_table
 Revises: 011_add_lora_and_generation
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy import inspect
 
 revision = "012_add_api_keys_table"
