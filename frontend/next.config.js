@@ -1,6 +1,9 @@
 /** @type {import('next').NextConfig} */
+
+const isCloudBuild = !!process.env.NEXT_PUBLIC_API_URL;
+
 const nextConfig = {
-  output: 'standalone',
+  output: isCloudBuild ? 'export' : 'standalone',
   images: {
     remotePatterns: [
       {
@@ -22,18 +25,18 @@ const nextConfig = {
     ],
     unoptimized: true,
   },
-  async rewrites() {
-    // Only proxy /api/* when no external API URL is set (local dev with local backend)
-    if (process.env.NEXT_PUBLIC_API_URL) {
-      return [];
-    }
-    return [
-      {
-        source: '/api/:path*',
-        destination: `${process.env.INTERNAL_API_URL || 'http://localhost:8000'}/api/:path*`,
-      },
-    ];
-  },
+  ...(isCloudBuild
+    ? {}
+    : {
+        async rewrites() {
+          return [
+            {
+              source: '/api/:path*',
+              destination: `${process.env.INTERNAL_API_URL || 'http://localhost:8000'}/api/:path*`,
+            },
+          ];
+        },
+      }),
 };
 
 module.exports = nextConfig;

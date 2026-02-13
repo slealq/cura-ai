@@ -54,6 +54,7 @@ jobs:
         working-directory: frontend
         env:
           NEXT_PUBLIC_API_URL: ${{ secrets.PROD_BACKEND_URL }}
+          NEXT_PUBLIC_ENV_LABEL: prod
         run: npm run build
 
       - name: Deploy to Azure Static Web Apps
@@ -82,34 +83,34 @@ jobs:
       - name: Update backend Container App
         run: |
           az containerapp update \
-            --name ca-backend-prod \
+            --name cae-imggen-prod-backend \
             --resource-group ${{ secrets.PROD_RESOURCE_GROUP }} \
             --image ${{ secrets.ACR_LOGIN_SERVER }}/imggen-backend:prod
 
       - name: Update celery-worker Container App
         run: |
           az containerapp update \
-            --name ca-celery-worker-prod \
+            --name cae-imggen-prod-celery-worker \
             --resource-group ${{ secrets.PROD_RESOURCE_GROUP }} \
             --image ${{ secrets.ACR_LOGIN_SERVER }}/imggen-backend:prod
 
       - name: Update celery-worker-clustering Container App
         run: |
           az containerapp update \
-            --name ca-celery-clustering-prod \
+            --name cae-imggen-prod-celery-clustering \
             --resource-group ${{ secrets.PROD_RESOURCE_GROUP }} \
             --image ${{ secrets.ACR_LOGIN_SERVER }}/imggen-backend:prod
 
       - name: Update celery-worker-generation Container App
         run: |
           az containerapp update \
-            --name ca-celery-generation-prod \
+            --name cae-imggen-prod-celery-generation \
             --resource-group ${{ secrets.PROD_RESOURCE_GROUP }} \
             --image ${{ secrets.ACR_LOGIN_SERVER }}/imggen-backend:prod
 
       - name: Run Alembic migrations
         run: |
           az containerapp exec \
-            --name ca-backend-prod \
+            --name cae-imggen-prod-backend \
             --resource-group ${{ secrets.PROD_RESOURCE_GROUP }} \
             --command "alembic upgrade head"
