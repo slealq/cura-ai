@@ -8,9 +8,9 @@ import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.core.config import get_settings
+from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers.base import BaseGenerator, BaseTrainer, GenerationResult, TrainingResult
 from app.services.log_service import write_log
-from app.models.pipeline_log import LogCategory, LogLevel
 
 logger = logging.getLogger(__name__)
 settings = get_settings()

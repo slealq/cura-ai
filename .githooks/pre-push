@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+#
+# Pre-push hook: prevents direct pushes to protected branches.
+#
+# Protected branches: master, dev
+# Allowed branches: u/<username>/* (personal branches)
+#
+# Install: git config core.hooksPath .githooks
+#          (or run: ./scripts/setup-hooks.sh)
+
+set -euo pipefail
+
+PROTECTED_BRANCHES=("master" "dev")
+
+# Get the current branch being pushed
+current_branch=$(git symbolic-ref --short HEAD 2>/dev/null || true)
+
+if [[ -z "$current_branch" ]]; then
+    # Detached HEAD — allow (e.g., CI/CD)
+    exit 0
+fi
+
+# Read the remote and URL being pushed to
+remote="$1"
+url="$2"
+
+# Check each ref being pushed
+while read -r local_ref local_oid remote_ref remote_oid; do
+    # Extract the branch name from the remote ref
+    push_branch="${remote_ref#refs/heads/}"
+
+    for protected in "${PROTECTED_BRANCHES[@]}"; do
+        if [[ "$push_branch" == "$protected" ]]; then
+            echo ""
+            echo "  BLOCKED: Direct push to '${protected}' is not allowed."
+            echo ""
+            echo "  Push to a personal branch instead:"
+            echo "    git push origin ${current_branch}:u/$(git config user.name | tr ' ' '-' | tr '[:upper:]' '[:lower:]')/${current_branch}"
+            echo ""
+            echo "  Or create a branch first:"
+            echo "    git checkout -b u/your-name/feature-name"
+            echo "    git push -u origin u/your-name/feature-name"
+            echo ""
+            echo "  Then create a PR to '${protected}' on GitHub."
+            echo ""
+            exit 1
+        fi
+    done
+done
+
+exit 0

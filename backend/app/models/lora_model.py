@@ -76,10 +76,10 @@ class LoraModel(Base):
     folder = relationship("Folder", lazy="joined")
     cluster = relationship("Cluster", lazy="joined")
     job = relationship("Job", lazy="joined")
-    generations: Mapped[list["GeneratedImage"]] = relationship(
+    generations: Mapped[list["GeneratedImage"]] = relationship(  # noqa: F821
         "GeneratedImage", back_populates="lora_model"
     )
-    evaluations: Mapped[list["LoraEvaluation"]] = relationship(
+    evaluations: Mapped[list["LoraEvaluation"]] = relationship(  # noqa: F821
         "LoraEvaluation", back_populates="lora_model", cascade="all, delete-orphan"
     )
 

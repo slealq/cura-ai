@@ -3,8 +3,8 @@
 Revision ID: 009_add_search_vector
 Revises: 008_add_batch_reprocess_job_type
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "009_add_search_vector"
 down_revision = "008_add_batch_reprocess_job_type"

@@ -6,10 +6,8 @@ from typing import TYPE_CHECKING
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
-    Boolean,
     DateTime,
     Enum,
-    Float,
     ForeignKey,
     Index,
     Integer,

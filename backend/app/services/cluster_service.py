@@ -1,19 +1,13 @@
 """Cluster service for managing image clusters."""
 import logging
-from datetime import datetime
-from typing import Sequence
 
 import numpy as np
-from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import (
     Cluster,
-    ClusteringMethod,
     ClusterMembership,
     Image,
-    ImageMetadata,
-    ImageStatus,
 )
 from app.services.clustering import ClusteringResult, get_clustering_service
 
@@ -50,7 +44,7 @@ class ClusterService:
         if run_id:
             query = query.filter(Cluster.run_id == run_id)
         if not include_archived:
-            query = query.filter(Cluster.is_archived == False)
+            query = query.filter(Cluster.is_archived.is_(False))
 
         return (
             query.order_by(Cluster.is_pinned.desc(), Cluster.size.desc())
@@ -86,11 +80,11 @@ class ClusterService:
             self.db.query(Image)
             .join(ClusterMembership)
             .filter(ClusterMembership.cluster_id == cluster_id)
-            .filter(ClusterMembership.is_excluded == False)
+            .filter(ClusterMembership.is_excluded.is_(False))
         )
 
         if not include_outliers:
-            query = query.filter(ClusterMembership.is_outlier == False)
+            query = query.filter(ClusterMembership.is_outlier.is_(False))
 
         return (
             query.order_by(ClusterMembership.distance_to_centroid)

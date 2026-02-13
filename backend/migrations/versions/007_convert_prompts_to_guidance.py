@@ -5,8 +5,8 @@ Revises: 006_add_prompt_presets
 """
 import re
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "007_convert_prompts_to_guidance"
 down_revision = "006_add_prompt_presets"

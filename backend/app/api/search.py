@@ -8,10 +8,10 @@ from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
 from app.db.base import get_db
+from app.models import ImageMetadata
 from app.models.user import User
-from app.models import Image, ImageMetadata
 from app.providers import get_embedder
-from app.schemas import ImageResponse, SearchRequest, SearchResponse, ScoredImageResponse
+from app.schemas import ImageResponse, ScoredImageResponse, SearchRequest, SearchResponse
 from app.services.image_service import get_image_service
 
 logger = logging.getLogger(__name__)

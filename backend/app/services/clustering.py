@@ -2,7 +2,6 @@
 import logging
 import uuid
 from collections import Counter
-from typing import Literal
 
 import hdbscan
 import numpy as np
@@ -247,7 +246,7 @@ class ClusteringService:
         distances, indices = nn.kneighbors(embeddings)
 
         # Create graph
-        G = nx.Graph()
+        G = nx.Graph()  # noqa: N806
         G.add_nodes_from(range(len(embeddings)))
 
         for i in range(len(embeddings)):

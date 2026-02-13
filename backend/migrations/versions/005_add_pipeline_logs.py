@@ -3,8 +3,8 @@
 Revision ID: 005_add_pipeline_logs
 Revises: 004_add_job_image_id
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "005_add_pipeline_logs"
 down_revision = "004_add_job_image_id"

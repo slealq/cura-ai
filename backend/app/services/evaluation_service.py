@@ -1,6 +1,5 @@
 """Service for managing LoRA model evaluations."""
 import logging
-import uuid
 from datetime import datetime
 
 from sqlalchemy.orm import Session, joinedload
