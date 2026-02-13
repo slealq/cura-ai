@@ -223,6 +223,52 @@ class BaseGenerator(ABC):
         pass
 
 
+@dataclass
+class VisionEvalResult:
+    """Result from vision-based image comparison evaluation."""
+
+    style_fidelity: float  # 0-10
+    subject_accuracy: float  # 0-10
+    detail_preservation: float  # 0-10
+    overall: float  # 0-10
+    assessment: str  # 2-3 sentence text
+    model: str
+    raw_response: dict[str, Any] | None = None
+
+
+class BaseEvaluator(ABC):
+    """Abstract base class for vision-based image evaluation providers."""
+
+    @abstractmethod
+    async def evaluate_pair(
+        self,
+        original_image_data: bytes,
+        generated_image_data: bytes,
+        original_mime: str,
+        generated_mime: str,
+        prompt_used: str,
+    ) -> VisionEvalResult:
+        """
+        Compare an original image with a generated image.
+
+        Args:
+            original_image_data: Raw bytes of the original image
+            generated_image_data: Raw bytes of the generated image
+            original_mime: MIME type of the original image
+            generated_mime: MIME type of the generated image
+            prompt_used: The prompt used to generate the image
+
+        Returns:
+            VisionEvalResult with scores and assessment
+        """
+        pass
+
+    @abstractmethod
+    def get_model_name(self) -> str:
+        """Get the model identifier."""
+        pass
+
+
 class BaseClusterSummarizer(ABC):
     """Abstract base class for cluster summarization providers."""
 

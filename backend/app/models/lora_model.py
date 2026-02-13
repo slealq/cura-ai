@@ -78,6 +78,9 @@ class LoraModel(Base):
     generations: Mapped[list["GeneratedImage"]] = relationship(
         "GeneratedImage", back_populates="lora_model"
     )
+    evaluations: Mapped[list["LoraEvaluation"]] = relationship(
+        "LoraEvaluation", back_populates="lora_model", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("ix_lora_models_status", "status"),

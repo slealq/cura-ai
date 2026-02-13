@@ -15,10 +15,12 @@ from app.providers.base import (
     AIContentError,
     BaseClusterSummarizer,
     BaseDescriber,
+    BaseEvaluator,
     BaseTagger,
     ClusterSummaryResult,
     DescriptionResult,
     TaggingResult,
+    VisionEvalResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -325,6 +327,127 @@ class AnthropicClusterSummarizer(BaseClusterSummarizer):
             summary_title=result.get("summary_title", "Untitled Cluster"),
             summary_description=result.get("summary_description", ""),
             model=self.model,
+        )
+
+    def get_model_name(self) -> str:
+        return self.model
+
+
+EVAL_PROMPT = """You are evaluating how well a LoRA-trained model reproduced a reference image.
+
+You are given:
+1. The ORIGINAL reference image (first image)
+2. The GENERATED image from a LoRA model (second image)
+3. The prompt used to generate the image
+
+**Prompt used:** {prompt}
+
+Score each dimension from 0 to 10 (0 = no resemblance, 10 = indistinguishable):
+
+- **style_fidelity**: How well does the generated image match the visual style (color palette, lighting, artistic technique, mood) of the original?
+- **subject_accuracy**: How well does the generated image capture the same subject, composition, and key elements?
+- **detail_preservation**: How well are fine details, textures, and subtle features preserved?
+- **overall**: Your holistic assessment combining all factors.
+
+Also provide a 2-3 sentence **assessment** explaining the key similarities and differences.
+
+Return ONLY a valid JSON object (no other text):
+{{
+  "style_fidelity": <number>,
+  "subject_accuracy": <number>,
+  "detail_preservation": <number>,
+  "overall": <number>,
+  "assessment": "<string>"
+}}"""
+
+
+class AnthropicEvaluator(BaseEvaluator):
+    """Anthropic Claude vision-based image pair evaluator."""
+
+    def __init__(self, api_key: str | None = None, model: str | None = None):
+        self.client = AsyncAnthropic(api_key=api_key or settings.anthropic_api_key)
+        self.model = model or settings.anthropic_vision_model
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    async def evaluate_pair(
+        self,
+        original_image_data: bytes,
+        generated_image_data: bytes,
+        original_mime: str,
+        generated_mime: str,
+        prompt_used: str,
+    ) -> VisionEvalResult:
+        """Compare original and generated images using Claude Vision."""
+        b64_original = base64.b64encode(original_image_data).decode("utf-8")
+        b64_generated = base64.b64encode(generated_image_data).decode("utf-8")
+
+        orig_media = original_mime if original_mime != "image/jpg" else "image/jpeg"
+        gen_media = generated_mime if generated_mime != "image/jpg" else "image/jpeg"
+
+        prompt = EVAL_PROMPT.format(prompt=prompt_used)
+
+        start = time.monotonic()
+        try:
+            response = await self.client.messages.create(
+                model=self.model,
+                max_tokens=1000,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": orig_media,
+                                    "data": b64_original,
+                                },
+                            },
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": gen_media,
+                                    "data": b64_generated,
+                                },
+                            },
+                        ],
+                    }
+                ],
+            )
+            elapsed = (time.monotonic() - start) * 1000
+            content = response.content[0].text if response.content else ""
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"Anthropic evaluate completed ({self.model})",
+                provider="anthropic", model=self.model, operation="evaluate",
+                duration_ms=round(elapsed, 1),
+                input_tokens=response.usage.input_tokens,
+                output_tokens=response.usage.output_tokens,
+                success=True,
+            )
+        except Exception as e:
+            elapsed = (time.monotonic() - start) * 1000
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"Anthropic evaluate failed: {e}",
+                level=LogLevel.ERROR, provider="anthropic", model=self.model,
+                operation="evaluate", duration_ms=round(elapsed, 1), success=False,
+                extra={"error": str(e)},
+            )
+            raise
+
+        result = extract_json(content)
+
+        return VisionEvalResult(
+            style_fidelity=float(result.get("style_fidelity", 0)),
+            subject_accuracy=float(result.get("subject_accuracy", 0)),
+            detail_preservation=float(result.get("detail_preservation", 0)),
+            overall=float(result.get("overall", 0)),
+            assessment=result.get("assessment", ""),
+            model=self.model,
+            raw_response={"content": content},
         )
 
     def get_model_name(self) -> str:

@@ -49,6 +49,7 @@ celery_app.conf.update(
         "app.workers.generation_tasks.train_lora": {"queue": "generation"},
         "app.workers.generation_tasks.generate_image": {"queue": "generation"},
         "app.workers.generation_tasks.batch_generate": {"queue": "generation"},
+        "app.workers.generation_tasks.evaluate_lora": {"queue": "generation"},
     },
 
     # Beat schedule

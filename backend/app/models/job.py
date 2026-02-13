@@ -24,6 +24,7 @@ class JobType(str, enum.Enum):
     LORA_TRAIN = "lora_train"
     GENERATE_IMAGE = "generate_image"
     BATCH_GENERATE = "batch_generate"
+    LORA_EVALUATE = "lora_evaluate"
 
 
 class JobStatus(str, enum.Enum):

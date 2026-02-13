@@ -7,6 +7,7 @@ import type {
   ClusterDetail,
   ClusteringConfig,
   ClusterListResponse,
+  EvaluationListResponse,
   Folder,
   FolderBrief,
   FolderListResponse,
@@ -19,6 +20,7 @@ import type {
   JobListResponse,
   LogListResponse,
   LogStats,
+  LoraEvaluation,
   LoraListResponse,
   LoraModel,
   PipelineStats,
@@ -625,6 +627,41 @@ export const generationApi = {
 
   getThumbnailUrl: (filename: string): string => {
     return `/api/generation/thumbnails/${filename}`;
+  },
+
+  // Evaluations
+  startEvaluation: async (
+    loraId: number,
+    params: {
+      sample_count?: number;
+      metrics_enabled?: string[];
+      generation_params?: Record<string, unknown>;
+      vision_eval_provider?: string;
+    }
+  ): Promise<{ status: string; evaluation_id: number; job_id: number }> => {
+    const { data } = await api.post(`/generation/lora/${loraId}/evaluate`, params);
+    return data;
+  },
+
+  listEvaluations: async (
+    loraId: number,
+    params?: { skip?: number; limit?: number }
+  ): Promise<EvaluationListResponse> => {
+    const { data } = await api.get(`/generation/lora/${loraId}/evaluations`, { params });
+    return data;
+  },
+
+  getEvaluation: async (evalId: number): Promise<LoraEvaluation> => {
+    const { data } = await api.get(`/generation/evaluations/${evalId}`);
+    return data;
+  },
+
+  deleteEvaluation: async (evalId: number): Promise<void> => {
+    await api.delete(`/generation/evaluations/${evalId}`);
+  },
+
+  getEvalGeneratedImageUrl: (evalId: number, pairId: number): string => {
+    return `/api/generation/evaluations/${evalId}/pairs/${pairId}/generated-file`;
   },
 };
 

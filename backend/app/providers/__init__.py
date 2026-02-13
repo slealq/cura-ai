@@ -8,12 +8,14 @@ from app.core.config import get_settings
 from app.providers.anthropic_provider import (
     AnthropicClusterSummarizer,
     AnthropicDescriber,
+    AnthropicEvaluator,
     AnthropicTagger,
 )
 from app.providers.base import (
     BaseClusterSummarizer,
     BaseDescriber,
     BaseEmbedder,
+    BaseEvaluator,
     BaseGenerator,
     BaseTagger,
     BaseTrainer,
@@ -23,12 +25,14 @@ from app.providers.base import (
     GenerationResult,
     TaggingResult,
     TrainingResult,
+    VisionEvalResult,
 )
 from app.providers.fal_provider import FalGenerator, FalTrainer
 from app.providers.openai_provider import (
     OpenAIClusterSummarizer,
     OpenAIDescriber,
     OpenAIEmbedder,
+    OpenAIEvaluator,
     OpenAITagger,
 )
 
@@ -191,10 +195,32 @@ def get_generator(
         raise ValueError(f"Unknown generator provider: {provider}")
 
 
+def get_evaluator(
+    provider: Literal["openai", "anthropic"] | None = None,
+    db: Session | None = None,
+) -> BaseEvaluator:
+    """Get evaluator instance for the specified provider."""
+    keys, config = _resolve_config(db)
+    provider = provider or config.get("vision_provider") or settings.default_vision_provider
+    if provider == "openai":
+        return OpenAIEvaluator(
+            api_key=keys.get("openai"),
+            model=config.get("openai_vision_model"),
+        )
+    elif provider == "anthropic":
+        return AnthropicEvaluator(
+            api_key=keys.get("anthropic"),
+            model=config.get("anthropic_vision_model"),
+        )
+    else:
+        raise ValueError(f"Unknown evaluator provider: {provider}")
+
+
 __all__ = [
     "BaseTagger",
     "BaseDescriber",
     "BaseEmbedder",
+    "BaseEvaluator",
     "BaseClusterSummarizer",
     "BaseTrainer",
     "BaseGenerator",
@@ -204,10 +230,12 @@ __all__ = [
     "ClusterSummaryResult",
     "TrainingResult",
     "GenerationResult",
+    "VisionEvalResult",
     "get_tagger",
     "get_describer",
     "get_embedder",
     "get_cluster_summarizer",
     "get_trainer",
     "get_generator",
+    "get_evaluator",
 ]

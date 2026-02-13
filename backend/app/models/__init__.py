@@ -5,6 +5,7 @@ from app.models.folder import Folder, FolderImage
 from app.models.generated_image import GeneratedImage, GenerationStatus
 from app.models.image import Image, ImageMetadata, ImageSource, ImageStatus
 from app.models.job import Job, JobStatus, JobType
+from app.models.lora_evaluation import EvaluationPair, EvaluationStatus, LoraEvaluation
 from app.models.lora_model import LoraModel, LoraModelStatus
 from app.models.pipeline_log import LogCategory, LogLevel, PipelineLog
 from app.models.prompt_preset import PromptPreset
@@ -14,6 +15,8 @@ __all__ = [
     "APIKey",
     "APIKeyStatus",
     "APIProvider",
+    "EvaluationPair",
+    "EvaluationStatus",
     "Folder",
     "FolderImage",
     "GeneratedImage",
@@ -28,6 +31,7 @@ __all__ = [
     "Job",
     "JobStatus",
     "JobType",
+    "LoraEvaluation",
     "LoraModel",
     "LoraModelStatus",
     "LogCategory",

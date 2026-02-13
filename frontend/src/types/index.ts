@@ -325,3 +325,71 @@ export interface ProviderModel {
   name: string;
   capabilities: string[];
 }
+
+export interface EvaluationPair {
+  id: number;
+  original_image_id: number | null;
+  original_thumbnail: string | null;
+  original_object_key: string | null;
+  prompt_used: string | null;
+  generated_object_key: string | null;
+  generated_thumbnail_small: string | null;
+  generated_thumbnail_medium: string | null;
+  generated_width: number | null;
+  generated_height: number | null;
+  embedding_similarity: number | null;
+  vision_score: number | null;
+  vision_assessment: string | null;
+  clip_image_score: number | null;
+  clip_text_score: number | null;
+  pair_score: number | null;
+  metrics_detail: {
+    style_fidelity?: number;
+    subject_accuracy?: number;
+    detail_preservation?: number;
+  } | null;
+  status: string;
+  error_message: string | null;
+}
+
+export interface LoraEvaluation {
+  id: number;
+  lora_model_id: number;
+  lora_model_name: string | null;
+  sample_count: number;
+  config: Record<string, unknown> | null;
+  status: string;
+  error_message: string | null;
+  overall_score: number | null;
+  avg_embedding_similarity: number | null;
+  avg_vision_score: number | null;
+  assessment_summary: string | null;
+  aggregate_results: Record<string, unknown> | null;
+  training_config: Record<string, unknown> | null;
+  training_images_count: number;
+  job_id: number | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  pairs: EvaluationPair[];
+}
+
+export interface EvaluationListItem {
+  id: number;
+  lora_model_id: number;
+  sample_count: number;
+  status: string;
+  overall_score: number | null;
+  avg_embedding_similarity: number | null;
+  avg_vision_score: number | null;
+  job_id: number | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface EvaluationListResponse {
+  items: EvaluationListItem[];
+  total: number;
+  skip: number;
+  limit: number;
+}

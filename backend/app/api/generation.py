@@ -1,4 +1,4 @@
-"""Generation API endpoints for LoRA training and image generation."""
+"""Generation API endpoints for LoRA training, image generation, and evaluation."""
 import logging
 from pathlib import Path
 
@@ -11,7 +11,9 @@ from app.core.config import get_settings
 from app.db.base import get_db
 from app.models import Job, JobType, JobStatus
 from app.models.generated_image import GenerationStatus
+from app.models.lora_evaluation import EvaluationStatus
 from app.models.lora_model import LoraModelStatus
+from app.services.evaluation_service import get_evaluation_service
 from app.services.generation_service import get_generation_service
 from app.services.settings_service import get_settings_service
 
@@ -525,3 +527,287 @@ async def delete_generated_image(gen_id: int, db: Session = Depends(get_db)):
     gen_service = get_generation_service(db)
     if not gen_service.delete_generated_image(gen_id):
         raise HTTPException(status_code=404, detail="Generated image not found")
+
+
+# --- Evaluation Schemas ---
+
+
+class StartEvaluationRequest(BaseModel):
+    """Request to start a LoRA model evaluation."""
+
+    sample_count: int = Field(5, ge=1, le=50)
+    metrics_enabled: list[str] = Field(default=["embedding_similarity"])
+    generation_params: dict | None = None
+    vision_eval_provider: str | None = None
+
+
+class EvaluationPairResponse(BaseModel):
+    """Response for a single evaluation pair."""
+
+    id: int
+    original_image_id: int | None
+    original_thumbnail: str | None
+    original_object_key: str | None
+    prompt_used: str | None
+    generated_object_key: str | None
+    generated_thumbnail_small: str | None
+    generated_thumbnail_medium: str | None
+    generated_width: int | None
+    generated_height: int | None
+    embedding_similarity: float | None
+    vision_score: float | None
+    vision_assessment: str | None
+    clip_image_score: float | None
+    clip_text_score: float | None
+    pair_score: float | None
+    metrics_detail: dict | None
+    status: str
+    error_message: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class EvaluationResponse(BaseModel):
+    """Response for a full evaluation with pairs."""
+
+    id: int
+    lora_model_id: int
+    lora_model_name: str | None
+    sample_count: int
+    config: dict | None
+    status: str
+    error_message: str | None
+    overall_score: float | None
+    avg_embedding_similarity: float | None
+    avg_vision_score: float | None
+    assessment_summary: str | None
+    aggregate_results: dict | None
+    training_config: dict | None
+    training_images_count: int
+    job_id: int | None
+    created_at: str
+    started_at: str | None
+    completed_at: str | None
+    pairs: list[EvaluationPairResponse]
+
+    model_config = {"from_attributes": True}
+
+
+class EvaluationListItem(BaseModel):
+    """Evaluation list item (without pairs)."""
+
+    id: int
+    lora_model_id: int
+    sample_count: int
+    status: str
+    overall_score: float | None
+    avg_embedding_similarity: float | None
+    avg_vision_score: float | None
+    job_id: int | None
+    created_at: str
+    completed_at: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class EvaluationListResponse(BaseModel):
+    items: list[EvaluationListItem]
+    total: int
+    skip: int
+    limit: int
+
+
+# --- Evaluation Helpers ---
+
+
+def _pair_to_response(pair) -> EvaluationPairResponse:
+    original_thumb = None
+    original_object_key = None
+    if pair.original_image:
+        if pair.original_image.thumbnail_uri_small:
+            original_thumb = pair.original_image.thumbnail_uri_small
+        original_object_key = pair.original_image.object_key
+
+    return EvaluationPairResponse(
+        id=pair.id,
+        original_image_id=pair.original_image_id,
+        original_thumbnail=original_thumb,
+        original_object_key=original_object_key,
+        prompt_used=pair.prompt_used,
+        generated_object_key=pair.generated_object_key,
+        generated_thumbnail_small=pair.generated_thumbnail_small,
+        generated_thumbnail_medium=pair.generated_thumbnail_medium,
+        generated_width=pair.generated_width,
+        generated_height=pair.generated_height,
+        embedding_similarity=pair.embedding_similarity,
+        vision_score=pair.vision_score,
+        vision_assessment=pair.vision_assessment,
+        clip_image_score=pair.clip_image_score,
+        clip_text_score=pair.clip_text_score,
+        pair_score=pair.pair_score,
+        metrics_detail=pair.metrics_detail,
+        status=pair.status,
+        error_message=pair.error_message,
+    )
+
+
+def _eval_to_response(evaluation) -> EvaluationResponse:
+    lora = evaluation.lora_model
+    return EvaluationResponse(
+        id=evaluation.id,
+        lora_model_id=evaluation.lora_model_id,
+        lora_model_name=lora.name if lora else None,
+        sample_count=evaluation.sample_count,
+        config=evaluation.config,
+        status=evaluation.status.value if isinstance(evaluation.status, EvaluationStatus) else evaluation.status,
+        error_message=evaluation.error_message,
+        overall_score=evaluation.overall_score,
+        avg_embedding_similarity=evaluation.avg_embedding_similarity,
+        avg_vision_score=evaluation.avg_vision_score,
+        assessment_summary=evaluation.assessment_summary,
+        aggregate_results=evaluation.aggregate_results,
+        training_config=lora.training_config if lora else None,
+        training_images_count=lora.training_images_count if lora else 0,
+        job_id=evaluation.job_id,
+        created_at=evaluation.created_at.isoformat(),
+        started_at=evaluation.started_at.isoformat() if evaluation.started_at else None,
+        completed_at=evaluation.completed_at.isoformat() if evaluation.completed_at else None,
+        pairs=[_pair_to_response(p) for p in (evaluation.pairs or [])],
+    )
+
+
+def _eval_to_list_item(evaluation) -> EvaluationListItem:
+    return EvaluationListItem(
+        id=evaluation.id,
+        lora_model_id=evaluation.lora_model_id,
+        sample_count=evaluation.sample_count,
+        status=evaluation.status.value if isinstance(evaluation.status, EvaluationStatus) else evaluation.status,
+        overall_score=evaluation.overall_score,
+        avg_embedding_similarity=evaluation.avg_embedding_similarity,
+        avg_vision_score=evaluation.avg_vision_score,
+        job_id=evaluation.job_id,
+        created_at=evaluation.created_at.isoformat(),
+        completed_at=evaluation.completed_at.isoformat() if evaluation.completed_at else None,
+    )
+
+
+# --- Evaluation Routes ---
+
+
+@router.post("/lora/{lora_id}/evaluate", status_code=201)
+async def start_evaluation(lora_id: int, request: StartEvaluationRequest, db: Session = Depends(get_db)):
+    """Start an evaluation for a LoRA model."""
+    gen_service = get_generation_service(db)
+    lora = gen_service.get_lora_model(lora_id)
+    if not lora:
+        raise HTTPException(status_code=404, detail="LoRA model not found")
+    if lora.status != LoraModelStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="LoRA model is not completed")
+    if not lora.lora_url:
+        raise HTTPException(status_code=400, detail="LoRA model has no trained weights URL")
+
+    # Create job
+    try:
+        job = Job(
+            job_type=JobType.LORA_EVALUATE,
+            status=JobStatus.PENDING,
+            total_items=request.sample_count,
+            parameters={
+                "lora_model_id": lora_id,
+                "sample_count": request.sample_count,
+                "metrics": request.metrics_enabled,
+            },
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to create evaluation job: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create evaluation job: {e}")
+
+    # Create evaluation record
+    eval_service = get_evaluation_service(db)
+    evaluation = eval_service.create_evaluation(
+        lora_model_id=lora_id,
+        sample_count=request.sample_count,
+        config={
+            "metrics_enabled": request.metrics_enabled,
+            "generation_params": request.generation_params or {},
+            "vision_eval_provider": request.vision_eval_provider,
+        },
+        job_id=job.id,
+    )
+
+    # Dispatch Celery task
+    from app.workers.generation_tasks import evaluate_lora as evaluate_task
+    task = evaluate_task.delay(evaluation.id, job.id)
+
+    job.celery_task_id = task.id
+    db.commit()
+
+    return {
+        "status": "evaluation_started",
+        "evaluation_id": evaluation.id,
+        "job_id": job.id,
+    }
+
+
+@router.get("/lora/{lora_id}/evaluations", response_model=EvaluationListResponse)
+async def list_evaluations(
+    lora_id: int,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """List evaluations for a LoRA model."""
+    eval_service = get_evaluation_service(db)
+    items = eval_service.get_evaluations_for_model(lora_id, skip=skip, limit=limit)
+    total = eval_service.count_evaluations(lora_id)
+    return EvaluationListResponse(
+        items=[_eval_to_list_item(e) for e in items],
+        total=total,
+        skip=skip,
+        limit=limit,
+    )
+
+
+@router.get("/evaluations/{eval_id}", response_model=EvaluationResponse)
+async def get_evaluation(eval_id: int, db: Session = Depends(get_db)):
+    """Get evaluation detail with all pairs."""
+    eval_service = get_evaluation_service(db)
+    evaluation = eval_service.get_evaluation(eval_id)
+    if not evaluation:
+        raise HTTPException(status_code=404, detail="Evaluation not found")
+    return _eval_to_response(evaluation)
+
+
+@router.delete("/evaluations/{eval_id}", status_code=204)
+async def delete_evaluation(eval_id: int, db: Session = Depends(get_db)):
+    """Delete an evaluation and its pairs."""
+    eval_service = get_evaluation_service(db)
+    if not eval_service.delete_evaluation(eval_id):
+        raise HTTPException(status_code=404, detail="Evaluation not found")
+
+
+@router.get("/evaluations/{eval_id}/pairs/{pair_id}/generated-file")
+async def serve_eval_generated_image(eval_id: int, pair_id: int, db: Session = Depends(get_db)):
+    """Serve generated image file from an evaluation pair."""
+    from app.models.lora_evaluation import EvaluationPair
+
+    pair = db.query(EvaluationPair).filter(
+        EvaluationPair.id == pair_id,
+        EvaluationPair.evaluation_id == eval_id,
+    ).first()
+    if not pair or not pair.generated_object_key:
+        raise HTTPException(status_code=404, detail="Generated image not found")
+
+    storage_path = Path(settings.local_storage_path) / "generated" / pair.generated_object_key
+    if not storage_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    return FileResponse(
+        str(storage_path),
+        media_type="image/png",
+        filename=pair.generated_object_key,
+    )

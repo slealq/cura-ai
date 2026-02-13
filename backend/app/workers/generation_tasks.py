@@ -1,20 +1,25 @@
-"""Celery tasks for LoRA training and image generation."""
+"""Celery tasks for LoRA training, image generation, and evaluation."""
 import asyncio
 import base64
 import io
 import logging
+import random
 import time
+import uuid
 import zipfile
 from datetime import datetime
 
+import numpy as np
 from sqlalchemy.orm import Session
 
 from app.db.base import SessionLocal
 from app.models import Job, JobStatus, JobType
 from app.models.generated_image import GeneratedImage, GenerationStatus
+from app.models.lora_evaluation import EvaluationStatus
 from app.models.lora_model import LoraModel, LoraModelStatus
 from app.models.pipeline_log import LogCategory, LogLevel
-from app.providers import get_generator, get_trainer
+from app.providers import get_describer, get_embedder, get_evaluator, get_generator, get_trainer
+from app.services.evaluation_service import get_evaluation_service
 from app.services.generation_service import get_generation_service
 from app.services.image_service import get_image_service
 from app.services.log_service import write_log
@@ -514,6 +519,349 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
                 job.status = JobStatus.FAILED
                 job.error_message = err_msg
                 db.commit()
+        raise
+    finally:
+        db.close()
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors."""
+    a_arr = np.array(a)
+    b_arr = np.array(b)
+    dot = np.dot(a_arr, b_arr)
+    norm = np.linalg.norm(a_arr) * np.linalg.norm(b_arr)
+    if norm == 0:
+        return 0.0
+    return float(dot / norm)
+
+
+@celery_app.task(bind=True)
+def evaluate_lora(self, evaluation_id: int, job_id: int | None = None) -> dict:
+    """
+    Evaluate a LoRA model by generating images from training set descriptions
+    and comparing against originals.
+
+    1. Load LoraEvaluation, validate LoRA model
+    2. Sample N random images from source (folder/cluster)
+    3. For each: generate using description, score pair
+    4. Aggregate scores
+    """
+    write_log(
+        category=LogCategory.TASK,
+        message=f"Task evaluate_lora started for evaluation {evaluation_id}",
+        task_name="evaluate_lora",
+        job_id=job_id,
+    )
+    task_start = time.monotonic()
+    db = _get_db()
+    try:
+        _update_job_status(db, job_id, JobStatus.RUNNING)
+
+        eval_service = get_evaluation_service(db)
+        gen_service = get_generation_service(db)
+        image_service = get_image_service(db)
+
+        evaluation = eval_service.get_evaluation(evaluation_id)
+        if not evaluation:
+            return {"status": "error", "message": "Evaluation not found"}
+
+        lora = gen_service.get_lora_model(evaluation.lora_model_id)
+        if not lora:
+            raise Exception("LoRA model not found")
+        if lora.status != LoraModelStatus.COMPLETED or not lora.lora_url:
+            raise Exception("LoRA model is not completed or has no URL")
+
+        # Mark evaluation RUNNING
+        eval_service.update_evaluation_status(evaluation_id, EvaluationStatus.RUNNING)
+
+        config = evaluation.config or {}
+        metrics_enabled = config.get("metrics_enabled", ["embedding_similarity"])
+        gen_params = config.get("generation_params", {})
+        vision_eval_provider = config.get("vision_eval_provider")
+
+        # Load source images from folder/cluster
+        if lora.folder_id:
+            from app.models.folder import FolderImage
+            source_image_ids = [
+                fi.image_id
+                for fi in db.query(FolderImage).filter(FolderImage.folder_id == lora.folder_id).all()
+            ]
+        elif lora.cluster_id:
+            from app.models.cluster import ClusterMembership
+            source_image_ids = [
+                cm.image_id
+                for cm in db.query(ClusterMembership).filter(
+                    ClusterMembership.cluster_id == lora.cluster_id,
+                    ClusterMembership.is_excluded == False,
+                ).all()
+            ]
+        else:
+            raise Exception("LoRA model has no associated folder or cluster")
+
+        # Filter to images with descriptions
+        candidate_images = []
+        for img_id in source_image_ids:
+            image = image_service.get_image(img_id)
+            if image and image.image_metadata and image.image_metadata.description_long:
+                candidate_images.append(image)
+
+        if not candidate_images:
+            raise Exception("No source images with descriptions found")
+
+        # Sample
+        sample_count = min(evaluation.sample_count, len(candidate_images))
+        sampled = random.sample(candidate_images, sample_count)
+
+        # Update job total
+        if job_id:
+            job = db.query(Job).filter(Job.id == job_id).first()
+            if job:
+                job.total_items = sample_count
+                db.commit()
+
+        # Get generator
+        generator = get_generator(db=db, base_model=lora.base_model)
+
+        # Get optional evaluator
+        evaluator = None
+        if "vision_eval" in metrics_enabled:
+            evaluator = get_evaluator(provider=vision_eval_provider, db=db)
+
+        # Get embedder + describer for embedding similarity
+        embedder = None
+        describer = None
+        if "embedding_similarity" in metrics_enabled:
+            embedder = get_embedder(db=db)
+            describer = get_describer(db=db)
+
+        completed_pairs = []
+
+        for idx, image in enumerate(sampled):
+            pair = None
+            try:
+                description = image.image_metadata.description_long
+                prompt = f"{lora.trigger_word}, {description}"
+
+                # Create pair record
+                pair = eval_service.create_pair(
+                    evaluation_id=evaluation_id,
+                    original_image_id=image.id,
+                    prompt_used=prompt,
+                )
+                eval_service.update_pair_status(pair.id, "generating")
+
+                # Generate image
+                gen_width = gen_params.get("width", image.width or 1024)
+                gen_height = gen_params.get("height", image.height or 1024)
+
+                result = _run_async(
+                    generator.generate(
+                        prompt=prompt,
+                        width=gen_width,
+                        height=gen_height,
+                        num_inference_steps=gen_params.get("num_inference_steps", 28),
+                        guidance_scale=gen_params.get("guidance_scale", 3.5),
+                        lora_url=lora.lora_url,
+                        lora_scale=gen_params.get("lora_scale", 1.0),
+                    )
+                )
+
+                # Save generated image
+                object_key = f"eval_{uuid.uuid4().hex}.png"
+                thumbnails = _run_async(
+                    eval_service.save_eval_generated_image(result.image_data, object_key)
+                )
+
+                eval_service.update_pair_generated(
+                    pair.id,
+                    object_key=object_key,
+                    width=result.width,
+                    height=result.height,
+                    thumbnail_small=thumbnails.get("200"),
+                    thumbnail_medium=thumbnails.get("400"),
+                )
+
+                # Score
+                eval_service.update_pair_status(pair.id, "scoring")
+
+                embedding_sim = None
+                vision_score = None
+                vision_assessment = None
+                metrics_detail = None
+
+                # Embedding similarity: describe generated → embed → compare
+                if embedder and describer:
+                    try:
+                        desc_result = _run_async(
+                            describer.describe_image(
+                                result.image_data, "image/png",
+                                description_prompt="Describe this image in detail for comparison purposes. Return JSON with a 'description' field.",
+                            )
+                        )
+                        gen_text = desc_result.description
+
+                        embed_result = _run_async(embedder.embed_text(gen_text))
+                        gen_embedding = embed_result.embedding
+
+                        original_embedding = image.image_metadata.embedding
+                        if original_embedding is not None and len(original_embedding) > 0:
+                            embedding_sim = _cosine_similarity(
+                                list(original_embedding), gen_embedding
+                            )
+                            # Normalize to 0-10 scale (cosine sim typically 0.3-0.9 range)
+                            embedding_sim = max(0, min(10, embedding_sim * 10))
+                    except Exception as e:
+                        logger.warning(f"Embedding similarity failed for pair {pair.id}: {e}")
+
+                # Vision AI evaluation
+                if evaluator:
+                    try:
+                        original_data = _run_async(image_service.get_image_data(image.id))
+                        if original_data:
+                            eval_result = _run_async(
+                                evaluator.evaluate_pair(
+                                    original_image_data=original_data,
+                                    generated_image_data=result.image_data,
+                                    original_mime=image.mime_type or "image/jpeg",
+                                    generated_mime="image/png",
+                                    prompt_used=prompt,
+                                )
+                            )
+                            vision_score = eval_result.overall
+                            vision_assessment = eval_result.assessment
+                            metrics_detail = {
+                                "style_fidelity": eval_result.style_fidelity,
+                                "subject_accuracy": eval_result.subject_accuracy,
+                                "detail_preservation": eval_result.detail_preservation,
+                            }
+                    except Exception as e:
+                        logger.warning(f"Vision eval failed for pair {pair.id}: {e}")
+
+                # Compute combined pair_score
+                scores = []
+                weights = []
+                if vision_score is not None:
+                    scores.append(vision_score)
+                    weights.append(0.7)
+                if embedding_sim is not None:
+                    scores.append(embedding_sim)
+                    weights.append(0.3)
+
+                pair_score = None
+                if scores:
+                    total_weight = sum(weights)
+                    pair_score = sum(s * w for s, w in zip(scores, weights)) / total_weight
+
+                eval_service.update_pair_scores(
+                    pair.id,
+                    embedding_similarity=embedding_sim,
+                    vision_score=vision_score,
+                    vision_assessment=vision_assessment,
+                    pair_score=pair_score,
+                    metrics_detail=metrics_detail,
+                )
+                eval_service.update_pair_status(pair.id, "completed")
+                completed_pairs.append(pair.id)
+
+                # Update job progress
+                if job_id:
+                    job = db.query(Job).filter(Job.id == job_id).first()
+                    if job:
+                        job.progress = idx + 1
+                        db.commit()
+
+            except Exception as e:
+                err_msg = _unwrap_error(e)
+                logger.error(f"Failed to process pair for image {image.id}: {err_msg}")
+                if pair:
+                    eval_service.update_pair_status(pair.id, "failed", err_msg)
+
+        # Aggregate scores
+        db.expire_all()
+        evaluation = eval_service.get_evaluation(evaluation_id)
+        pairs = evaluation.pairs if evaluation else []
+
+        completed = [p for p in pairs if p.status == "completed"]
+
+        avg_embedding = None
+        avg_vision = None
+        overall = None
+        assessments = []
+
+        if completed:
+            emb_scores = [p.embedding_similarity for p in completed if p.embedding_similarity is not None]
+            vis_scores = [p.vision_score for p in completed if p.vision_score is not None]
+            pair_scores = [p.pair_score for p in completed if p.pair_score is not None]
+
+            if emb_scores:
+                avg_embedding = sum(emb_scores) / len(emb_scores)
+            if vis_scores:
+                avg_vision = sum(vis_scores) / len(vis_scores)
+            if pair_scores:
+                overall = sum(pair_scores) / len(pair_scores)
+
+            assessments = [p.vision_assessment for p in completed if p.vision_assessment]
+
+        assessment_summary = " | ".join(assessments) if assessments else None
+
+        aggregate_results = {
+            "total_pairs": len(pairs),
+            "completed_pairs": len(completed),
+            "failed_pairs": len([p for p in pairs if p.status == "failed"]),
+            "score_weights": {"vision": 0.7, "embedding": 0.3},
+        }
+
+        eval_service.update_evaluation_status(
+            evaluation_id,
+            EvaluationStatus.COMPLETED,
+            overall_score=overall,
+            avg_embedding_similarity=avg_embedding,
+            avg_vision_score=avg_vision,
+            assessment_summary=assessment_summary,
+            aggregate_results=aggregate_results,
+        )
+
+        _update_job_status(
+            db, job_id, JobStatus.COMPLETED,
+            progress=sample_count,
+            result={
+                "overall_score": overall,
+                "completed_pairs": len(completed),
+                "failed_pairs": len([p for p in pairs if p.status == "failed"]),
+            },
+        )
+
+        elapsed = (time.monotonic() - task_start) * 1000
+        write_log(
+            category=LogCategory.TASK,
+            message=f"Task evaluate_lora completed for evaluation {evaluation_id} in {elapsed:.0f}ms (score={overall})",
+            task_name="evaluate_lora",
+            job_id=job_id,
+            duration_ms=round(elapsed, 1),
+        )
+        return {
+            "status": "success",
+            "evaluation_id": evaluation_id,
+            "overall_score": overall,
+            "completed_pairs": len(completed),
+        }
+
+    except Exception as e:
+        elapsed = (time.monotonic() - task_start) * 1000
+        err_msg = _unwrap_error(e)
+        logger.error(f"Failed to evaluate LoRA (evaluation {evaluation_id}): {err_msg}")
+        write_log(
+            category=LogCategory.TASK,
+            message=f"Task evaluate_lora failed for evaluation {evaluation_id}: {err_msg}",
+            level=LogLevel.ERROR,
+            task_name="evaluate_lora",
+            job_id=job_id,
+            duration_ms=round(elapsed, 1),
+            extra={"error": err_msg},
+        )
+        eval_service = get_evaluation_service(db)
+        eval_service.update_evaluation_status(evaluation_id, EvaluationStatus.FAILED, error_message=err_msg)
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
         raise
     finally:
         db.close()

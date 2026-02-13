@@ -14,6 +14,7 @@ import {
   CheckCircle,
   XCircle,
   Archive,
+  FlaskConical,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
@@ -129,14 +130,24 @@ function LoraModelCard({
           </span>
           <div className="flex items-center gap-1">
             {model.status === 'completed' && (
-              <Link
-                href={`/generate?lora=${model.id}`}
-                onClick={(e) => e.stopPropagation()}
-                className="p-1.5 hover:bg-muted rounded-lg transition-colors text-purple-600"
-                title="Generate with this LoRA"
-              >
-                <Sparkles className="h-4 w-4" />
-              </Link>
+              <>
+                <Link
+                  href={`/models/${model.id}/evaluate`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="p-1.5 hover:bg-muted rounded-lg transition-colors text-amber-600"
+                  title="Evaluate model quality"
+                >
+                  <FlaskConical className="h-4 w-4" />
+                </Link>
+                <Link
+                  href={`/generate?lora=${model.id}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="p-1.5 hover:bg-muted rounded-lg transition-colors text-purple-600"
+                  title="Generate with this LoRA"
+                >
+                  <Sparkles className="h-4 w-4" />
+                </Link>
+              </>
             )}
             <button
               onClick={(e) => {
@@ -343,11 +354,18 @@ export default function ModelsPage() {
               {selectedModel.status === 'completed' && (
                 <div className="flex gap-2 pt-2">
                   <Link
+                    href={`/models/${selectedModel.id}/evaluate`}
+                    className="flex items-center gap-2 px-4 py-2 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors"
+                  >
+                    <FlaskConical className="h-4 w-4" />
+                    Evaluate
+                  </Link>
+                  <Link
                     href={`/generate?lora=${selectedModel.id}`}
                     className="flex items-center gap-2 px-4 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
                   >
                     <Sparkles className="h-4 w-4" />
-                    Generate with this LoRA
+                    Generate
                   </Link>
                 </div>
               )}
