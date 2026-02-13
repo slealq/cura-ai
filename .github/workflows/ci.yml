@@ -9,6 +9,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  guard:
+    name: PR Target Guard
+    runs-on: ubuntu-latest
+    if: github.base_ref == 'master'
+    steps:
+      - name: Block PRs to master
+        run: |
+          echo "::error::PRs to master are not allowed. Use the 'Promote to PROD' workflow to sync dev → master."
+          echo ""
+          echo "To promote dev to master, go to:"
+          echo "  Actions → Promote to PROD → Run workflow"
+          exit 1
+
   backend:
     name: Backend Lint
     runs-on: ubuntu-latest

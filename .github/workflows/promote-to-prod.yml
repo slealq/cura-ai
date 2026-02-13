@@ -1,0 +1,61 @@
+name: Promote to PROD
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: promote-prod
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    name: Fast-forward master to dev
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify dev is ahead of master
+        run: |
+          git fetch origin master dev
+          DEV_SHA=$(git rev-parse origin/dev)
+          MASTER_SHA=$(git rev-parse origin/master)
+
+          echo "dev:    $DEV_SHA"
+          echo "master: $MASTER_SHA"
+
+          if [ "$DEV_SHA" = "$MASTER_SHA" ]; then
+            echo "::notice::master is already up to date with dev. Nothing to promote."
+            exit 0
+          fi
+
+          # Check that master is an ancestor of dev (fast-forward possible)
+          if ! git merge-base --is-ancestor origin/master origin/dev; then
+            echo "::error::master has diverged from dev. Manual intervention required."
+            exit 1
+          fi
+
+          COMMITS=$(git rev-list --count origin/master..origin/dev)
+          echo "Promoting $COMMITS commit(s) from dev to master."
+          echo ""
+          git log --oneline origin/master..origin/dev
+
+      - name: Fast-forward master to dev
+        run: |
+          DEV_SHA=$(git rev-parse origin/dev)
+          MASTER_SHA=$(git rev-parse origin/master)
+
+          if [ "$DEV_SHA" = "$MASTER_SHA" ]; then
+            echo "Already up to date."
+            exit 0
+          fi
+
+          git checkout master
+          git merge --ff-only origin/dev
+          git push origin master
