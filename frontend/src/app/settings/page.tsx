@@ -1430,6 +1430,73 @@ function ProviderModelSettings() {
           </div>
         </div>
 
+        {/* Token Limits */}
+        <div className="border border-border rounded-lg p-4">
+          <h3 className="flex items-center text-sm font-medium mb-3">
+            Token Limits
+            <Hint text="Maximum number of output tokens the AI model can generate for each operation. Increase if responses are being cut off; decrease to save costs." />
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="flex items-center text-xs text-muted-foreground mb-1">
+                Tagging: {draft.max_tokens_tagging}
+                <Hint text="Token limit for image tagging responses. Default: 1000." />
+              </label>
+              <input
+                type="range"
+                min={100}
+                max={4000}
+                step={100}
+                value={draft.max_tokens_tagging}
+                onChange={(e) => setDraft({ ...draft, max_tokens_tagging: parseInt(e.target.value) })}
+                className="w-full"
+              />
+              <div className="flex justify-between text-[10px] text-muted-foreground">
+                <span>100</span>
+                <span>4000</span>
+              </div>
+            </div>
+            <div>
+              <label className="flex items-center text-xs text-muted-foreground mb-1">
+                Description: {draft.max_tokens_description}
+                <Hint text="Token limit for image description responses. Default: 3000." />
+              </label>
+              <input
+                type="range"
+                min={500}
+                max={8000}
+                step={100}
+                value={draft.max_tokens_description}
+                onChange={(e) => setDraft({ ...draft, max_tokens_description: parseInt(e.target.value) })}
+                className="w-full"
+              />
+              <div className="flex justify-between text-[10px] text-muted-foreground">
+                <span>500</span>
+                <span>8000</span>
+              </div>
+            </div>
+            <div>
+              <label className="flex items-center text-xs text-muted-foreground mb-1">
+                Summarization: {draft.max_tokens_summarization}
+                <Hint text="Token limit for cluster summarization responses. Default: 500." />
+              </label>
+              <input
+                type="range"
+                min={100}
+                max={2000}
+                step={50}
+                value={draft.max_tokens_summarization}
+                onChange={(e) => setDraft({ ...draft, max_tokens_summarization: parseInt(e.target.value) })}
+                className="w-full"
+              />
+              <div className="flex justify-between text-[10px] text-muted-foreground">
+                <span>100</span>
+                <span>2000</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div className="flex items-center gap-2 pt-2">
           <button
             onClick={() => saveMutation.mutate(draft)}

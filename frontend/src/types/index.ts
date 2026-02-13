@@ -314,6 +314,9 @@ export interface ProviderConfig {
   openai_vision_model: string;
   openai_embedding_model: string;
   anthropic_vision_model: string;
+  max_tokens_tagging: number;
+  max_tokens_description: number;
+  max_tokens_summarization: number;
 }
 
 export interface ProviderModel {

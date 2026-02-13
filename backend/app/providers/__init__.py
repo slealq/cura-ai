@@ -66,22 +66,34 @@ def _resolve_config(db: Session | None):
         return {}, {}
 
 
+def _token_config(config: dict) -> dict:
+    """Build token limits dict from provider config."""
+    return {
+        "tag": config.get("max_tokens_tagging", 1000),
+        "describe": config.get("max_tokens_description", 3000),
+        "summarize": config.get("max_tokens_summarization", 500),
+    }
+
+
 def get_tagger(
     provider: Literal["openai", "anthropic"] | None = None,
     db: Session | None = None,
 ) -> BaseTagger:
     """Get tagger instance for the specified provider."""
     keys, config = _resolve_config(db)
+    max_tokens = _token_config(config)
     provider = provider or config.get("vision_provider") or settings.default_vision_provider
     if provider == "openai":
         return OpenAITagger(
             api_key=keys.get("openai"),
             model=config.get("openai_vision_model"),
+            max_tokens=max_tokens,
         )
     elif provider == "anthropic":
         return AnthropicTagger(
             api_key=keys.get("anthropic"),
             model=config.get("anthropic_vision_model"),
+            max_tokens=max_tokens,
         )
     else:
         raise ValueError(f"Unknown tagger provider: {provider}")
@@ -93,16 +105,19 @@ def get_describer(
 ) -> BaseDescriber:
     """Get describer instance for the specified provider."""
     keys, config = _resolve_config(db)
+    max_tokens = _token_config(config)
     provider = provider or config.get("vision_provider") or settings.default_vision_provider
     if provider == "openai":
         return OpenAIDescriber(
             api_key=keys.get("openai"),
             model=config.get("openai_vision_model"),
+            max_tokens=max_tokens,
         )
     elif provider == "anthropic":
         return AnthropicDescriber(
             api_key=keys.get("anthropic"),
             model=config.get("anthropic_vision_model"),
+            max_tokens=max_tokens,
         )
     else:
         raise ValueError(f"Unknown describer provider: {provider}")
@@ -130,16 +145,19 @@ def get_cluster_summarizer(
 ) -> BaseClusterSummarizer:
     """Get cluster summarizer instance for the specified provider."""
     keys, config = _resolve_config(db)
+    max_tokens = _token_config(config)
     provider = provider or config.get("vision_provider") or settings.default_vision_provider
     if provider == "openai":
         return OpenAIClusterSummarizer(
             api_key=keys.get("openai"),
             model=config.get("openai_vision_model"),
+            max_tokens=max_tokens,
         )
     elif provider == "anthropic":
         return AnthropicClusterSummarizer(
             api_key=keys.get("anthropic"),
             model=config.get("anthropic_vision_model"),
+            max_tokens=max_tokens,
         )
     else:
         raise ValueError(f"Unknown cluster summarizer provider: {provider}")

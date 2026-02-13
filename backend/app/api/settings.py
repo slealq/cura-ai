@@ -113,6 +113,9 @@ class ProviderConfigResponse(BaseModel):
     openai_vision_model: str
     openai_embedding_model: str
     anthropic_vision_model: str
+    max_tokens_tagging: int
+    max_tokens_description: int
+    max_tokens_summarization: int
 
 
 class ProviderConfigUpdateRequest(BaseModel):
@@ -123,6 +126,9 @@ class ProviderConfigUpdateRequest(BaseModel):
     openai_vision_model: str | None = None
     openai_embedding_model: str | None = None
     anthropic_vision_model: str | None = None
+    max_tokens_tagging: int | None = None
+    max_tokens_description: int | None = None
+    max_tokens_summarization: int | None = None
 
 
 class ProviderModelInfo(BaseModel):
@@ -479,55 +485,51 @@ async def get_provider_models(provider: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
 
+CURATED_OPENAI_VISION_MODELS = [
+    ProviderModelInfo(id="gpt-4o", name="GPT-4o", capabilities=["vision", "chat"]),
+    ProviderModelInfo(id="gpt-4o-mini", name="GPT-4o Mini", capabilities=["vision", "chat"]),
+    ProviderModelInfo(id="gpt-4.1", name="GPT-4.1", capabilities=["vision", "chat"]),
+    ProviderModelInfo(id="gpt-5", name="GPT-5", capabilities=["vision", "chat"]),
+    ProviderModelInfo(id="gpt-5.1", name="GPT-5.1", capabilities=["vision", "chat"]),
+    ProviderModelInfo(id="gpt-5.2", name="GPT-5.2", capabilities=["vision", "chat"]),
+]
+
+FALLBACK_EMBEDDING_MODELS = [
+    ProviderModelInfo(id="text-embedding-3-small", name="Text Embedding 3 Small", capabilities=["embedding"]),
+    ProviderModelInfo(id="text-embedding-3-large", name="Text Embedding 3 Large", capabilities=["embedding"]),
+]
+
+
 async def _get_openai_models(db: Session) -> list[ProviderModelInfo]:
-    """Fetch available OpenAI models via API."""
+    """Return curated vision models + dynamically discovered embedding models."""
     from app.services.api_key_service import get_api_key_service as get_aks
 
     key_service = get_aks(db)
     api_key = key_service.resolve_key(APIProvider.OPENAI)
     if not api_key:
-        # Return known defaults if no key available
-        return [
-            ProviderModelInfo(id="gpt-4o", name="GPT-4o", capabilities=["vision", "chat"]),
-            ProviderModelInfo(id="gpt-4o-mini", name="GPT-4o Mini", capabilities=["vision", "chat"]),
-            ProviderModelInfo(id="text-embedding-3-small", name="Text Embedding 3 Small", capabilities=["embedding"]),
-            ProviderModelInfo(id="text-embedding-3-large", name="Text Embedding 3 Large", capabilities=["embedding"]),
-        ]
+        return CURATED_OPENAI_VISION_MODELS + FALLBACK_EMBEDDING_MODELS
 
+    # Dynamically discover embedding models
+    embedding_models: list[ProviderModelInfo] = []
     try:
         client = AsyncOpenAI(api_key=api_key)
         models_resp = await client.models.list()
-        result = []
         for m in models_resp.data:
-            mid = m.id
-            # Vision-capable models
-            if any(mid.startswith(p) for p in ("gpt-4o", "gpt-4.1", "gpt-4.5", "gpt-5", "chatgpt-4o")):
-                if "audio" in mid or "realtime" in mid or "transcribe" in mid or "tts" in mid:
-                    continue
-                caps = ["vision", "chat"]
-                name = mid.replace("-", " ").title()
-                result.append(ProviderModelInfo(id=mid, name=name, capabilities=caps))
-            # Embedding models
-            elif mid.startswith("text-embedding-"):
-                result.append(ProviderModelInfo(
-                    id=mid,
-                    name=mid.replace("-", " ").title(),
+            if m.id.startswith("text-embedding-"):
+                embedding_models.append(ProviderModelInfo(
+                    id=m.id,
+                    name=m.id.replace("-", " ").title(),
                     capabilities=["embedding"],
                 ))
-        # Sort: vision models first, then embedding
-        result.sort(key=lambda x: (0 if "vision" in x.capabilities else 1, x.id))
-        return result if result else [
-            ProviderModelInfo(id="gpt-4o", name="GPT-4o", capabilities=["vision", "chat"]),
-            ProviderModelInfo(id="text-embedding-3-small", name="Text Embedding 3 Small", capabilities=["embedding"]),
-        ]
+        embedding_models.sort(key=lambda x: x.id)
     except Exception as e:
-        logger.warning(f"Failed to fetch OpenAI models: {e}")
-        return [
-            ProviderModelInfo(id="gpt-4o", name="GPT-4o", capabilities=["vision", "chat"]),
-            ProviderModelInfo(id="gpt-4o-mini", name="GPT-4o Mini", capabilities=["vision", "chat"]),
-            ProviderModelInfo(id="text-embedding-3-small", name="Text Embedding 3 Small", capabilities=["embedding"]),
-            ProviderModelInfo(id="text-embedding-3-large", name="Text Embedding 3 Large", capabilities=["embedding"]),
-        ]
+        logger.warning(f"Failed to fetch OpenAI embedding models: {e}")
+        embedding_models = list(FALLBACK_EMBEDDING_MODELS)
+
+    if not embedding_models:
+        embedding_models = list(FALLBACK_EMBEDDING_MODELS)
+
+    return CURATED_OPENAI_VISION_MODELS + embedding_models
 
 
 def _get_anthropic_models() -> list[ProviderModelInfo]:

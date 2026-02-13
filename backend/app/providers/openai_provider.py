@@ -26,6 +26,17 @@ from app.providers.base import (
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+
+def _token_limit_param(model: str, limit: int) -> dict:
+    """Return the correct token limit kwarg for the model.
+
+    Newer OpenAI models (gpt-5*, gpt-4.1*, chatgpt-4o*) require
+    ``max_completion_tokens`` instead of the legacy ``max_tokens``.
+    """
+    if any(model.startswith(p) for p in ("gpt-5", "gpt-4.1", "chatgpt-4o")):
+        return {"max_completion_tokens": limit}
+    return {"max_tokens": limit}
+
 # Prompt version for reproducibility
 TAGGING_PROMPT_VERSION = "v3.0.0"
 DESCRIPTION_PROMPT_VERSION = "v3.0.0"
@@ -56,9 +67,10 @@ Return as JSON:
 class OpenAITagger(BaseTagger):
     """OpenAI vision-based image tagger."""
 
-    def __init__(self, api_key: str | None = None, model: str | None = None):
+    def __init__(self, api_key: str | None = None, model: str | None = None, max_tokens: dict | None = None):
         self.client = AsyncOpenAI(api_key=api_key or settings.openai_api_key)
         self.model = model or settings.openai_vision_model
+        self.token_limit = (max_tokens or {}).get("tag", 1000)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10),
            retry=retry_if_not_exception_type(AIContentError))
@@ -90,7 +102,7 @@ class OpenAITagger(BaseTagger):
                         ],
                     }
                 ],
-                max_tokens=1000,
+                **_token_limit_param(self.model, self.token_limit),
                 response_format={"type": "json_object"},
             )
             elapsed = (time.monotonic() - start) * 1000
@@ -162,9 +174,10 @@ class OpenAITagger(BaseTagger):
 class OpenAIDescriber(BaseDescriber):
     """OpenAI vision-based image describer."""
 
-    def __init__(self, api_key: str | None = None, model: str | None = None):
+    def __init__(self, api_key: str | None = None, model: str | None = None, max_tokens: dict | None = None):
         self.client = AsyncOpenAI(api_key=api_key or settings.openai_api_key)
         self.model = model or settings.openai_vision_model
+        self.token_limit = (max_tokens or {}).get("describe", 3000)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10),
            retry=retry_if_not_exception_type(AIContentError))
@@ -196,7 +209,7 @@ class OpenAIDescriber(BaseDescriber):
                         ],
                     }
                 ],
-                max_tokens=3000,
+                **_token_limit_param(self.model, self.token_limit),
                 response_format={"type": "json_object"},
             )
             elapsed = (time.monotonic() - start) * 1000
@@ -323,9 +336,10 @@ class OpenAIEmbedder(BaseEmbedder):
 class OpenAIClusterSummarizer(BaseClusterSummarizer):
     """OpenAI-based cluster summarizer."""
 
-    def __init__(self, api_key: str | None = None, model: str | None = None):
+    def __init__(self, api_key: str | None = None, model: str | None = None, max_tokens: dict | None = None):
         self.client = AsyncOpenAI(api_key=api_key or settings.openai_api_key)
         self.model = model or settings.openai_vision_model
+        self.token_limit = (max_tokens or {}).get("summarize", 500)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def summarize_cluster(
@@ -352,7 +366,7 @@ class OpenAIClusterSummarizer(BaseClusterSummarizer):
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=500,
+                **_token_limit_param(self.model, self.token_limit),
                 response_format={"type": "json_object"},
             )
             elapsed = (time.monotonic() - start) * 1000

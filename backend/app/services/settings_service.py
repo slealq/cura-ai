@@ -26,6 +26,9 @@ DEFAULT_PROVIDER_CONFIG = {
     "openai_vision_model": "gpt-4o",
     "openai_embedding_model": "text-embedding-3-small",
     "anthropic_vision_model": "claude-sonnet-4-20250514",
+    "max_tokens_tagging": 1000,
+    "max_tokens_description": 3000,
+    "max_tokens_summarization": 500,
 }
 
 DEFAULT_CLUSTERING_CONFIG = {

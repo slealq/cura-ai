@@ -61,9 +61,10 @@ def extract_json(text: str) -> dict:
 class AnthropicTagger(BaseTagger):
     """Anthropic Claude vision-based image tagger."""
 
-    def __init__(self, api_key: str | None = None, model: str | None = None):
+    def __init__(self, api_key: str | None = None, model: str | None = None, max_tokens: dict | None = None):
         self.client = AsyncAnthropic(api_key=api_key or settings.anthropic_api_key)
         self.model = model or settings.anthropic_vision_model
+        self.token_limit = (max_tokens or {}).get("tag", 1000)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10),
            retry=retry_if_not_exception_type(AIContentError))
@@ -85,7 +86,7 @@ class AnthropicTagger(BaseTagger):
         try:
             response = await self.client.messages.create(
                 model=self.model,
-                max_tokens=1000,
+                max_tokens=self.token_limit,
                 messages=[
                     {
                         "role": "user",
@@ -170,9 +171,10 @@ class AnthropicTagger(BaseTagger):
 class AnthropicDescriber(BaseDescriber):
     """Anthropic Claude vision-based image describer."""
 
-    def __init__(self, api_key: str | None = None, model: str | None = None):
+    def __init__(self, api_key: str | None = None, model: str | None = None, max_tokens: dict | None = None):
         self.client = AsyncAnthropic(api_key=api_key or settings.anthropic_api_key)
         self.model = model or settings.anthropic_vision_model
+        self.token_limit = (max_tokens or {}).get("describe", 3000)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10),
            retry=retry_if_not_exception_type(AIContentError))
@@ -193,7 +195,7 @@ class AnthropicDescriber(BaseDescriber):
         try:
             response = await self.client.messages.create(
                 model=self.model,
-                max_tokens=3000,
+                max_tokens=self.token_limit,
                 messages=[
                     {
                         "role": "user",
@@ -263,9 +265,10 @@ class AnthropicDescriber(BaseDescriber):
 class AnthropicClusterSummarizer(BaseClusterSummarizer):
     """Anthropic Claude-based cluster summarizer."""
 
-    def __init__(self, api_key: str | None = None, model: str | None = None):
+    def __init__(self, api_key: str | None = None, model: str | None = None, max_tokens: dict | None = None):
         self.client = AsyncAnthropic(api_key=api_key or settings.anthropic_api_key)
         self.model = model or settings.anthropic_vision_model
+        self.token_limit = (max_tokens or {}).get("summarize", 500)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def summarize_cluster(
@@ -291,7 +294,7 @@ class AnthropicClusterSummarizer(BaseClusterSummarizer):
         try:
             response = await self.client.messages.create(
                 model=self.model,
-                max_tokens=500,
+                max_tokens=self.token_limit,
                 messages=[{"role": "user", "content": prompt}],
             )
             elapsed = (time.monotonic() - start) * 1000
