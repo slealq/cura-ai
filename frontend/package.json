@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:cloud": "NEXT_PUBLIC_API_URL=https://cae-imggen-dev-backend.ambitioussand-1e60af3e.eastus.azurecontainerapps.io NEXT_PUBLIC_ENV_LABEL=dev-backend next dev -p 3001",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"

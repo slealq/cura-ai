@@ -17,6 +17,15 @@ import {
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 
+const ENV_LABEL = process.env.NEXT_PUBLIC_ENV_LABEL || 'local';
+
+const ENV_BADGE: Record<string, { label: string; color: string } | null> = {
+  local: { label: 'Local', color: 'blue' },
+  'dev-backend': { label: 'Local w/DEV Backend', color: 'amber' },
+  dev: { label: 'DEV', color: 'amber' },
+  prod: null,
+};
+
 const navigation = [
   { name: 'Upload', href: '/upload', icon: Upload },
   { name: 'Folders', href: '/images', icon: FolderOpen },
@@ -39,7 +48,23 @@ export default function Sidebar() {
           <Folder className="h-8 w-8 text-primary" />
           <div>
             <h1 className="font-semibold text-lg">Cura.ai</h1>
-            <p className="text-xs text-muted-foreground">Image Intelligence</p>
+            <p className="text-xs text-muted-foreground">
+              Image Intelligence
+            </p>
+            {ENV_BADGE[ENV_LABEL] && (
+              <span className={cn(
+                'inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider border',
+                ENV_BADGE[ENV_LABEL]!.color === 'blue'
+                  ? 'bg-blue-500/15 text-blue-500 border-blue-500/25'
+                  : 'bg-amber-500/15 text-amber-500 border-amber-500/25',
+              )}>
+                <span className={cn(
+                  'h-1.5 w-1.5 rounded-full',
+                  ENV_BADGE[ENV_LABEL]!.color === 'blue' ? 'bg-blue-500' : 'bg-amber-500 animate-pulse',
+                )} />
+                {ENV_BADGE[ENV_LABEL]!.label}
+              </span>
+            )}
           </div>
         </Link>
       </div>

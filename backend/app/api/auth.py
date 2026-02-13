@@ -48,10 +48,15 @@ class UserResponse(BaseModel):
     role: str
     is_active: bool
     is_verified: bool
+    sync_enabled: bool
     created_at: str
     last_login_at: str | None
 
     model_config = {"from_attributes": True}
+
+
+class SyncToggleRequest(BaseModel):
+    sync_enabled: bool
 
 
 class RegisterRequest(BaseModel):
@@ -218,6 +223,36 @@ async def create_user(
     return _user_to_response(user)
 
 
+@router.get("/users", response_model=list[UserResponse])
+async def list_users(
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """List all users (admin only)."""
+    users = db.query(User).order_by(User.id).all()
+    return [_user_to_response(u) for u in users]
+
+
+@router.patch("/users/{user_id}/sync", response_model=UserResponse)
+async def toggle_user_sync(
+    user_id: int,
+    request: SyncToggleRequest,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Toggle sync_enabled for a user (admin only)."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    user.sync_enabled = request.sync_enabled
+    db.commit()
+    db.refresh(user)
+    return _user_to_response(user)
+
+
 def _user_to_response(user: User) -> UserResponse:
     return UserResponse(
         id=user.id,
@@ -226,6 +261,7 @@ def _user_to_response(user: User) -> UserResponse:
         role=user.role.value if hasattr(user.role, 'value') else user.role,
         is_active=user.is_active,
         is_verified=user.is_verified,
+        sync_enabled=user.sync_enabled,
         created_at=user.created_at.isoformat(),
         last_login_at=user.last_login_at.isoformat() if user.last_login_at else None,
     )

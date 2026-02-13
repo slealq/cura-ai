@@ -6,6 +6,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Image Model Generator - a multi-user full-stack app for AI-powered image tagging, description, clustering, semantic search, LoRA model training, and image generation. Images are processed through a pipeline: ingest → tag → describe → embed → cluster → summarize. Trained LoRA models can be evaluated against source images for quality measurement. All data is isolated per user via `user_id` foreign keys on every table.
 
+## Environments
+
+Four environments exist, each with a UI badge in the sidebar (except PROD):
+
+| Environment | Frontend | Backend | UI Badge | How to run |
+|---|---|---|---|---|
+| **Local** | Docker (localhost:3000) | Docker (localhost:8000) | Blue "Local" | `docker compose up -d` |
+| **Local w/DEV Backend** | Local dev (localhost:3001) | Azure DEV cloud | Amber "Local w/DEV Backend" | `cd frontend && npm run dev:cloud` |
+| **DEV** | Azure Static Web App | Azure Container Apps | Amber "DEV" | Push to `dev` branch (CI/CD) |
+| **PROD** | Azure Static Web App | Azure Container Apps | None | Manual dispatch (CI/CD) |
+
+The badge is controlled by `NEXT_PUBLIC_ENV_LABEL` env var (`local`, `dev-backend`, `dev`, `prod`).
+
+### Service URLs
+
+| Environment | Frontend | Backend API | API Docs |
+|---|---|---|---|
+| Local | http://localhost:3000 | http://localhost:8000 | http://localhost:8000/api/docs |
+| Local w/DEV Backend | http://localhost:3001 | https://cae-imggen-dev-backend.ambitioussand-1e60af3e.eastus.azurecontainerapps.io | Same + `/api/docs` |
+| DEV | https://victorious-mushroom-01a2cc60f.4.azurestaticapps.net | Same as above | Same + `/api/docs` |
+| PROD | Not yet provisioned | Not yet provisioned | — |
+
+---
+
 ## Deploying Changes
 
 ### Local (Docker Compose)
@@ -65,52 +89,100 @@ Image Model Generator - a multi-user full-stack app for AI-powered image tagging
 
 | What changed | What to rebuild |
 |---|---|
-| Backend Python code only | `docker compose build backend celery-worker celery-worker-clustering celery-generation` |
+| Backend Python code only | `docker compose build backend celery-worker celery-worker-clustering celery-worker-generation` |
 | Frontend code only | `docker compose build frontend` |
 | Both backend + frontend | `docker compose build` |
 | `requirements.txt` or `package.json` | `docker compose build --no-cache` |
 | New Alembic migration added | Rebuild backend, then `docker compose exec backend alembic upgrade head` |
 
-### Cloud (Azure DEV)
+#### Running Local w/DEV Backend
 
-The DEV environment runs on Azure. To deploy backend changes:
+Run the frontend locally against the Azure DEV backend on port 3001 (can run simultaneously with the Docker frontend on 3000):
 
 ```bash
-# Build for linux/amd64 (required — Apple Silicon builds arm64 by default)
+cd frontend && npm run dev:cloud
+```
+
+This injects `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_ENV_LABEL=dev-backend` inline — no `.env.local` changes needed.
+
+### Deploying to DEV (Azure)
+
+#### Automated (CI/CD) — recommended
+
+Push to the `dev` branch. The `deploy-dev.yml` workflow will:
+1. Build backend Docker image and push to ACR (tagged `:dev`)
+2. Build frontend with DEV backend URL, deploy to Azure Static Web App
+3. Update all 4 Container Apps with the new image
+4. Run Alembic migrations via `az containerapp exec`
+
+**Required GitHub Secrets:** `ACR_LOGIN_SERVER`, `ACR_USERNAME`, `ACR_PASSWORD`, `DEV_BACKEND_URL`, `DEV_SWA_TOKEN`, `DEV_RESOURCE_GROUP`, `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`
+
+**Note:** The workflow references Container App names `ca-backend-dev`, `ca-celery-worker-dev`, etc. These must match the actual Terraform-provisioned names (currently `cae-imggen-dev-backend`, `cae-imggen-dev-celery-worker`, etc.). Update the workflow or Terraform if they diverge.
+
+#### Manual (from local machine)
+
+```bash
+# 1. Build for linux/amd64 (required — Apple Silicon builds arm64 by default)
 docker build --platform linux/amd64 -t acrimggen.azurecr.io/imggen-backend:latest backend/
 
-# Push to Azure Container Registry
+# 2. Push to Azure Container Registry
 az acr login --name acrimggen
 docker push acrimggen.azurecr.io/imggen-backend:latest
 
-# Update Container Apps (they auto-pull latest)
+# 3. Update all 4 Container Apps
 az containerapp update --name cae-imggen-dev-backend --resource-group rg-imggen-dev --image acrimggen.azurecr.io/imggen-backend:latest
 az containerapp update --name cae-imggen-dev-celery-worker --resource-group rg-imggen-dev --image acrimggen.azurecr.io/imggen-backend:latest
 az containerapp update --name cae-imggen-dev-celery-clustering --resource-group rg-imggen-dev --image acrimggen.azurecr.io/imggen-backend:latest
 az containerapp update --name cae-imggen-dev-celery-generation --resource-group rg-imggen-dev --image acrimggen.azurecr.io/imggen-backend:latest
 
-# Run migrations (add firewall rule for your IP first)
+# 4. Run migrations (add firewall rule for your IP first)
 MY_IP=$(curl -s ifconfig.me)
 az postgres flexible-server firewall-rule create --resource-group rg-imggen-dev --name psql-imggen-dev2 --rule-name AllowLocalDev --start-ip-address "$MY_IP" --end-ip-address "$MY_IP"
 docker run --rm -e DATABASE_URL="postgresql://imggenadmin:<password>@psql-imggen-dev2.postgres.database.azure.com:5432/imggen?sslmode=require" acrimggen.azurecr.io/imggen-backend:latest alembic upgrade head
 ```
 
-### Service URLs
+### DEV Environment Management (Start/Stop/Status)
 
-**Local:**
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:8000
-- API docs: http://localhost:8000/api/docs
+The DEV environment costs ~$50-80/month when running. Stop it when not in use:
 
-**DEV (Azure):**
-- Backend API: https://cae-imggen-dev-backend.ambitioussand-1e60af3e.eastus.azurecontainerapps.io
-- API docs: https://cae-imggen-dev-backend.ambitioussand-1e60af3e.eastus.azurecontainerapps.io/api/docs
-- Frontend (Static Web App): https://victorious-mushroom-01a2cc60f.4.azurestaticapps.net
-
-**Frontend against DEV cloud backend (local dev):**
 ```bash
-cd frontend && cp .env.dev .env.local && npm run dev
+# Check current status of all resources
+./scripts/dev-env-status.sh
+
+# Stop everything (saves ~$50-80/month)
+./scripts/dev-env-stop.sh
+
+# Start everything back up
+./scripts/dev-env-start.sh
 ```
+
+| Script | What it does |
+|---|---|
+| `dev-env-status.sh` | Shows state of PostgreSQL, Redis, and all 4 Container Apps (replica counts, min/max) |
+| `dev-env-stop.sh` | Scales Container Apps to 0/0, stops PostgreSQL, deletes Redis (Basic SKU has no stop). Saves Redis key to `.redis-key-dev` |
+| `dev-env-start.sh` | Starts PostgreSQL (~1-2 min), recreates Redis Basic C0 (~5-10 min), updates Container App secrets with new Redis connection, scales apps back (backend 1/3, workers 1/2 or 1/1), polls for backend health, adds DB firewall rule for current IP |
+
+### Deploying to PROD (Azure)
+
+**Status: PROD is fully scaffolded but NOT yet provisioned.**
+
+Terraform config exists at `infra/environments/prod/` with production-grade settings (higher SKUs, more replicas, geo-redundant backup, purge-protected Key Vault). The `deploy-prod.yml` CI/CD workflow is ready (manual dispatch, re-tags DEV image as PROD).
+
+#### What exists
+
+- **Terraform IaC** (`infra/environments/prod/`): Resource group `rg-imggen-prod`, PostgreSQL `psql-imggen-prod` (B_Standard_B2s, 65GB, geo-redundant), Redis `redis-imggen-prod` (Standard tier), Container Apps with higher scaling (backend 2-5 replicas, workers 2-4), Static Web App (Standard tier), Key Vault with purge protection
+- **CI/CD** (`.github/workflows/deploy-prod.yml`): Manual dispatch → re-tags `imggen-backend:dev` as `:prod` in ACR → deploys frontend to PROD SWA → updates PROD Container Apps → runs migrations
+- **Frontend env** (`frontend/.env.prod`): `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_ENV_LABEL=prod`
+
+#### Before provisioning PROD
+
+1. **Fix Container App naming mismatch**: The CI/CD workflow references `ca-backend-prod`, `ca-celery-worker-prod`, etc., but Terraform generates `cae-imggen-prod-backend`, `cae-imggen-prod-celery-worker`, etc. Either update the workflow or the Terraform module to align.
+2. **Set Terraform variables**: `db_admin_user`, `db_admin_password`, `jwt_secret_key`, API keys (OpenAI, Anthropic, fal.ai)
+3. **Configure GitHub Secrets**: `PROD_BACKEND_URL`, `PROD_SWA_TOKEN`, `PROD_RESOURCE_GROUP` (plus the shared OIDC/ACR secrets already used by DEV)
+4. **Run Terraform**: `cd infra/environments/prod && terraform init && terraform apply`
+5. **Update `frontend/.env.prod`**: Set correct `NEXT_PUBLIC_API_URL` with the actual Container App hostname from Terraform output
+6. **Run initial migration**: `alembic upgrade head` against the new PROD database
+7. **Deploy**: Trigger `deploy-prod.yml` workflow manually from GitHub Actions
 
 ## Commands (local development, outside Docker)
 
@@ -139,7 +211,7 @@ npm run lint         # ESLint
 
 **Stack:** Next.js 14 + FastAPI + PostgreSQL/pgvector + Celery/Redis
 
-**Local Docker services:** postgres, redis, backend, celery-worker, celery-worker-clustering, celery-generation, celery-beat (optional, profile=scheduled), frontend
+**Local Docker services:** postgres, redis, backend, celery-worker, celery-worker-clustering, celery-worker-generation, celery-beat (optional, profile=scheduled), frontend
 
 **Azure Cloud services (per environment):**
 
@@ -174,7 +246,7 @@ npm run lint         # ESLint
 6. `summarize_clusters` task → Generates cluster titles and descriptions
 
 **API routes** (`backend/app/api/`): All endpoints require Bearer token auth (`get_current_user` dependency) unless noted.
-- `auth.py` — Login, register (public, no auth), refresh token, get current user, create user (admin-only)
+- `auth.py` — Login, register (public, no auth), refresh token, get current user, create user (admin-only), list users (admin-only), toggle sync (admin-only)
 - `images.py` — Image CRUD, upload (single/batch), reprocess, tag, describe, embed, similar images, file serving (token via query param)
 - `folders.py` — Folder CRUD, add/remove images, folder-scoped image listing, folder reprocess
 - `clusters.py` — Cluster listing, detail, rename, pin, archive, merge, exclude image, summarize, recluster, export
@@ -185,7 +257,7 @@ npm run lint         # ESLint
 - `logs.py` — Pipeline log queries, stats (filtered by user), cleanup (admin-only)
 
 **Database models** (`backend/app/models/`): All data models have a `user_id` foreign key to the `users` table (NOT NULL with CASCADE delete, except `PipelineLog` which is nullable). Composite unique constraints replace simple uniques where needed (e.g., `user_id + file_hash` on images).
-- `User` — Authentication and data ownership. Fields: email (unique), hashed_password, display_name, role (admin/user), is_active, is_verified, timestamps. Seed admin: stuart.leal23@gmail.com
+- `User` — Authentication and data ownership. Fields: email (unique), hashed_password, display_name, role (admin/user), is_active, is_verified, sync_enabled, timestamps. Seed admin: stuart.leal23@gmail.com
 - `Image` + `ImageMetadata` (1:1) — Core image data with status tracking, tags, description, embedding, hashes, tsvector
 - `Cluster` + `ClusterMembership` — Clustering results with centroid, summary, pin/archive/rename, outlier exclusion
 - `Job` — Async job tracking (types: INGEST, TAG, DESCRIBE, EMBED, CLUSTER, SUMMARIZE_CLUSTER, FULL_PIPELINE, REPROCESS, BATCH_REPROCESS, LORA_TRAIN, GENERATE_IMAGE, BATCH_GENERATE, LORA_EVALUATE)
@@ -205,7 +277,7 @@ npm run lint         # ESLint
 - API client: `lib/api.ts` — Typed Axios functions for all endpoints. `authUrl()` helper appends `?token=` to image/thumbnail URLs for authenticated file serving via `<img src>`. Supports cross-origin API calls via `NEXT_PUBLIC_API_URL` env var (used when frontend runs locally against cloud backend).
 - State: TanStack Query with polling (5s jobs, 3s logs, 10s stats)
 
-**Alembic migrations:** 17 versions (001-017) covering initial schema through multi-user support. Migration 017 creates the `users` table, seeds the admin user, adds `user_id` to all 11 data tables with backfill, and converts simple unique constraints to composite (user_id + field).
+**Alembic migrations:** 18 versions (001-018) covering initial schema through multi-user support. Migration 017 creates the `users` table, seeds the admin user, adds `user_id` to all 11 data tables with backfill, and converts simple unique constraints to composite (user_id + field). Migration 018 adds `sync_enabled` to users for data sync.
 
 ## Authentication
 
@@ -244,15 +316,78 @@ All the above, plus:
 
 **Terraform** (`infra/`): Modular Terraform configuration for Azure resources.
 - `infra/modules/` — Reusable modules: resource_group, storage, database, redis, container_registry, container_apps, static_web_app, key_vault
-- `infra/environments/dev/` — DEV environment config (eastus, PostgreSQL in eastus2)
-- `infra/environments/prod/` — PROD environment config (to be provisioned)
-- `infra/shared/` — Shared resources (ACR)
+- `infra/environments/dev/` — DEV environment config (eastus, PostgreSQL in eastus2). **Provisioned and active.**
+- `infra/environments/prod/` — PROD environment config. **Fully scaffolded, NOT yet provisioned.** See "Deploying to PROD" section for prerequisites.
+- `infra/shared/` — Shared resources (ACR: `acrimggen.azurecr.io`)
 - State stored in Azure Storage: `stimggentfstate` account, `tfstate` container
 
 **CI/CD** (`.github/workflows/`):
 - `ci.yml` — PR validation (lint + build)
-- `deploy-dev.yml` — Push to `dev` branch → build → ACR → deploy to DEV
-- `deploy-prod.yml` — Manual dispatch → retag dev image as prod → deploy to PROD
+- `deploy-dev.yml` — Push to `dev` branch → build → push to ACR (`:dev` tag) → deploy frontend to SWA → update 4 Container Apps → run migrations
+- `deploy-prod.yml` — Manual dispatch → re-tag `:dev` as `:prod` in ACR → deploy frontend to PROD SWA → update PROD Container Apps → run migrations. **Note:** Workflow uses `ca-*-prod` Container App names which don't match Terraform's `cae-imggen-prod-*` naming — must be aligned before first PROD deploy.
 - `terraform.yml` — Plan on PR, apply on merge for `infra/**` changes
 
 **Migration script** (`scripts/migrate_storage.py`): Migrates local filesystem images to Azure Blob Storage with concurrent uploads and incremental skip support.
+
+## Data Sync (Local ↔ Cloud)
+
+Bidirectional sync of database records and files between local and cloud for admin-selected users.
+
+### Enable sync for a user (admin only)
+
+```bash
+TOKEN=$(curl -s http://localhost:8000/api/auth/login -H "Content-Type: application/json" \
+  -d '{"email":"stuart.leal23@gmail.com","password":"password"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+# Toggle sync on for user ID 1
+curl -X PATCH http://localhost:8000/api/auth/users/1/sync \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"sync_enabled": true}'
+
+# List all users with sync status
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/auth/users
+```
+
+### Run sync
+
+```bash
+# Dry run (see what would happen)
+python scripts/sync_data.py \
+  --direction local-to-cloud \
+  --local-db "postgresql://postgres:postgres@localhost:5432/design_pipeline" \
+  --cloud-db "postgresql://imggenadmin:PASS@psql-imggen-dev2.postgres.database.azure.com:5432/imggen?sslmode=require" \
+  --azure-connection-string "DefaultEndpointsProtocol=https;..." \
+  --dry-run
+
+# Full sync (DB + files)
+python scripts/sync_data.py \
+  --direction local-to-cloud \
+  --local-db "postgresql://postgres:postgres@localhost:5432/design_pipeline" \
+  --cloud-db "postgresql://imggenadmin:PASS@psql-imggen-dev2.postgres.database.azure.com:5432/imggen?sslmode=require" \
+  --azure-connection-string "DefaultEndpointsProtocol=https;..." \
+  --local-storage ./storage
+
+# Reverse direction
+python scripts/sync_data.py --direction cloud-to-local ...
+
+# DB only (skip file transfer)
+python scripts/sync_data.py --direction cloud-to-local ... --skip-files
+
+# Files only (skip DB)
+python scripts/sync_data.py --direction local-to-cloud ... --skip-db
+```
+
+### What gets synced
+
+All data tables for sync-enabled users in FK dependency order: users → images → image_metadata → folders → folder_images → clusters → cluster_memberships → jobs → lora_models → generated_images → lora_evaluations → evaluation_pairs → prompt_presets → app_settings.
+
+**Excluded:** `api_keys` (encrypted per-environment, not portable), `pipeline_logs` (large, low value).
+
+**ID mapping:** Records matched by natural keys (email for users, object_key for images, etc.). Foreign keys remapped via old→new ID maps built incrementally. Upsert: existing records updated, new ones inserted.
+
+**Thumbnail URI translation:** Paths automatically converted between formats:
+- Local: `/app/storage/thumbnails/abc123_200.jpg`
+- Azure: `azure://images/thumbnails/abc123_200.jpg`
+
+**File sync:** Original images + thumbnails uploaded/downloaded concurrently (10 workers). Skips files that already exist at destination.
