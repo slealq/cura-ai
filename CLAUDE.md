@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Image Model Generator - a full-stack app for AI-powered image tagging, description, clustering, and semantic search. Images are processed through a pipeline: ingest → tag → describe → embed → cluster → summarize.
+Image Model Generator - a full-stack app for AI-powered image tagging, description, clustering, semantic search, LoRA model training, and image generation. Images are processed through a pipeline: ingest → tag → describe → embed → cluster → summarize. Trained LoRA models can be evaluated against source images for quality measurement.
 
 ## Deploying Changes
 
@@ -59,7 +59,7 @@ Image Model Generator - a full-stack app for AI-powered image tagging, descripti
 
 | What changed | What to rebuild |
 |---|---|
-| Backend Python code only | `docker compose build backend celery-worker celery-worker-clustering` |
+| Backend Python code only | `docker compose build backend celery-worker celery-worker-clustering celery-generation` |
 | Frontend code only | `docker compose build frontend` |
 | Both backend + frontend | `docker compose build` |
 | `requirements.txt` or `package.json` | `docker compose build --no-cache` |
@@ -80,6 +80,7 @@ pip install -e ".[dev]"
 uvicorn app.main:app --reload --port 8000
 celery -A app.workers.celery_app worker --loglevel=info
 celery -A app.workers.celery_app worker -Q clustering --loglevel=info
+celery -A app.workers.celery_app worker -Q generation --loglevel=info
 alembic upgrade head
 alembic downgrade -1
 ```
@@ -97,10 +98,10 @@ npm run lint         # ESLint
 
 **Stack:** Next.js 14 + FastAPI + PostgreSQL/pgvector + Celery/Redis
 
-**Docker services:** postgres, redis, backend, celery-worker, celery-worker-clustering, celery-beat (optional), frontend
+**Docker services:** postgres, redis, backend, celery-worker, celery-worker-clustering, celery-generation, celery-beat (optional, profile=scheduled), frontend
 
 **Key patterns:**
-- **Provider abstraction** (`backend/app/providers/`): Swappable AI providers (OpenAI/Anthropic) via base classes and factory functions (`get_tagger()`, `get_describer()`, `get_embedder()`, `get_cluster_summarizer()`)
+- **Provider abstraction** (`backend/app/providers/`): Swappable AI providers (OpenAI/Anthropic/fal.ai) via base classes and factory functions (`get_tagger()`, `get_describer()`, `get_embedder()`, `get_cluster_summarizer()`, `get_trainer()`, `get_generator()`, `get_evaluator()`)
 - **Service layer** (`backend/app/services/`): Business logic decoupled from API routes
 - **Celery task chaining** (`backend/app/workers/tasks.py`): `process_image_pipeline()` orchestrates tag→describe→embed flow. Upstream changes auto-trigger re-embedding.
 - **pgvector**: 1536-dim embeddings for similarity search via cosine distance
@@ -120,34 +121,36 @@ npm run lint         # ESLint
 - `clusters.py` — Cluster listing, detail, rename, pin, archive, merge, exclude image, summarize, recluster, export
 - `search.py` — Hybrid semantic+text search, tag filtering, tag listing
 - `jobs.py` — Job listing/detail/cancel/delete, pipeline triggers (full, tag-all, describe-all, embed-all, reprocess-all, reprocess-failed, reprocess-selected), batch job image listing
-- `settings.py` — Prompt presets CRUD, activate preset, prompt get/update/reset/suggest, clustering config get/update/reset
-- `generation.py` — LoRA training (from folders or clusters, with optional per-image captions), image generation, model/image CRUD
+- `settings.py` — Prompt presets CRUD, activate preset, prompt get/update/reset/suggest, clustering config get/update/reset, API key management (store/validate/delete), provider config, generation config (per-base-model), training config (per-base-model), base model selection
+- `generation.py` — LoRA training (from folders or clusters, with optional per-image captions, multi-base-model: flux-dev/qwen-2.5), image generation, model/image CRUD, model recover/retry, LoRA evaluation (reference + creative pairs with embedding similarity/vision scoring)
 - `logs.py` — Pipeline log queries, stats, cleanup
 
 **Database models** (`backend/app/models/`):
 - `Image` + `ImageMetadata` (1:1) — Core image data with status tracking, tags, description, embedding, hashes, tsvector
 - `Cluster` + `ClusterMembership` — Clustering results with centroid, summary, pin/archive/rename, outlier exclusion
-- `Job` — Async job tracking (types: INGEST, TAG, DESCRIBE, EMBED, CLUSTER, SUMMARIZE_CLUSTER, FULL_PIPELINE, REPROCESS, BATCH_REPROCESS, LORA_TRAIN, GENERATE_IMAGE, BATCH_GENERATE)
+- `Job` — Async job tracking (types: INGEST, TAG, DESCRIBE, EMBED, CLUSTER, SUMMARIZE_CLUSTER, FULL_PIPELINE, REPROCESS, BATCH_REPROCESS, LORA_TRAIN, GENERATE_IMAGE, BATCH_GENERATE, LORA_EVALUATE)
 - `Folder` + `FolderImage` — User folders for organizing images (many-to-many)
-- `LoraModel` — Trained LoRA adapters linked to folder or cluster source, with training config and status
+- `LoraModel` — Trained LoRA adapters linked to folder or cluster source, with training config and status. Supports multiple base models (flux-dev, qwen-2.5)
 - `GeneratedImage` — AI-generated images linked to LoRA models with prompt, params, and output files
+- `LoraEvaluation` + `EvaluationPair` — Quality evaluation of trained LoRA models. Generates images from source prompts, compares against originals via embedding similarity and vision scoring. Supports "reference" (vs original) and "creative" (novel prompt) pair types
 - `PromptPreset` — Named tag+description prompt pairs with active/default flag
 - `PipelineLog` — Structured logs (category, level, tokens, duration, provider/model)
 - `AppSetting` — Key-value config store
 - `APIKey` — Encrypted API key storage with validation status
 
 **Frontend structure** (`frontend/src/`):
-- Pages: Home (clusters), Folders, Folder Detail, All Images, Upload, Search, Cluster Detail, Models, Generate, Jobs, Debug, Settings
+- Pages: Home (clusters), Folders, Folder Detail, All Images, Upload, Search, Cluster Detail, Models (with sub-components: TrainModal, FluxTrainForm, QwenTrainForm, SharedTrainFields, ModelSettings, EvaluationDetail), Generate, Jobs, Debug, Settings
 - Components: Header (search+stats), Sidebar (navigation), ImageCard, ImageDrawer (detail slide-over), ImageGrid (paginated with filters+batch actions), ClusterCard, FolderCard, GeneratedImageCard, AddToFolderDialog, PipelineProgress
 - API client: `lib/api.ts` — Typed Axios functions for all endpoints
 - State: TanStack Query with polling (5s jobs, 3s logs, 10s stats)
 
-**Alembic migrations:** 14 versions (001-014) covering initial schema through LoRA cluster source
+**Alembic migrations:** 16 versions (001-016) covering initial schema through LoRA evaluations and pair types
 
 ## Environment
 
 Requires `.env` in project root with:
-- `OPENAI_API_KEY` (required)
-- `ANTHROPIC_API_KEY` (optional)
+- `OPENAI_API_KEY` (required for embeddings; also used for vision if chosen)
+- `ANTHROPIC_API_KEY` (optional, for vision/summarization)
+- `FAL_API_KEY` (optional, for LoRA training and image generation via fal.ai)
 - `DEFAULT_VISION_PROVIDER` (openai/anthropic)
 - `DATABASE_URL`, `REDIS_URL`, `CELERY_BROKER_URL`

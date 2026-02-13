@@ -51,18 +51,35 @@ Automatically ingest, tag, cluster, and browse design inspiration images using A
 
 ### LoRA Training & Image Generation
 - **LoRA fine-tuning**: Train LoRA adapters from folders or clusters of images via fal.ai
+- **Multiple base models**: Support for Flux Dev and Qwen 2.5 with model-specific training forms and parameters
 - **Cluster or folder source**: Use any image folder or cluster as training data (minimum 5 images)
-- **Per-image captions**: Optionally include AI-generated tags and descriptions as per-image caption files for higher-quality training
+- **Per-image captions**: Optionally include AI-generated tags and descriptions as per-image caption files for higher-quality training (required for Qwen, optional for Flux)
 - **Image generation**: Generate images using trained LoRA models with configurable parameters (size, steps, guidance, seed)
 - **Batch generation**: Generate up to 8 images per request
-- **Model management**: Track training status, view model details, delete models
+- **Model management**: Track training status, view model details, recover stuck jobs, retry failed training, delete models
+- **Per-model settings**: Configurable default training steps, learning rate, and generation parameters per base model
+
+### LoRA Model Evaluation
+- **Automated quality assessment**: Evaluate trained LoRA models by generating images and comparing against source training images
+- **Reference pairs**: Generate images using prompts derived from original training images and compare against originals
+- **Creative pairs**: Generate images using novel prompts to test model creativity beyond training data
+- **Evaluation metrics**: Embedding similarity (cosine distance between original and generated image embeddings), vision scoring (AI-powered visual comparison), CLIP image/text scores
+- **Aggregate scoring**: Overall score, per-metric averages, and detailed per-pair breakdowns
+- **Visual comparison**: Side-by-side original vs generated image viewing with per-pair scores and AI assessments
+
+### API Key Management
+- **Encrypted storage**: API keys stored with Fernet symmetric encryption in the database
+- **Provider support**: OpenAI, Anthropic, and fal.ai keys with per-provider validation
+- **Status tracking**: Active, invalid, quota exceeded status with last validation timestamp
+- **Environment fallback**: Falls back to environment variables if no stored key exists
 
 ### Provider Abstraction
 - **Swappable vision providers**: OpenAI (GPT-4o) or Anthropic (Claude Sonnet) for tagging and describing
 - **Swappable summarizers**: OpenAI or Anthropic for cluster summaries
+- **Swappable evaluators**: OpenAI or Anthropic for LoRA evaluation vision scoring
 - **Swappable training/generation**: fal.ai for LoRA training and image generation
 - **Embeddings**: OpenAI text-embedding-3-small (1536 dimensions)
-- **Factory functions**: `get_tagger()`, `get_describer()`, `get_embedder()`, `get_cluster_summarizer()`, `get_trainer()`, `get_generator()`
+- **Factory functions**: `get_tagger()`, `get_describer()`, `get_embedder()`, `get_cluster_summarizer()`, `get_trainer()`, `get_generator()`, `get_evaluator()`
 
 ## Architecture
 
@@ -86,11 +103,11 @@ Automatically ingest, tag, cluster, and browse design inspiration images using A
               │  Claude) │ │  Claude) │ │          │
               └──────────┘ └──────────┘ └──────────┘
 
-              ┌──────────┐ ┌──────────┐
-              │  LoRA    │ │  Image   │
-              │ Trainer  │ │Generator │
-              │ (fal.ai) │ │ (fal.ai) │
-              └──────────┘ └──────────┘
+              ┌──────────┐ ┌──────────┐ ┌──────────┐
+              │  LoRA    │ │  Image   │ │  LoRA    │
+              │ Trainer  │ │Generator │ │Evaluator │
+              │ (fal.ai) │ │ (fal.ai) │ │(AI+Embed)│
+              └──────────┘ └──────────┘ └──────────┘
 ```
 
 ### Docker Services
@@ -102,6 +119,7 @@ Automatically ingest, tag, cluster, and browse design inspiration images using A
 | `backend` | FastAPI + uvicorn | REST API server |
 | `celery-worker` | Celery (concurrency=1) | Processes tag/describe/embed tasks (rate-limited) |
 | `celery-worker-clustering` | Celery (concurrency=2, queue=clustering) | Clustering, batch reprocess, summarization |
+| `celery-generation` | Celery (concurrency=2, queue=generation) | LoRA training, image generation, evaluation |
 | `celery-beat` | Celery Beat (optional, profile=scheduled) | Scheduled tasks (log cleanup) |
 | `frontend` | Next.js standalone | Web UI |
 
@@ -130,6 +148,7 @@ Upload ─▶ Ingest ─▶ Tag ─▶ Describe ─▶ Embed ─▶ Cluster ─�
 - Docker & Docker Compose
 - OpenAI API key (required for embeddings; also used for vision if chosen)
 - Anthropic API key (optional, for vision/summarization)
+- fal.ai API key (optional, for LoRA training and image generation)
 
 ### 1. Clone and configure
 
@@ -138,6 +157,7 @@ Upload ─▶ Ingest ─▶ Tag ─▶ Describe ─▶ Embed ─▶ Cluster ─�
 cat > .env << EOF
 OPENAI_API_KEY=sk-your-key-here
 ANTHROPIC_API_KEY=sk-ant-your-key-here  # optional
+FAL_API_KEY=                            # optional, for LoRA training/generation
 EOF
 ```
 
@@ -191,16 +211,26 @@ Real-time job monitor (5s polling) with pipeline statistics. Trigger individual 
 Structured pipeline logs with filtering by category, level, and text search. Expandable log rows show full detail: token counts, duration, prompts used, model responses, and error messages. Log statistics dashboard.
 
 ### Models — `/models`
-LoRA model management page. View all trained models with status badges (pending, training, completed, failed, archived). Train new LoRA models from folders or clusters with configurable steps, style mode, and optional per-image captions using AI-generated tags and descriptions. View training details and delete models.
+LoRA model management page. View all trained models with status badges (pending, training, completed, failed, archived) and latest evaluation scores. Multiple base model support with model-specific training forms:
+- **Flux Dev**: Configurable steps (100-4000), trigger word, style mode toggle, optional per-image captions
+- **Qwen 2.5**: Configurable steps (100-30000), learning rate (0.0001-0.005), required per-image captions
+- **Shared fields**: Name, source (folder or cluster), caption options (include tags, include description)
+- **Model actions**: View training details, recover stuck training jobs, retry failed training, delete models
+- **Per-model settings**: Configure default training parameters and generation defaults per base model
+- **Evaluation**: Run quality evaluations on completed models, view evaluation history with scores, drill into per-pair comparisons (original vs generated side-by-side with similarity metrics)
 
 ### Generate — `/generate`
-Image generation page using trained LoRA models. Select a completed LoRA model, write a prompt with the trigger word, configure generation parameters (size, steps, guidance scale, seed), and generate 1-8 images. View generated images in a gallery with thumbnails.
+Image generation page using trained LoRA models. Select a completed LoRA model, write a prompt with the trigger word, configure generation parameters (size, steps, guidance scale, LoRA scale, seed), and generate 1-8 images. View generated images in a gallery with thumbnails. Generation parameters respect per-model defaults set in model settings.
 
 ### Settings — `/settings`
-Three sections:
+Multiple sections:
 - **Pipeline Stats**: Image and cluster counts with status breakdown
 - **Prompt Library**: CRUD for named prompt presets (tag + description prompts). Activate a preset as default. AI-powered prompt suggestion tool. Factory reset.
 - **Clustering Settings**: Algorithm selection (HDBSCAN/K-Means/Graph), UMAP toggle with parameters, algorithm-specific tuning sliders, quick tips. Save, reset, or recluster directly.
+- **API Keys**: Store and manage API keys for OpenAI, Anthropic, and fal.ai with encrypted storage and validation status
+- **Provider Config**: Select default vision and embedding providers, configure model IDs
+- **Generation Config**: Per-base-model generation defaults (width, height, steps, guidance scale, LoRA scale)
+- **Training Config**: Per-base-model training defaults (steps, style mode, learning rate)
 
 ### Image Drawer (Slide-over)
 Click any image to open a detail drawer showing: full image, pipeline progress indicator, tags, description, metadata (dimensions, file size, source), processing info (models used), similar images, folders. Action buttons: Tag, Describe, Embed, Reprocess (each with optional prompt override and preset selector). Live polling during processing with toast notifications on completion.
@@ -288,12 +318,19 @@ Full interactive docs available at http://localhost:8000/api/docs
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/lora/train` | Start LoRA training from a folder or cluster (min 5 images) |
-| GET | `/lora` | List LoRA models (filter by status) |
+| POST | `/lora/train` | Start LoRA training from a folder or cluster (min 5 images, supports flux-dev/qwen-2.5) |
+| GET | `/lora` | List LoRA models (filter by `status`, `base_model`) |
 | GET | `/lora/{id}` | Get LoRA model details |
+| POST | `/lora/{id}/recover` | Recover stuck training job (checks fal.ai status) |
+| POST | `/lora/{id}/retry` | Retry failed training job |
 | DELETE | `/lora/{id}` | Delete LoRA model |
+| POST | `/lora/{id}/evaluate` | Start LoRA quality evaluation (reference + creative pairs) |
+| GET | `/lora/{id}/evaluations` | List evaluations for a LoRA model |
+| GET | `/evaluations/{id}` | Get evaluation details with all pairs |
+| DELETE | `/evaluations/{id}` | Delete evaluation |
+| GET | `/evaluations/{id}/pairs/{pair_id}/generated-file` | Serve generated image from evaluation pair |
 | POST | `/generate` | Generate 1-8 images (optional LoRA, configurable params) |
-| GET | `/images` | List generated images (filter by lora_model_id, status) |
+| GET | `/images` | List generated images (filter by `lora_model_id`, `status`) |
 | GET | `/images/{id}` | Get generated image details |
 | GET | `/images/{id}/file` | Serve generated image file |
 | DELETE | `/images/{id}` | Delete generated image |
@@ -313,9 +350,25 @@ Full interactive docs available at http://localhost:8000/api/docs
 | PUT | `/prompts` | Update active preset prompts |
 | POST | `/prompts/reset` | Reset prompts to factory defaults |
 | POST | `/prompts/suggest` | AI-powered prompt suggestion |
+| GET | `/api-keys` | List stored API keys (metadata only, no secrets) |
+| PUT | `/api-keys/{provider}` | Store/update API key (encrypted) |
+| DELETE | `/api-keys/{provider}` | Remove stored API key |
+| POST | `/api-keys/{provider}/validate` | Re-validate stored API key |
+| GET | `/providers` | Get current provider configuration |
+| PUT | `/providers` | Update provider config |
+| POST | `/providers/reset` | Reset provider config to defaults |
+| GET | `/models/{provider}` | Get available models for a provider |
 | GET | `/clustering` | Get clustering configuration |
 | PUT | `/clustering` | Update clustering config |
 | POST | `/clustering/reset` | Reset clustering to defaults |
+| GET | `/generation` | Get generation config (per base model via `?base_model=`) |
+| PUT | `/generation` | Update generation config |
+| POST | `/generation/reset` | Reset generation config to defaults |
+| GET | `/training` | Get training config (per base model via `?base_model=`) |
+| PUT | `/training` | Update training config |
+| POST | `/training/reset` | Reset training config to defaults |
+| GET | `/base-model` | Get active base model |
+| PUT | `/base-model` | Set active base model |
 
 ### Logs (`/api/logs`)
 
@@ -334,13 +387,16 @@ Core image record with processing status tracking (PENDING → INGESTED → TAGG
 Clusters from a specific clustering run (identified by `run_id`). Each cluster has a centroid embedding, AI-generated summary, common tags, and representative images. Memberships link images to clusters with distance-to-centroid scores. Supports pinning, archiving, renaming, and user-excluded outliers.
 
 ### LoraModel
-Trained LoRA adapter records. Linked to source folder or cluster. Tracks training status (PENDING → TRAINING → COMPLETED/FAILED), provider, config (steps, style mode, caption settings), result URL, and timestamps.
+Trained LoRA adapter records. Linked to source folder or cluster. Supports multiple base models (flux-dev, qwen-2.5). Tracks training status (PENDING → TRAINING → COMPLETED/FAILED), provider, config (steps, style mode, learning rate, caption settings), result URL, provider metadata (for fal.ai polling/recovery), and timestamps.
 
 ### GeneratedImage
-AI-generated image records linked to LoRA models. Tracks generation status, prompt, parameters, output file, dimensions, thumbnails, and provider metadata.
+AI-generated image records linked to LoRA models. Tracks generation status, prompt, negative prompt, parameters (width, height, steps, guidance_scale, seed), LoRA scale, output file, dimensions, thumbnails, and provider metadata.
+
+### LoraEvaluation + EvaluationPair
+Quality evaluation of trained LoRA models. An evaluation generates images from source prompts and compares against originals. Tracks overall_score, avg_embedding_similarity, avg_vision_score, avg_clip_image_score, avg_clip_text_score, and assessment_summary. Each EvaluationPair stores the original image reference, prompt used, generated image, and per-pair metrics (embedding_similarity, vision_score, vision_assessment, clip scores). Pairs have a `pair_type` of "reference" (compared against original training image) or "creative" (novel prompt, no original comparison).
 
 ### Job
-Tracks async Celery tasks with type (INGEST, TAG, DESCRIBE, EMBED, CLUSTER, SUMMARIZE_CLUSTER, FULL_PIPELINE, REPROCESS, BATCH_REPROCESS, LORA_TRAIN, GENERATE_IMAGE, BATCH_GENERATE), status, progress/total counters, parameters, result data, and error messages.
+Tracks async Celery tasks with type (INGEST, TAG, DESCRIBE, EMBED, CLUSTER, SUMMARIZE_CLUSTER, FULL_PIPELINE, REPROCESS, BATCH_REPROCESS, LORA_TRAIN, GENERATE_IMAGE, BATCH_GENERATE, LORA_EVALUATE), status, progress/total counters, parameters, result data, and error messages.
 
 ### Folder + FolderImage
 User-created folders for organizing images. Many-to-many relationship — an image can belong to multiple folders. Folder deletion preserves images.
@@ -351,8 +407,11 @@ Named pairs of tag guidance + description guidance prompts. One preset is marked
 ### PipelineLog
 Structured log entries categorized as API_CALL, TASK, PIPELINE, or SYSTEM. Tracks provider, model, operation, duration, token counts, success/failure, and arbitrary extra data. Indexed for efficient filtering.
 
+### APIKey
+Encrypted API key storage for providers (OpenAI, Anthropic, fal.ai). Keys are encrypted with Fernet symmetric encryption. Tracks provider, key_suffix (for display), validation status (active, invalid, quota_exceeded), last_validated_at, and last_error. Environment variables are used as fallback when no stored key exists.
+
 ### AppSetting
-Key-value store for application configuration (clustering config, legacy prompt settings).
+Key-value store for application configuration (clustering config, provider config, generation config, training config, base model selection).
 
 ## Configuration
 
@@ -360,8 +419,9 @@ Key-value store for application configuration (clustering config, legacy prompt 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OPENAI_API_KEY` | — | OpenAI API key (required) |
-| `ANTHROPIC_API_KEY` | — | Anthropic API key (optional) |
+| `OPENAI_API_KEY` | — | OpenAI API key (required for embeddings; also used for vision if chosen) |
+| `ANTHROPIC_API_KEY` | — | Anthropic API key (optional, for vision/summarization) |
+| `FAL_API_KEY` | — | fal.ai API key (optional, for LoRA training and image generation) |
 | `DATABASE_URL` | `postgresql://postgres:postgres@postgres:5432/design_pipeline` | PostgreSQL connection |
 | `REDIS_URL` | `redis://redis:6379/0` | Redis connection |
 | `CELERY_BROKER_URL` | `redis://redis:6379/1` | Celery broker |
@@ -419,6 +479,9 @@ celery -A app.workers.celery_app worker --loglevel=info
 
 # Start clustering worker (separate terminal)
 celery -A app.workers.celery_app worker -Q clustering --loglevel=info
+
+# Start generation worker (separate terminal)
+celery -A app.workers.celery_app worker -Q generation --loglevel=info
 ```
 
 ### Frontend
@@ -477,10 +540,10 @@ def get_tagger(provider: str | None = None) -> BaseTagger:
 │   │   │   ├── clusters.py   # Cluster management, export
 │   │   │   ├── search.py     # Hybrid search, tag filter
 │   │   │   ├── jobs.py       # Job monitoring, pipeline triggers
-│   │   │   ├── settings.py   # Prompts, presets, clustering config
+│   │   │   ├── settings.py   # Prompts, presets, clustering config, API keys, provider/generation/training config
 │   │   │   ├── logs.py       # Pipeline log queries
 │   │   │   ├── folders.py    # Folder management
-│   │   │   └── generation.py # LoRA training, image generation
+│   │   │   └── generation.py # LoRA training, image generation, evaluation
 │   │   ├── core/             # App configuration
 │   │   ├── db/               # Database session management
 │   │   ├── models/           # SQLAlchemy models
@@ -490,15 +553,16 @@ def get_tagger(provider: str | None = None) -> BaseTagger:
 │   │   │   ├── folder.py     # Folder + FolderImage
 │   │   │   ├── lora_model.py # LoRA adapter tracking
 │   │   │   ├── generated_image.py # AI-generated images
+│   │   │   ├── lora_evaluation.py # LoRA evaluation + pairs
 │   │   │   ├── prompt_preset.py  # Prompt presets
 │   │   │   ├── pipeline_log.py   # Structured logs
 │   │   │   ├── settings.py   # AppSetting key-value
 │   │   │   └── api_key.py    # Encrypted API key storage
 │   │   ├── providers/        # AI provider abstractions
-│   │   │   ├── base.py       # Interfaces: BaseTagger, BaseDescriber, BaseEmbedder, BaseClusterSummarizer
-│   │   │   ├── openai_provider.py   # OpenAI implementations
-│   │   │   ├── anthropic_provider.py # Anthropic implementations
-│   │   │   └── fal_provider.py      # fal.ai LoRA training + generation
+│   │   │   ├── base.py       # Interfaces: BaseTagger, BaseDescriber, BaseEmbedder, BaseClusterSummarizer, BaseTrainer, BaseGenerator, BaseEvaluator
+│   │   │   ├── openai_provider.py   # OpenAI implementations (tagger, describer, embedder, summarizer, evaluator)
+│   │   │   ├── anthropic_provider.py # Anthropic implementations (tagger, describer, summarizer, evaluator)
+│   │   │   └── fal_provider.py      # fal.ai LoRA training + image generation
 │   │   ├── schemas/          # Pydantic request/response models
 │   │   ├── services/         # Business logic layer
 │   │   │   ├── image_service.py      # Image CRUD, metadata
@@ -510,13 +574,14 @@ def get_tagger(provider: str | None = None) -> BaseTagger:
 │   │   │   ├── log_service.py        # Pipeline log writes/queries
 │   │   │   ├── api_key_service.py    # Encrypted API key management
 │   │   │   ├── encryption.py         # Fernet symmetric encryption
-│   │   │   └── generation_service.py # LoRA + generation CRUD
+│   │   │   ├── generation_service.py # LoRA + generation CRUD
+│   │   │   └── evaluation_service.py # LoRA evaluation + pair management
 │   │   ├── workers/          # Celery task definitions
 │   │   │   ├── celery_app.py # Celery config, queues, rate limits
-│   │   │   ├── tasks.py      # Pipeline async tasks
-│   │   │   └── generation_tasks.py # LoRA training + generation tasks
+│   │   │   ├── tasks.py      # Pipeline async tasks (tag, describe, embed, cluster, summarize, batch reprocess)
+│   │   │   └── generation_tasks.py # LoRA training, image generation, batch generation, evaluation tasks
 │   │   └── main.py           # FastAPI app entry point
-│   ├── migrations/           # Alembic migrations (14 versions)
+│   ├── migrations/           # Alembic migrations (16 versions)
 │   ├── scripts/              # Utility scripts
 │   ├── Dockerfile
 │   └── pyproject.toml
@@ -532,7 +597,18 @@ def get_tagger(provider: str | None = None) -> BaseTagger:
 │       │   ├── upload/page.tsx       # Upload page
 │       │   ├── search/page.tsx       # Search page
 │       │   ├── clusters/[id]/page.tsx # Cluster detail
-│       │   ├── models/page.tsx       # LoRA models management
+│       │   ├── models/
+│       │   │   ├── page.tsx          # LoRA models management
+│       │   │   └── components/       # Model sub-components
+│       │   │       ├── TrainModal.tsx         # Training dialog with base model selection
+│       │   │       ├── FluxTrainForm.tsx      # Flux Dev training form
+│       │   │       ├── QwenTrainForm.tsx      # Qwen 2.5 training form
+│       │   │       ├── SharedTrainFields.tsx  # Shared name/source fields
+│       │   │       ├── ModelSettings.tsx      # Per-model training/generation defaults
+│       │   │       └── EvaluationDetail.tsx   # Evaluation results with pair comparison
+│       │   │   ├── [id]/
+│       │   │   │   ├── evaluate/page.tsx     # Evaluation setup form
+│       │   │   │   └── evaluations/[evalId]/page.tsx  # Evaluation results with pairs
 │       │   ├── generate/page.tsx     # Image generation
 │       │   ├── jobs/page.tsx         # Jobs monitor
 │       │   ├── debug/page.tsx        # Debug logs
@@ -548,12 +624,14 @@ def get_tagger(provider: str | None = None) -> BaseTagger:
 │       │   ├── GeneratedImageCard.tsx # Generated image card
 │       │   ├── AddToFolderDialog.tsx # Reusable add-to-folder modal
 │       │   └── PipelineProgress.tsx  # Visual status indicator
+│       ├── contexts/
+│       │   └── ThemeContext.tsx    # Light/dark/auto theme provider with timezone
 │       ├── lib/
 │       │   ├── api.ts        # Typed Axios API client
-│       │   ├── utils.ts      # Formatting helpers
-│       │   └── pipeline.ts   # Pipeline status logic
+│       │   ├── utils.ts      # Formatting helpers (dates, file sizes, status colors)
+│       │   └── pipeline.ts   # Pipeline status logic (steps, ranks)
 │       └── types/
-│           └── index.ts      # TypeScript type definitions
+│           └── index.ts      # TypeScript type definitions (all API contracts)
 ├── docker/
 │   └── init-db.sql           # pgvector extension init
 ├── docker-compose.yml        # Service orchestration
@@ -583,7 +661,7 @@ def get_tagger(provider: str | None = None) -> BaseTagger:
 | Queue | Celery + Redis 7 |
 | AI (Vision) | OpenAI GPT-4o, Anthropic Claude Sonnet |
 | AI (Embeddings) | OpenAI text-embedding-3-small (1536 dims) |
-| AI (Training/Gen) | fal.ai (Flux LoRA training + generation) |
+| AI (Training/Gen) | fal.ai (Flux Dev / Qwen 2.5 LoRA training + image generation) |
 | ML | HDBSCAN, scikit-learn, UMAP, numpy |
 | Image Processing | Pillow, imagehash |
 | Deployment | Docker Compose |
