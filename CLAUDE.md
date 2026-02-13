@@ -14,7 +14,7 @@ Four environments exist, each with a UI badge in the sidebar (except PROD):
 |---|---|---|---|---|
 | **Local** | Docker (localhost:3000) | Docker (localhost:8000) | Blue "Local" | `docker compose up -d` |
 | **Local w/DEV Backend** | Local dev (localhost:3001) | Azure DEV cloud | Amber "Local w/DEV Backend" | `cd frontend && npm run dev:cloud` |
-| **DEV** | Azure Static Web App | Azure Container Apps | Amber "DEV" | Push to `dev` branch (CI/CD) |
+| **DEV** | Azure Static Web App | Azure Container Apps | Amber "DEV" | Merge PR to `dev` branch (CI/CD) |
 | **PROD** | Azure Static Web App | Azure Container Apps | None | Manual dispatch (CI/CD) |
 
 The badge is controlled by `NEXT_PUBLIC_ENV_LABEL` env var (`local`, `dev-backend`, `dev`, `prod`).
@@ -27,6 +27,25 @@ The badge is controlled by `NEXT_PUBLIC_ENV_LABEL` env var (`local`, `dev-backen
 | Local w/DEV Backend | http://localhost:3001 | https://cae-imggen-dev-backend.ambitioussand-1e60af3e.eastus.azurecontainerapps.io | Same + `/api/docs` |
 | DEV | https://victorious-mushroom-01a2cc60f.4.azurestaticapps.net | Same as above | Same + `/api/docs` |
 | PROD | Not yet provisioned | Not yet provisioned | — |
+
+---
+
+## Git Workflow & Branch Protection
+
+**Protected branches:** `master` and `dev` — no direct pushes allowed.
+
+**Branch naming:** All work happens on personal branches: `u/<username>/<feature-name>` (e.g., `u/slealq/add-dark-mode`).
+
+**Flow:**
+1. Create a personal branch from `dev`: `git checkout -b u/slealq/my-feature dev`
+2. Push to the personal branch: `git push -u origin u/slealq/my-feature`
+3. Create a PR to `dev` on GitHub (requires approval)
+4. After merging to `dev`, CI/CD deploys to the DEV environment
+5. Promote `dev` → `master` via PR when ready for production
+
+**Enforcement:** A pre-push Git hook (`.githooks/pre-push`) blocks direct pushes to `master` and `dev`. New clones must run `./scripts/setup-hooks.sh` to activate hooks.
+
+**When committing changes via Claude Code:** Always commit to the current personal branch. Never push directly to `master` or `dev`.
 
 ---
 
