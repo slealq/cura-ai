@@ -24,10 +24,18 @@ export default function PipelineProgress({
           const isCurrent = !isFailed && status === step.key;
           const isStale = staleSteps?.includes(step.key);
 
+          const tooltip = isFailed
+            ? `${step.label}: Processing failed`
+            : isStale
+              ? `${step.label} (stale) — Needs reprocessing since source data changed`
+              : isCompleted
+                ? `${step.label} — ${step.description}`
+                : `${step.label} — Not yet reached`;
+
           return (
             <span
               key={step.key}
-              title={isStale ? `${step.label} (stale)` : step.label}
+              title={tooltip}
               className={cn(
                 'rounded-full transition-all',
                 isFailed
@@ -55,6 +63,14 @@ export default function PipelineProgress({
         const isCurrent = !isFailed && status === step.key;
         const isStale = staleSteps?.includes(step.key);
 
+        const fullTooltip = isFailed
+          ? `${step.label}: Processing failed`
+          : isStale
+            ? `${step.label} (stale) — Needs reprocessing since source data changed`
+            : isCompleted
+              ? `${step.label} — ${step.description}`
+              : `${step.label} — Not yet reached`;
+
         return (
           <div key={step.key} className="flex items-center gap-1">
             {i > 0 && (
@@ -65,7 +81,7 @@ export default function PipelineProgress({
                 )}
               />
             )}
-            <div className="flex flex-col items-center gap-1">
+            <div className="flex flex-col items-center gap-1" title={fullTooltip}>
               <span
                 className={cn(
                   'rounded-full transition-all',

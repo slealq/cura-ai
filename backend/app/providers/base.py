@@ -264,6 +264,48 @@ class BaseEvaluator(ABC):
         pass
 
     @abstractmethod
+    async def evaluate_single(
+        self,
+        image_data: bytes,
+        mime_type: str,
+        prompt_used: str,
+    ) -> VisionEvalResult:
+        """
+        Evaluate a single generated image on quality (no reference comparison).
+
+        For creative/generalization tests where there is no original to compare.
+
+        Returns:
+            VisionEvalResult with quality scores (realism, prompt_adherence, detail_quality)
+            mapped to style_fidelity, subject_accuracy, detail_preservation fields.
+        """
+        pass
+
+    @abstractmethod
+    async def summarize_assessments(
+        self,
+        model_name: str,
+        trigger_word: str,
+        pair_assessments: list[dict],
+        overall_score: float | None,
+        avg_vision: float | None,
+        avg_embedding: float | None,
+        creative_section: str = "",
+    ) -> str:
+        """Generate a cohesive AI summary from individual pair assessments."""
+        pass
+
+    @abstractmethod
+    async def generate_creative_prompts(
+        self,
+        trigger_word: str,
+        sample_descriptions: list[str],
+        count: int,
+    ) -> list[str]:
+        """Generate creative prompts inspired by training set descriptions."""
+        pass
+
+    @abstractmethod
     def get_model_name(self) -> str:
         """Get the model identifier."""
         pass

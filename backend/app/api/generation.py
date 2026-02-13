@@ -309,6 +309,9 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db)):
         job_id=job.id,
     )
 
+    # Store lora_model_id in job parameters for frontend recovery buttons
+    job.parameters = {**job.parameters, "lora_model_id": lora.id}
+
     # Dispatch Celery task
     from app.workers.generation_tasks import train_lora as train_lora_task
     task = train_lora_task.delay(lora.id, job.id)
@@ -352,6 +355,127 @@ async def get_lora_model(lora_id: int, db: Session = Depends(get_db)):
     if not lora:
         raise HTTPException(status_code=404, detail="LoRA model not found")
     return _lora_to_response(lora, db)
+
+
+@router.post("/lora/{lora_id}/recover")
+async def recover_lora_training(lora_id: int, db: Session = Depends(get_db)):
+    """Recover a stuck LoRA training job.
+
+    For TRAINING models with a request_id: checks fal.ai status.
+    If completed, fetches result and finalizes. If still running, re-dispatches polling.
+    """
+    gen_service = get_generation_service(db)
+    lora = gen_service.get_lora_model(lora_id)
+    if not lora:
+        raise HTTPException(status_code=404, detail="LoRA model not found")
+
+    if lora.status != LoraModelStatus.TRAINING:
+        raise HTTPException(status_code=400, detail=f"LoRA model is not in TRAINING status (current: {lora.status.value})")
+
+    request_id = (lora.provider_metadata or {}).get("request_id")
+    if not request_id:
+        raise HTTPException(status_code=400, detail="No request_id found — cannot recover. Training may not have been submitted.")
+
+    # Check fal.ai status
+    from app.providers import get_trainer
+    trainer = get_trainer(lora.training_provider, db=db, base_model=lora.base_model)
+
+    try:
+        status_info = await trainer.check_training_status(request_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to check fal.ai status: {e}")
+
+    status_type = status_info.get("status", "")
+
+    if status_type == "Completed":
+        # Fetch result and finalize
+        try:
+            result = await trainer.get_training_result(request_id)
+            gen_service.update_lora_status(
+                lora_id,
+                LoraModelStatus.COMPLETED,
+                lora_url=result.lora_url,
+                provider_metadata={"request_id": request_id, **(result.metadata or {})},
+            )
+            # Update job if exists
+            if lora.job_id:
+                job = db.query(Job).filter(Job.id == lora.job_id).first()
+                if job:
+                    job.status = JobStatus.COMPLETED
+                    from datetime import datetime
+                    job.completed_at = datetime.utcnow()
+                    job.progress = 1
+                    job.result = {"lora_url": result.lora_url, "request_id": request_id, "recovered": True}
+                    db.commit()
+            return {"status": "recovered", "lora_url": result.lora_url, "request_id": request_id}
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Training completed but failed to fetch result: {e}")
+
+    elif "error" in status_type.lower() or status_info.get("error"):
+        error_msg = status_info.get("error", f"Training failed with status: {status_type}")
+        gen_service.update_lora_status(lora_id, LoraModelStatus.FAILED, error_msg)
+        if lora.job_id:
+            job = db.query(Job).filter(Job.id == lora.job_id).first()
+            if job:
+                job.status = JobStatus.FAILED
+                job.error_message = error_msg
+                db.commit()
+        return {"status": "failed", "error": error_msg}
+
+    else:
+        # Still running — re-dispatch celery task to resume polling
+        from app.workers.generation_tasks import train_lora as train_lora_task
+        task = train_lora_task.delay(lora_id, lora.job_id)
+        if lora.job_id:
+            job = db.query(Job).filter(Job.id == lora.job_id).first()
+            if job:
+                job.celery_task_id = task.id
+                job.status = JobStatus.RUNNING
+                db.commit()
+        return {"status": "polling_resumed", "fal_status": status_type, "request_id": request_id}
+
+
+@router.post("/lora/{lora_id}/retry")
+async def retry_lora_training(lora_id: int, db: Session = Depends(get_db)):
+    """Retry a FAILED LoRA training job from scratch."""
+    gen_service = get_generation_service(db)
+    lora = gen_service.get_lora_model(lora_id)
+    if not lora:
+        raise HTTPException(status_code=404, detail="LoRA model not found")
+
+    if lora.status != LoraModelStatus.FAILED:
+        raise HTTPException(status_code=400, detail=f"Can only retry FAILED models (current: {lora.status.value})")
+
+    # Create a new job
+    try:
+        job = Job(
+            job_type=JobType.LORA_TRAIN,
+            status=JobStatus.PENDING,
+            total_items=1,
+            parameters={"trigger_word": lora.trigger_word, "retry_of_lora_id": lora_id},
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create retry job: {e}")
+
+    # Reset LoRA to PENDING
+    gen_service.update_lora_status(lora_id, LoraModelStatus.PENDING)
+    lora.job_id = job.id
+    lora.error_message = None
+    lora.provider_metadata = None
+    db.commit()
+
+    # Dispatch
+    from app.workers.generation_tasks import train_lora as train_lora_task
+    task = train_lora_task.delay(lora_id, job.id)
+
+    job.celery_task_id = task.id
+    db.commit()
+
+    return {"status": "retry_started", "lora_model_id": lora_id, "job_id": job.id}
 
 
 @router.delete("/lora/{lora_id}", status_code=204)
@@ -536,6 +660,7 @@ class StartEvaluationRequest(BaseModel):
     """Request to start a LoRA model evaluation."""
 
     sample_count: int = Field(5, ge=1, le=50)
+    creative_count: int = Field(0, ge=0, le=20)
     metrics_enabled: list[str] = Field(default=["embedding_similarity"])
     generation_params: dict | None = None
     vision_eval_provider: str | None = None
@@ -545,6 +670,7 @@ class EvaluationPairResponse(BaseModel):
     """Response for a single evaluation pair."""
 
     id: int
+    pair_type: str
     original_image_id: int | None
     original_thumbnail: str | None
     original_object_key: str | None
@@ -630,6 +756,7 @@ def _pair_to_response(pair) -> EvaluationPairResponse:
 
     return EvaluationPairResponse(
         id=pair.id,
+        pair_type=getattr(pair, "pair_type", "reference"),
         original_image_id=pair.original_image_id,
         original_thumbnail=original_thumb,
         original_object_key=original_object_key,
@@ -735,6 +862,7 @@ async def start_evaluation(lora_id: int, request: StartEvaluationRequest, db: Se
             "metrics_enabled": request.metrics_enabled,
             "generation_params": request.generation_params or {},
             "vision_eval_provider": request.vision_eval_provider,
+            "creative_count": request.creative_count,
         },
         job_id=job.id,
     )

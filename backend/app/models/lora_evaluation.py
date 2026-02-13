@@ -116,6 +116,11 @@ class EvaluationPair(Base):
     # Combined score
     pair_score: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # Pair type: "reference" (vs original) or "creative" (novel prompt, no original)
+    pair_type: Mapped[str] = mapped_column(
+        String(32), default="reference", server_default="reference", nullable=False
+    )
+
     # Status
     status: Mapped[str] = mapped_column(
         String(32), default="pending", nullable=False

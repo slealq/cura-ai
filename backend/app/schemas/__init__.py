@@ -127,6 +127,7 @@ class JobResponse(BaseModel):
     started_at: datetime | None
     completed_at: datetime | None
     result: dict | None = None
+    parameters: dict | None = None
     image_id: int | None = None
     image_filename: str | None = None
     image_thumbnail: str | None = None

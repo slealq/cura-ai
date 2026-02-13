@@ -71,6 +71,7 @@ export interface Job {
   started_at: string | null;
   completed_at: string | null;
   result: Record<string, unknown> | null;
+  parameters: Record<string, unknown> | null;
   image_id: number | null;
   image_filename: string | null;
   image_thumbnail: string | null;
@@ -328,6 +329,7 @@ export interface ProviderModel {
 
 export interface EvaluationPair {
   id: number;
+  pair_type: string;
   original_image_id: number | null;
   original_thumbnail: string | null;
   original_object_key: string | null;
@@ -347,6 +349,10 @@ export interface EvaluationPair {
     style_fidelity?: number;
     subject_accuracy?: number;
     detail_preservation?: number;
+    realism?: number;
+    prompt_adherence?: number;
+    detail_quality?: number;
+    pair_type?: string;
   } | null;
   status: string;
   error_message: string | null;

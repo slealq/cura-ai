@@ -123,14 +123,16 @@ class EvaluationService:
     def create_pair(
         self,
         evaluation_id: int,
-        original_image_id: int,
+        original_image_id: int | None,
         prompt_used: str,
+        pair_type: str = "reference",
     ) -> EvaluationPair:
         """Create a new evaluation pair."""
         pair = EvaluationPair(
             evaluation_id=evaluation_id,
             original_image_id=original_image_id,
             prompt_used=prompt_used,
+            pair_type=pair_type,
             status="pending",
         )
         self.db.add(pair)

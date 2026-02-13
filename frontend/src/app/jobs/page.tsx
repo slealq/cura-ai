@@ -3,9 +3,9 @@
 import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Play, XCircle, RefreshCw, Tag, FileText, Cpu, Sparkles, Check, AlertTriangle } from 'lucide-react';
+import { Loader2, Play, XCircle, RefreshCw, Tag, FileText, Cpu, Sparkles, Check, AlertTriangle, RotateCcw, Wrench } from 'lucide-react';
 import { toast } from 'sonner';
-import { jobsApi, clustersApi, imagesApi } from '@/lib/api';
+import { jobsApi, clustersApi, imagesApi, generationApi } from '@/lib/api';
 import { cn, formatDate, getStatusColor } from '@/lib/utils';
 import type { BatchJobImage, Job } from '@/types';
 
@@ -111,6 +111,30 @@ export default function JobsPage() {
       queryClient.invalidateQueries({ queryKey: ['jobs'] });
     },
     onError: () => toast.error('Failed to cancel job'),
+  });
+
+  const recoverMutation = useMutation({
+    mutationFn: (loraId: number) => generationApi.recoverLoraTraining(loraId),
+    onSuccess: (data) => {
+      if (data.status === 'recovered') {
+        toast.success('Training recovered successfully');
+      } else if (data.status === 'polling_resumed') {
+        toast.success('Polling resumed', { description: `fal.ai status: ${data.fal_status}` });
+      } else if (data.status === 'failed') {
+        toast.error('Training had failed on fal.ai', { description: data.error });
+      }
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
+    onError: (err: Error) => toast.error('Recovery failed', { description: err.message }),
+  });
+
+  const retryMutation = useMutation({
+    mutationFn: (loraId: number) => generationApi.retryLoraTraining(loraId),
+    onSuccess: (data) => {
+      toast.success('Training retry started', { description: `Job #${data.job_id}` });
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
+    onError: (err: Error) => toast.error('Retry failed', { description: err.message }),
   });
 
   const hasBatchRunning = jobs?.items.some(
@@ -302,8 +326,16 @@ export default function JobsPage() {
               {jobs?.items.map((job) => (
                 <tr key={job.id} className="hover:bg-muted/30">
                   <td className="px-4 py-3 text-sm font-mono">{job.id}</td>
-                  <td className="px-4 py-3 text-sm capitalize">
-                    {job.job_type.replace('_', ' ')}
+                  <td className="px-4 py-3 text-sm">
+                    <span className="capitalize">{job.job_type.replace('_', ' ')}</span>
+                    {job.job_type === 'lora_train' && job.parameters?.lora_model_id != null && (
+                      <Link
+                        href={`/models/${String(job.parameters.lora_model_id)}`}
+                        className="ml-1.5 text-xs text-primary hover:underline"
+                      >
+                        Model #{String(job.parameters.lora_model_id)}
+                      </Link>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-sm">
                     {job.image_id ? (
@@ -347,14 +379,24 @@ export default function JobsPage() {
                     {formatDate(job.created_at)}
                   </td>
                   <td className="px-4 py-3">
-                    {(job.status === 'pending' || job.status === 'running') && (
-                      <button
-                        onClick={() => cancelJobMutation.mutate(job.id)}
-                        className="p-1.5 hover:bg-red-100 rounded-lg text-muted-foreground hover:text-red-600 transition-colors"
-                      >
-                        <XCircle className="h-4 w-4" />
-                      </button>
-                    )}
+                    <div className="flex items-center gap-1">
+                      {(job.status === 'pending' || job.status === 'running') && (
+                        <button
+                          onClick={() => cancelJobMutation.mutate(job.id)}
+                          className="p-1.5 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg text-muted-foreground hover:text-red-600 transition-colors"
+                          title="Cancel job"
+                        >
+                          <XCircle className="h-4 w-4" />
+                        </button>
+                      )}
+                      <LoraJobActions
+                        job={job}
+                        onRecover={(id) => recoverMutation.mutate(id)}
+                        onRetry={(id) => retryMutation.mutate(id)}
+                        isRecoverPending={recoverMutation.isPending}
+                        isRetryPending={retryMutation.isPending}
+                      />
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -478,6 +520,69 @@ function BatchImagesPill({ job }: { job: Job }) {
       )}
     </div>
   );
+}
+
+function LoraJobActions({
+  job,
+  onRecover,
+  onRetry,
+  isRecoverPending,
+  isRetryPending,
+}: {
+  job: Job;
+  onRecover: (loraId: number) => void;
+  onRetry: (loraId: number) => void;
+  isRecoverPending: boolean;
+  isRetryPending: boolean;
+}) {
+  if (job.job_type !== 'lora_train') return null;
+
+  const loraId = (job.parameters?.lora_model_id as number) ?? null;
+  if (!loraId) return null;
+
+  // Show recover button for running jobs older than 5 minutes
+  if (job.status === 'running' && job.started_at) {
+    const elapsed = Date.now() - new Date(job.started_at).getTime();
+    if (elapsed > 5 * 60 * 1000) {
+      return (
+        <button
+          onClick={() => onRecover(loraId)}
+          disabled={isRecoverPending}
+          className={cn(
+            'flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors',
+            'border border-amber-300 text-amber-700 hover:bg-amber-50',
+            'dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-900/30',
+            'disabled:opacity-50 disabled:cursor-not-allowed'
+          )}
+          title="Check fal.ai status and recover if completed"
+        >
+          <Wrench className="h-3 w-3" />
+          Recover
+        </button>
+      );
+    }
+  }
+
+  // Show retry button for failed jobs
+  if (job.status === 'failed') {
+    return (
+      <button
+        onClick={() => onRetry(loraId)}
+        disabled={isRetryPending}
+        className={cn(
+          'flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors',
+          'border border-border text-foreground hover:bg-muted',
+          'disabled:opacity-50 disabled:cursor-not-allowed'
+        )}
+        title="Retry training from scratch"
+      >
+        <RotateCcw className="h-3 w-3" />
+        Retry
+      </button>
+    );
+  }
+
+  return null;
 }
 
 function JobProgress({ job }: { job: Job }) {

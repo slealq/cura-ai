@@ -1,7 +1,12 @@
 """Celery application configuration."""
+import logging
+
 from celery import Celery
+from celery.signals import worker_ready
 
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -60,3 +65,44 @@ celery_app.conf.update(
         },
     },
 )
+
+
+@worker_ready.connect
+def recover_stuck_training_jobs(sender, **kwargs):
+    """On worker startup, re-dispatch polling for LoRA models stuck in TRAINING with a request_id."""
+    # Only run on the generation queue worker
+    queues = [q.name for q in sender.task_consumer.queues] if hasattr(sender, 'task_consumer') else []
+    if queues and "generation" not in queues:
+        return
+
+    from app.db.base import SessionLocal
+    from app.models.lora_model import LoraModel, LoraModelStatus
+
+    db = SessionLocal()
+    try:
+        stuck = (
+            db.query(LoraModel)
+            .filter(LoraModel.status == LoraModelStatus.TRAINING)
+            .all()
+        )
+        for lora in stuck:
+            request_id = (lora.provider_metadata or {}).get("request_id")
+            if not request_id:
+                logger.warning(
+                    f"LoRA {lora.id} stuck in TRAINING but has no request_id — cannot recover automatically"
+                )
+                continue
+
+            logger.info(
+                f"Recovering stuck LoRA training: id={lora.id} name={lora.name!r} request_id={request_id}"
+            )
+            # Re-dispatch train_lora which will detect TRAINING + request_id and resume polling
+            from app.workers.generation_tasks import train_lora
+            train_lora.delay(lora.id, lora.job_id)
+
+        if stuck:
+            logger.info(f"Recovery: re-dispatched {len(stuck)} stuck LoRA training job(s)")
+    except Exception as e:
+        logger.error(f"Failed to recover stuck training jobs on startup: {e}")
+    finally:
+        db.close()

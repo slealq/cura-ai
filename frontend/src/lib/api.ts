@@ -584,6 +584,16 @@ export const generationApi = {
     await api.delete(`/generation/lora/${id}`);
   },
 
+  recoverLoraTraining: async (loraId: number): Promise<{ status: string; lora_url?: string; request_id?: string; error?: string; fal_status?: string }> => {
+    const { data } = await api.post(`/generation/lora/${loraId}/recover`);
+    return data;
+  },
+
+  retryLoraTraining: async (loraId: number): Promise<{ status: string; lora_model_id: number; job_id: number }> => {
+    const { data } = await api.post(`/generation/lora/${loraId}/retry`);
+    return data;
+  },
+
   // Generation
   generate: async (params: {
     prompt: string;
@@ -634,6 +644,7 @@ export const generationApi = {
     loraId: number,
     params: {
       sample_count?: number;
+      creative_count?: number;
       metrics_enabled?: string[];
       generation_params?: Record<string, unknown>;
       vision_eval_provider?: string;

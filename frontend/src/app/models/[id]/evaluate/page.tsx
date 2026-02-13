@@ -37,6 +37,7 @@ export default function EvaluatePage() {
   const loraId = Number(params.id);
 
   const [sampleCount, setSampleCount] = useState(5);
+  const [creativeCount, setCreativeCount] = useState(0);
   const [metricsEnabled, setMetricsEnabled] = useState<string[]>(['embedding_similarity']);
   const [loraScale, setLoraScale] = useState(1.0);
   const [inferenceSteps, setInferenceSteps] = useState(28);
@@ -64,6 +65,7 @@ export default function EvaluatePage() {
     mutationFn: () =>
       generationApi.startEvaluation(loraId, {
         sample_count: sampleCount,
+        creative_count: creativeCount,
         metrics_enabled: metricsEnabled,
         generation_params: {
           lora_scale: loraScale,
@@ -149,6 +151,25 @@ export default function EvaluatePage() {
           </div>
           <p className="text-xs text-muted-foreground mt-1">
             Number of training images to sample for comparison
+          </p>
+        </div>
+
+        {/* Creative Count */}
+        <div>
+          <label className="text-sm font-medium">Creative Prompts</label>
+          <div className="flex items-center gap-3 mt-1">
+            <input
+              type="range"
+              min={0}
+              max={20}
+              value={creativeCount}
+              onChange={(e) => setCreativeCount(Number(e.target.value))}
+              className="flex-1"
+            />
+            <span className="text-sm font-mono w-8 text-right">{creativeCount}</span>
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            AI-generated novel prompts to test model generalization (no reference comparison)
           </p>
         </div>
 

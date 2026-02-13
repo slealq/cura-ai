@@ -333,7 +333,7 @@ class AnthropicClusterSummarizer(BaseClusterSummarizer):
         return self.model
 
 
-EVAL_PROMPT = """You are evaluating how well a LoRA-trained model reproduced a reference image.
+EVAL_PROMPT = """You are a STRICT evaluator assessing how well a LoRA-trained model reproduced a reference image.
 
 You are given:
 1. The ORIGINAL reference image (first image)
@@ -342,14 +342,38 @@ You are given:
 
 **Prompt used:** {prompt}
 
-Score each dimension from 0 to 10 (0 = no resemblance, 10 = indistinguishable):
+## Scoring Calibration (FOLLOW STRICTLY)
 
-- **style_fidelity**: How well does the generated image match the visual style (color palette, lighting, artistic technique, mood) of the original?
-- **subject_accuracy**: How well does the generated image capture the same subject, composition, and key elements?
-- **detail_preservation**: How well are fine details, textures, and subtle features preserved?
-- **overall**: Your holistic assessment combining all factors.
+Score each dimension from 0 to 10 using these anchors:
+- **0-1**: Completely different. No recognizable connection between the images.
+- **2-3**: Vaguely similar concept only. Different subject, different style, different composition.
+- **4-5**: Same general subject or concept but clearly different execution. Noticeable style, color, or composition differences. Most details don't match.
+- **6**: Recognizably attempting the same scene but with significant differences. Multiple wrong details.
+- **7**: Same scene and style with some visible differences in details, proportions, or textures.
+- **8**: Very close match with only minor differences noticeable on careful inspection.
+- **9**: Nearly identical. Only subtle pixel-level differences.
+- **10**: Indistinguishable. Reserve ONLY for perfect reproductions.
 
-Also provide a 2-3 sentence **assessment** explaining the key similarities and differences.
+Most LoRA-generated images should score between 3 and 7. Scores above 8 should be exceptionally rare.
+
+## CRITICAL: Human Features Penalty
+
+If the images contain human faces, bodies, or anatomy:
+- ANY distortion in facial features (wrong proportions, asymmetry, extra/missing features) → subject_accuracy MUST be ≤ 4
+- Different person identity (wrong face, different person) → subject_accuracy MUST be ≤ 3
+- Anatomical errors (wrong number of fingers, distorted limbs, impossible poses) → detail_preservation MUST be ≤ 3
+- Uncanny valley effects → overall MUST be penalized by at least 2 points
+
+## Dimensions
+
+- **style_fidelity**: Does the generated image match the visual style? Same color palette, lighting, artistic technique, mood, and rendering quality?
+- **subject_accuracy**: Does it capture the EXACT same subject? Same person/object identity, composition, pose, and spatial arrangement? Not just "similar looking" — the SAME subject.
+- **detail_preservation**: Are fine details correct? Textures, patterns, text, small objects, backgrounds, accessories. Every missing or wrong detail reduces this score.
+- **overall**: Holistic assessment. This MUST NOT be higher than the lowest dimension score + 2. If any dimension is ≤ 3, overall CANNOT exceed 5.
+
+## Assessment
+
+Provide a 2-3 sentence assessment focused on what went WRONG. What specific details differ? What features are missing or distorted? Be critical, not generous.
 
 Return ONLY a valid JSON object (no other text):
 {{
@@ -358,6 +382,102 @@ Return ONLY a valid JSON object (no other text):
   "detail_preservation": <number>,
   "overall": <number>,
   "assessment": "<string>"
+}}"""
+
+
+CREATIVE_EVAL_PROMPT = """You are a STRICT image quality evaluator assessing a single generated image from a LoRA-trained model.
+
+There is NO reference image. You are evaluating this image purely on its own quality and fidelity to the prompt.
+
+**Prompt used to generate:** {prompt}
+
+## Scoring Calibration (FOLLOW STRICTLY)
+
+Score each dimension from 0 to 10:
+- **0-1**: Completely broken. Unrecognizable or incoherent.
+- **2-3**: Major quality issues. Significant artifacts, distortion, or incoherence.
+- **4-5**: Below average. Multiple noticeable problems with realism or detail.
+- **6**: Acceptable but clearly AI-generated. Some artifacts or unrealistic elements.
+- **7**: Good quality with minor issues. Mostly realistic with a few tells.
+- **8**: High quality. Very few artifacts, realistic details.
+- **9**: Excellent. Nearly flawless quality.
+- **10**: Perfect. Reserve ONLY for exceptional quality.
+
+## CRITICAL: Realism and Anatomy
+
+- ANY facial distortion, asymmetry, or uncanny valley = realism MUST be ≤ 4
+- Wrong number of fingers, distorted limbs, impossible anatomy = detail_quality MUST be ≤ 3
+- Garbled or nonsensical text/lettering = detail_quality penalty of at least -2
+- Repetitive patterns, texture glitches, or melted/blurred areas = realism penalty
+
+## Dimensions
+
+- **realism**: How realistic and natural does the image look? Free from AI artifacts, distortions, uncanny valley effects?
+- **prompt_adherence**: How well does the image match what was described? Are all described elements present and correct?
+- **detail_quality**: Quality of fine details — textures, edges, small objects, backgrounds. Crisp and accurate or blurry/malformed?
+- **overall**: Holistic quality. MUST NOT be higher than the lowest dimension score + 2.
+
+## Assessment
+
+Provide a 2-3 sentence assessment focused on issues. What artifacts? What's missing from the prompt? What looks unnatural? Be critical and harsh.
+
+Return ONLY a valid JSON object (no other text):
+{{
+  "realism": <number>,
+  "prompt_adherence": <number>,
+  "detail_quality": <number>,
+  "overall": <number>,
+  "assessment": "<string>"
+}}"""
+
+
+ASSESSMENT_SUMMARY_PROMPT = """You are summarizing the results of a LoRA model evaluation.
+
+The LoRA model "{model_name}" (trigger word: "{trigger_word}") was evaluated by generating images and comparing them against originals from the training set.
+
+{creative_section}
+
+## Individual Pair Assessments
+
+{pair_assessments}
+
+## Aggregate Scores
+- Overall Score: {overall_score}
+- Average Vision Score: {avg_vision}
+- Average Embedding Similarity: {avg_embedding}
+
+## Your Task
+
+Write a concise 3-5 sentence evaluation summary that:
+1. States the overall quality verdict (poor / below average / acceptable / good / excellent)
+2. Identifies the MAIN patterns of failure — what consistently goes wrong?
+3. Highlights any strengths if they exist
+4. Gives a specific, actionable recommendation (e.g., "increase training steps", "reduce learning rate", "add more diverse training images")
+
+Focus on patterns and what went wrong, not on restating individual scores. Be direct and critical.
+
+Return ONLY a valid JSON object (no other text):
+{{
+  "summary": "<string>"
+}}"""
+
+
+CREATIVE_PROMPT_GENERATION = """You are generating creative image prompts for testing a LoRA model's generalization ability.
+
+The LoRA model was trained with trigger word "{trigger_word}" on images described as:
+
+{sample_descriptions}
+
+Generate {count} new, creative prompts that:
+1. MUST start with the trigger word "{trigger_word}"
+2. Are INSPIRED by the training set but describe ENTIRELY NEW scenes, compositions, or scenarios not present in the originals
+3. Test the model's ability to generalize beyond its training data
+4. Cover different scenarios, environments, lighting conditions, or styles
+5. Are detailed enough to produce specific images (2-3 sentences each)
+
+Return ONLY a valid JSON object (no other text):
+{{
+  "prompts": ["<prompt1>", "<prompt2>", ...]
 }}"""
 
 
@@ -449,6 +569,181 @@ class AnthropicEvaluator(BaseEvaluator):
             model=self.model,
             raw_response={"content": content},
         )
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    async def evaluate_single(
+        self,
+        image_data: bytes,
+        mime_type: str,
+        prompt_used: str,
+    ) -> VisionEvalResult:
+        """Evaluate a single generated image on quality (no reference comparison)."""
+        b64_image = base64.b64encode(image_data).decode("utf-8")
+        media_type = mime_type if mime_type != "image/jpg" else "image/jpeg"
+        prompt = CREATIVE_EVAL_PROMPT.format(prompt=prompt_used)
+
+        start = time.monotonic()
+        try:
+            response = await self.client.messages.create(
+                model=self.model,
+                max_tokens=1000,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": media_type,
+                                    "data": b64_image,
+                                },
+                            },
+                        ],
+                    }
+                ],
+            )
+            elapsed = (time.monotonic() - start) * 1000
+            content = response.content[0].text if response.content else ""
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"Anthropic creative evaluate completed ({self.model})",
+                provider="anthropic", model=self.model, operation="evaluate_creative",
+                duration_ms=round(elapsed, 1),
+                input_tokens=response.usage.input_tokens,
+                output_tokens=response.usage.output_tokens,
+                success=True,
+            )
+        except Exception as e:
+            elapsed = (time.monotonic() - start) * 1000
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"Anthropic creative evaluate failed: {e}",
+                level=LogLevel.ERROR, provider="anthropic", model=self.model,
+                operation="evaluate_creative", duration_ms=round(elapsed, 1), success=False,
+                extra={"error": str(e)},
+            )
+            raise
+
+        result = extract_json(content)
+
+        return VisionEvalResult(
+            style_fidelity=float(result.get("realism", 0)),
+            subject_accuracy=float(result.get("prompt_adherence", 0)),
+            detail_preservation=float(result.get("detail_quality", 0)),
+            overall=float(result.get("overall", 0)),
+            assessment=result.get("assessment", ""),
+            model=self.model,
+            raw_response={"content": content},
+        )
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    async def summarize_assessments(
+        self,
+        model_name: str,
+        trigger_word: str,
+        pair_assessments: list[dict],
+        overall_score: float | None,
+        avg_vision: float | None,
+        avg_embedding: float | None,
+        creative_section: str = "",
+    ) -> str:
+        """Generate a cohesive AI summary from individual assessments."""
+        assessments_text = "\n".join(
+            f"Pair {i+1} (score {a.get('score', 'N/A')}): {a.get('assessment', 'N/A')}"
+            for i, a in enumerate(pair_assessments)
+        )
+        prompt = ASSESSMENT_SUMMARY_PROMPT.format(
+            model_name=model_name,
+            trigger_word=trigger_word,
+            pair_assessments=assessments_text or "No assessments available.",
+            overall_score=f"{overall_score:.1f}" if overall_score is not None else "N/A",
+            avg_vision=f"{avg_vision:.1f}" if avg_vision is not None else "N/A",
+            avg_embedding=f"{avg_embedding:.1f}" if avg_embedding is not None else "N/A",
+            creative_section=creative_section,
+        )
+
+        start = time.monotonic()
+        try:
+            response = await self.client.messages.create(
+                model=self.model,
+                max_tokens=1000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            elapsed = (time.monotonic() - start) * 1000
+            content = response.content[0].text if response.content else ""
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"Anthropic assessment summary completed ({self.model})",
+                provider="anthropic", model=self.model, operation="summarize_eval",
+                duration_ms=round(elapsed, 1),
+                input_tokens=response.usage.input_tokens,
+                output_tokens=response.usage.output_tokens,
+                success=True,
+            )
+        except Exception as e:
+            elapsed = (time.monotonic() - start) * 1000
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"Anthropic assessment summary failed: {e}",
+                level=LogLevel.ERROR, provider="anthropic", model=self.model,
+                operation="summarize_eval", duration_ms=round(elapsed, 1), success=False,
+                extra={"error": str(e)},
+            )
+            raise
+
+        result = extract_json(content)
+        return result.get("summary", "")
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    async def generate_creative_prompts(
+        self,
+        trigger_word: str,
+        sample_descriptions: list[str],
+        count: int,
+    ) -> list[str]:
+        """Generate creative prompts inspired by training set descriptions."""
+        descriptions_text = "\n".join(
+            f"- {desc[:300]}" for desc in sample_descriptions[:10]
+        )
+        prompt = CREATIVE_PROMPT_GENERATION.format(
+            trigger_word=trigger_word,
+            sample_descriptions=descriptions_text,
+            count=count,
+        )
+
+        start = time.monotonic()
+        try:
+            response = await self.client.messages.create(
+                model=self.model,
+                max_tokens=2000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            elapsed = (time.monotonic() - start) * 1000
+            content = response.content[0].text if response.content else ""
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"Anthropic creative prompt generation completed ({self.model})",
+                provider="anthropic", model=self.model, operation="generate_prompts",
+                duration_ms=round(elapsed, 1),
+                input_tokens=response.usage.input_tokens,
+                output_tokens=response.usage.output_tokens,
+                success=True,
+            )
+        except Exception as e:
+            elapsed = (time.monotonic() - start) * 1000
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"Anthropic creative prompt generation failed: {e}",
+                level=LogLevel.ERROR, provider="anthropic", model=self.model,
+                operation="generate_prompts", duration_ms=round(elapsed, 1), success=False,
+                extra={"error": str(e)},
+            )
+            raise
+
+        result = extract_json(content)
+        return result.get("prompts", [])[:count]
 
     def get_model_name(self) -> str:
         return self.model

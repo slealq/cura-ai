@@ -68,6 +68,8 @@ function PairCard({
   const [expanded, setExpanded] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
 
+  const isCreative = pair.pair_type === 'creative';
+
   const originalThumb = pair.original_thumbnail
     ? imagesApi.getThumbnailUrl(pair.original_thumbnail.split('/').pop()!)
     : null;
@@ -83,34 +85,49 @@ function PairCard({
 
   return (
     <>
-      <div className="bg-card border border-border rounded-xl overflow-hidden">
-        <div className="flex">
-          {/* Original */}
-          <div className="flex-1 p-3">
-            <p className="text-xs text-muted-foreground mb-1.5 font-medium">Original</p>
-            {originalThumb ? (
-              <div
-                className="aspect-square bg-muted rounded-lg overflow-hidden cursor-pointer relative group"
-                onClick={() => originalFullUrl && setLightboxImage(originalFullUrl)}
-              >
-                <img src={originalThumb} alt="Original" className="w-full h-full object-cover" />
-                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
-                  <Maximize2 className="h-5 w-5 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
-                </div>
-              </div>
-            ) : (
-              <div className="aspect-square bg-muted rounded-lg flex items-center justify-center">
-                <span className="text-xs text-muted-foreground">No image</span>
-              </div>
-            )}
+      <div className={cn(
+        'bg-card border rounded-xl overflow-hidden',
+        isCreative ? 'border-purple-300 dark:border-purple-800' : 'border-border'
+      )}>
+        {isCreative && (
+          <div className="px-3 pt-2">
+            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300">
+              Creative
+            </span>
           </div>
+        )}
+        <div className="flex">
+          {/* Original (only for reference pairs) */}
+          {!isCreative && (
+            <div className="flex-1 p-3">
+              <p className="text-xs text-muted-foreground mb-1.5 font-medium">Original</p>
+              {originalThumb ? (
+                <div
+                  className="aspect-square bg-muted rounded-lg overflow-hidden cursor-pointer relative group"
+                  onClick={() => originalFullUrl && setLightboxImage(originalFullUrl)}
+                >
+                  <img src={originalThumb} alt="Original" className="w-full h-full object-cover" />
+                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+                    <Maximize2 className="h-5 w-5 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </div>
+                </div>
+              ) : (
+                <div className="aspect-square bg-muted rounded-lg flex items-center justify-center">
+                  <span className="text-xs text-muted-foreground">No image</span>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Generated */}
-          <div className="flex-1 p-3">
+          <div className={cn('p-3', isCreative ? 'w-full' : 'flex-1')}>
             <p className="text-xs text-muted-foreground mb-1.5 font-medium">Generated</p>
             {generatedThumb ? (
               <div
-                className="aspect-square bg-muted rounded-lg overflow-hidden cursor-pointer relative group"
+                className={cn(
+                  'bg-muted rounded-lg overflow-hidden cursor-pointer relative group',
+                  isCreative ? 'aspect-[4/3] max-w-sm mx-auto' : 'aspect-square'
+                )}
                 onClick={() => setLightboxImage(
                   generationApi.getEvalGeneratedImageUrl(evalId, pair.id)
                 )}
@@ -121,11 +138,17 @@ function PairCard({
                 </div>
               </div>
             ) : isProcessing ? (
-              <div className="aspect-square bg-muted rounded-lg flex items-center justify-center">
+              <div className={cn(
+                'bg-muted rounded-lg flex items-center justify-center',
+                isCreative ? 'aspect-[4/3] max-w-sm mx-auto' : 'aspect-square'
+              )}>
                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
               </div>
             ) : (
-              <div className="aspect-square bg-muted rounded-lg flex items-center justify-center">
+              <div className={cn(
+                'bg-muted rounded-lg flex items-center justify-center',
+                isCreative ? 'aspect-[4/3] max-w-sm mx-auto' : 'aspect-square'
+              )}>
                 {pairStatus === 'failed' ? (
                   <XCircle className="h-5 w-5 text-red-500" />
                 ) : (
@@ -147,14 +170,26 @@ function PairCard({
             </div>
           )}
 
-          <ScoreBar label="Embedding Similarity" score={pair.embedding_similarity} />
-          <ScoreBar label="Vision Score" score={pair.vision_score} />
+          {!isCreative && (
+            <>
+              <ScoreBar label="Embedding Similarity" score={pair.embedding_similarity} />
+              <ScoreBar label="Vision Score" score={pair.vision_score} />
+            </>
+          )}
 
-          {pair.metrics_detail && (
+          {pair.metrics_detail && !isCreative && (
             <>
               <ScoreBar label="Style Fidelity" score={pair.metrics_detail.style_fidelity ?? null} />
               <ScoreBar label="Subject Accuracy" score={pair.metrics_detail.subject_accuracy ?? null} />
               <ScoreBar label="Detail Preservation" score={pair.metrics_detail.detail_preservation ?? null} />
+            </>
+          )}
+
+          {pair.metrics_detail && isCreative && (
+            <>
+              <ScoreBar label="Realism" score={pair.metrics_detail.realism ?? null} />
+              <ScoreBar label="Prompt Adherence" score={pair.metrics_detail.prompt_adherence ?? null} />
+              <ScoreBar label="Detail Quality" score={pair.metrics_detail.detail_quality ?? null} />
             </>
           )}
 
@@ -216,6 +251,7 @@ export default function EvaluationResultsPage() {
   const loraId = Number(params.id);
   const evalId = Number(params.evalId);
   const [showTrainingConfig, setShowTrainingConfig] = useState(false);
+  const [showGenerationConfig, setShowGenerationConfig] = useState(false);
 
   const { data: evaluation, isLoading } = useQuery({
     queryKey: ['evaluation', evalId],
@@ -255,6 +291,9 @@ export default function EvaluationResultsPage() {
   const isRunning = evaluation.status === 'pending' || evaluation.status === 'running';
   const completedPairs = evaluation.pairs.filter((p) => p.status === 'completed');
   const failedPairs = evaluation.pairs.filter((p) => p.status === 'failed');
+  const referencePairs = evaluation.pairs.filter((p) => (p.pair_type || 'reference') === 'reference');
+  const creativePairs = evaluation.pairs.filter((p) => p.pair_type === 'creative');
+  const avgCreativeScore = evaluation.aggregate_results?.avg_creative_score as number | null ?? null;
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -303,7 +342,7 @@ export default function EvaluationResultsPage() {
 
       {/* Score Header */}
       {evaluation.overall_score !== null && (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className={cn('grid grid-cols-1 gap-4', creativePairs.length > 0 ? 'md:grid-cols-5' : 'md:grid-cols-4')}>
           <div className={cn('rounded-xl p-5 text-center', scoreBg(evaluation.overall_score))}>
             <p className="text-xs text-muted-foreground font-medium mb-1">Overall Score</p>
             <p className={cn('text-4xl font-bold', scoreColor(evaluation.overall_score))}>
@@ -323,12 +362,20 @@ export default function EvaluationResultsPage() {
               {evaluation.avg_vision_score !== null ? evaluation.avg_vision_score.toFixed(1) : '—'}
             </p>
           </div>
+          {creativePairs.length > 0 && (
+            <div className="bg-card border border-purple-200 dark:border-purple-800 rounded-xl p-5 text-center">
+              <p className="text-xs text-purple-600 dark:text-purple-400 font-medium mb-1">Creative Score</p>
+              <p className={cn('text-2xl font-bold', scoreColor(avgCreativeScore))}>
+                {avgCreativeScore !== null ? avgCreativeScore.toFixed(1) : '—'}
+              </p>
+            </div>
+          )}
           <div className="bg-card border border-border rounded-xl p-5 text-center">
             <p className="text-xs text-muted-foreground font-medium mb-1">Pairs</p>
             <p className="text-2xl font-bold text-foreground">
               {completedPairs.length}
               <span className="text-sm text-muted-foreground font-normal">
-                /{evaluation.sample_count}
+                /{evaluation.pairs.length}
               </span>
             </p>
             {failedPairs.length > 0 && (
@@ -338,38 +385,98 @@ export default function EvaluationResultsPage() {
         </div>
       )}
 
-      {/* Training Parameters */}
-      {evaluation.training_config && (
-        <div className="bg-card border border-border rounded-xl overflow-hidden">
-          <button
-            onClick={() => setShowTrainingConfig(!showTrainingConfig)}
-            className="w-full flex items-center justify-between p-4 hover:bg-muted/50 transition-colors"
-          >
-            <span className="text-sm font-medium">Training Parameters</span>
-            {showTrainingConfig ? (
-              <ChevronUp className="h-4 w-4 text-muted-foreground" />
-            ) : (
-              <ChevronDown className="h-4 w-4 text-muted-foreground" />
-            )}
-          </button>
-          {showTrainingConfig && (
-            <div className="px-4 pb-4">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-                {Object.entries(evaluation.training_config).map(([key, value]) => (
-                  <div key={key}>
-                    <span className="text-muted-foreground text-xs">{key}</span>
-                    <p className="font-medium">{String(value)}</p>
+      {/* Parameters */}
+      <div className="space-y-0">
+        {/* Training Parameters */}
+        {evaluation.training_config && (
+          <div className="bg-card border border-border rounded-xl overflow-hidden">
+            <button
+              onClick={() => setShowTrainingConfig(!showTrainingConfig)}
+              className="w-full flex items-center justify-between p-4 hover:bg-muted/50 transition-colors"
+            >
+              <span className="text-sm font-medium">Training Parameters</span>
+              {showTrainingConfig ? (
+                <ChevronUp className="h-4 w-4 text-muted-foreground" />
+              ) : (
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              )}
+            </button>
+            {showTrainingConfig && (
+              <div className="px-4 pb-4">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                  {Object.entries(evaluation.training_config).map(([key, value]) => (
+                    <div key={key}>
+                      <span className="text-muted-foreground text-xs">{key}</span>
+                      <p className="font-medium">{String(value)}</p>
+                    </div>
+                  ))}
+                  <div>
+                    <span className="text-muted-foreground text-xs">training_images</span>
+                    <p className="font-medium">{evaluation.training_images_count}</p>
                   </div>
-                ))}
-                <div>
-                  <span className="text-muted-foreground text-xs">training_images</span>
-                  <p className="font-medium">{evaluation.training_images_count}</p>
                 </div>
               </div>
-            </div>
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        )}
+
+        {/* Generation / Evaluation Parameters */}
+        {evaluation.config && (
+          <div className="bg-card border border-border rounded-xl overflow-hidden mt-2">
+            <button
+              onClick={() => setShowGenerationConfig(!showGenerationConfig)}
+              className="w-full flex items-center justify-between p-4 hover:bg-muted/50 transition-colors"
+            >
+              <span className="text-sm font-medium">Generation &amp; Evaluation Parameters</span>
+              {showGenerationConfig ? (
+                <ChevronUp className="h-4 w-4 text-muted-foreground" />
+              ) : (
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              )}
+            </button>
+            {showGenerationConfig && (() => {
+              const genParams = (evaluation.config?.generation_params ?? {}) as Record<string, unknown>;
+              const metricsEnabled = (evaluation.config?.metrics_enabled ?? []) as string[];
+              const creativeCount = (evaluation.config?.creative_count ?? 0) as number;
+              const visionProvider = evaluation.config?.vision_eval_provider as string | undefined;
+              return (
+                <div className="px-4 pb-4">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                    {Object.entries(genParams).map(([key, value]) => (
+                      <div key={key}>
+                        <span className="text-muted-foreground text-xs">{key}</span>
+                        <p className="font-medium">{String(value)}</p>
+                      </div>
+                    ))}
+                    <div>
+                      <span className="text-muted-foreground text-xs">sample_count</span>
+                      <p className="font-medium">{evaluation.sample_count}</p>
+                    </div>
+                    {creativeCount > 0 && (
+                      <div>
+                        <span className="text-muted-foreground text-xs">creative_count</span>
+                        <p className="font-medium">{creativeCount}</p>
+                      </div>
+                    )}
+                    {metricsEnabled.length > 0 && (
+                      <div>
+                        <span className="text-muted-foreground text-xs">metrics</span>
+                        <p className="font-medium">{metricsEnabled.join(', ')}</p>
+                      </div>
+                    )}
+                    {visionProvider && (
+                      <div>
+                        <span className="text-muted-foreground text-xs">vision_provider</span>
+                        <p className="font-medium">{visionProvider}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+      </div>
 
       {/* AI Assessment */}
       {evaluation.assessment_summary && (
@@ -390,12 +497,27 @@ export default function EvaluationResultsPage() {
         </div>
       )}
 
-      {/* Side-by-side Comparison Grid */}
-      {evaluation.pairs.length > 0 && (
+      {/* Reference Comparisons */}
+      {referencePairs.length > 0 && (
         <div>
-          <h3 className="text-lg font-semibold mb-4">Comparisons</h3>
+          <h3 className="text-lg font-semibold mb-4">Reference Comparisons</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {evaluation.pairs.map((pair) => (
+            {referencePairs.map((pair) => (
+              <PairCard key={pair.id} pair={pair} evalId={evalId} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Creative / Generalization Tests */}
+      {creativePairs.length > 0 && (
+        <div>
+          <h3 className="text-lg font-semibold mb-1">Creative / Generalization</h3>
+          <p className="text-sm text-muted-foreground mb-4">
+            AI-generated novel prompts testing the model&apos;s ability to generalize beyond training data
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {creativePairs.map((pair) => (
               <PairCard key={pair.id} pair={pair} evalId={evalId} />
             ))}
           </div>

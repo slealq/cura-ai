@@ -98,148 +98,164 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None) -> dict:
         if not lora:
             return {"status": "error", "message": "LoRA model not found"}
 
-        # Update status to training
-        gen_service.update_lora_status(lora_model_id, LoraModelStatus.TRAINING)
+        # Check if this is a resume (LoRA already submitted to fal.ai)
+        existing_request_id = None
+        if lora.status == LoraModelStatus.TRAINING and lora.provider_metadata:
+            existing_request_id = lora.provider_metadata.get("request_id")
 
-        # Load source images (folder or cluster)
-        image_service = get_image_service(db)
-
-        if lora.folder_id:
-            from app.models.folder import FolderImage
-            folder_image_ids = [
-                fi.image_id
-                for fi in db.query(FolderImage).filter(FolderImage.folder_id == lora.folder_id).all()
-            ]
-        elif lora.cluster_id:
-            from app.models.cluster import ClusterMembership
-            folder_image_ids = [
-                cm.image_id
-                for cm in db.query(ClusterMembership).filter(
-                    ClusterMembership.cluster_id == lora.cluster_id,
-                    ClusterMembership.is_excluded == False,
-                ).all()
-            ]
+        if existing_request_id:
+            logger.info(f"Resuming training poll for LoRA {lora_model_id}, request_id={existing_request_id}")
+            request_id = existing_request_id
+            trainer = get_trainer(lora.training_provider, db=db, base_model=lora.base_model)
         else:
-            raise Exception("LoRA model has no associated folder or cluster")
+            # Update status to training
+            gen_service.update_lora_status(lora_model_id, LoraModelStatus.TRAINING)
 
-        if len(folder_image_ids) < 5:
-            raise Exception(f"Source has only {len(folder_image_ids)} images, minimum 5 required")
+            # Load source images (folder or cluster)
+            image_service = get_image_service(db)
 
-        # Get training config
-        training_config = lora.training_config or {}
-        steps = training_config.get("steps", 1000)
-        is_style = training_config.get("is_style", False)
-        use_captions = training_config.get("use_captions", False)
-        caption_include_tags = training_config.get("caption_include_tags", True)
-        caption_include_description = training_config.get("caption_include_description", True)
+            if lora.folder_id:
+                from app.models.folder import FolderImage
+                folder_image_ids = [
+                    fi.image_id
+                    for fi in db.query(FolderImage).filter(FolderImage.folder_id == lora.folder_id).all()
+                ]
+            elif lora.cluster_id:
+                from app.models.cluster import ClusterMembership
+                folder_image_ids = [
+                    cm.image_id
+                    for cm in db.query(ClusterMembership).filter(
+                        ClusterMembership.cluster_id == lora.cluster_id,
+                        ClusterMembership.is_excluded == False,
+                    ).all()
+                ]
+            else:
+                raise Exception("LoRA model has no associated folder or cluster")
 
-        # Get model config to determine ZIP requirements and param names
-        from app.providers.fal_provider import FAL_MODEL_CONFIG
-        model_config = FAL_MODEL_CONFIG.get(lora.base_model, FAL_MODEL_CONFIG["flux-dev"])
-        requires_zip = not model_config["supports_base64"]
-        zip_param_name = model_config["zip_param"]
+            if len(folder_image_ids) < 5:
+                raise Exception(f"Source has only {len(folder_image_ids)} images, minimum 5 required")
 
-        # Instantiate trainer early so _ensure_fal_key() sets FAL_KEY
-        # before any fal_client calls (e.g. upload)
-        trainer = get_trainer(lora.training_provider, db=db, base_model=lora.base_model)
+            # Get training config
+            training_config = lora.training_config or {}
+            steps = training_config.get("steps", 1000)
+            is_style = training_config.get("is_style", False)
+            use_captions = training_config.get("use_captions", False)
+            caption_include_tags = training_config.get("caption_include_tags", True)
+            caption_include_description = training_config.get("caption_include_description", True)
 
-        trainer_kwargs = {}
+            # Get model config to determine ZIP requirements and param names
+            from app.providers.fal_provider import FAL_MODEL_CONFIG
+            model_config = FAL_MODEL_CONFIG.get(lora.base_model, FAL_MODEL_CONFIG["flux-dev"])
+            requires_zip = not model_config["supports_base64"]
+            zip_param_name = model_config["zip_param"]
 
-        # Pass learning_rate from training_config if present
-        if "learning_rate" in training_config:
-            trainer_kwargs["learning_rate"] = training_config["learning_rate"]
+            # Instantiate trainer early so _ensure_fal_key() sets FAL_KEY
+            # before any fal_client calls (e.g. upload)
+            trainer = get_trainer(lora.training_provider, db=db, base_model=lora.base_model)
 
-        if use_captions or requires_zip:
-            # Build ZIP with images + per-image caption .txt files
-            zip_buffer = io.BytesIO()
-            image_count = 0
-            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-                for idx, img_id in enumerate(folder_image_ids):
+            trainer_kwargs = {}
+
+            # Pass learning_rate from training_config if present
+            if "learning_rate" in training_config:
+                trainer_kwargs["learning_rate"] = training_config["learning_rate"]
+
+            if use_captions or requires_zip:
+                # Build ZIP with images + per-image caption .txt files
+                zip_buffer = io.BytesIO()
+                image_count = 0
+                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for idx, img_id in enumerate(folder_image_ids):
+                        image_data = _run_async(image_service.get_image_data(img_id))
+                        if not image_data:
+                            continue
+
+                        image = image_service.get_image(img_id)
+                        ext = "jpg"
+                        if image.mime_type:
+                            ext_map = {"image/png": "png", "image/webp": "webp", "image/gif": "gif"}
+                            ext = ext_map.get(image.mime_type, "jpg")
+
+                        prefix = f"{idx:04d}"
+                        zf.writestr(f"{prefix}.{ext}", image_data)
+
+                        if use_captions:
+                            # Build caption from trigger word + tags/description
+                            caption_parts = []
+                            caption_parts.append(lora.trigger_word)
+
+                            metadata = image.image_metadata
+                            if metadata:
+                                tags_str = ""
+                                if caption_include_tags and metadata.tags:
+                                    tags_str = ", ".join(metadata.tags)
+
+                                desc_str = ""
+                                if caption_include_description and metadata.description_long:
+                                    desc_str = metadata.description_long
+
+                                if tags_str and desc_str:
+                                    caption_parts.append(f"{tags_str}. {desc_str}")
+                                elif tags_str:
+                                    caption_parts.append(tags_str)
+                                elif desc_str:
+                                    caption_parts.append(desc_str)
+
+                            caption = ", ".join(caption_parts)
+                            zf.writestr(f"{prefix}.txt", caption)
+                        elif requires_zip:
+                            # ZIP-only model without captions: use trigger word as caption
+                            zf.writestr(f"{prefix}.txt", lora.trigger_word)
+
+                        image_count += 1
+
+                if image_count == 0:
+                    raise Exception("No image data could be loaded from source")
+
+                logger.info(f"Created ZIP with {image_count} images for LoRA training (captions={use_captions})")
+
+                # Upload ZIP to fal CDN
+                import fal_client
+                zip_bytes = zip_buffer.getvalue()
+                zip_url = fal_client.upload(zip_bytes, "application/zip")
+                logger.info(f"Uploaded training ZIP ({len(zip_bytes)} bytes) to fal CDN")
+
+                # Use the correct ZIP param name for the model
+                trainer_kwargs[zip_param_name] = zip_url
+                image_urls: list[str] = []
+            else:
+                # Default: encode images as base64 data URLs
+                image_urls = []
+                for img_id in folder_image_ids:
                     image_data = _run_async(image_service.get_image_data(img_id))
-                    if not image_data:
-                        continue
+                    if image_data:
+                        image = image_service.get_image(img_id)
+                        mime = image.mime_type or "image/jpeg"
+                        b64 = base64.b64encode(image_data).decode("utf-8")
+                        image_urls.append(f"data:{mime};base64,{b64}")
 
-                    image = image_service.get_image(img_id)
-                    ext = "jpg"
-                    if image.mime_type:
-                        ext_map = {"image/png": "png", "image/webp": "webp", "image/gif": "gif"}
-                        ext = ext_map.get(image.mime_type, "jpg")
+                if not image_urls:
+                    raise Exception("No image data could be loaded from source")
 
-                    prefix = f"{idx:04d}"
-                    zf.writestr(f"{prefix}.{ext}", image_data)
+                logger.info(f"Prepared {len(image_urls)} images for LoRA training")
 
-                    if use_captions:
-                        # Build caption from trigger word + tags/description
-                        caption_parts = []
-                        caption_parts.append(lora.trigger_word)
-
-                        metadata = image.image_metadata
-                        if metadata:
-                            tags_str = ""
-                            if caption_include_tags and metadata.tags:
-                                tags_str = ", ".join(metadata.tags)
-
-                            desc_str = ""
-                            if caption_include_description and metadata.description_long:
-                                desc_str = metadata.description_long
-
-                            if tags_str and desc_str:
-                                caption_parts.append(f"{tags_str}. {desc_str}")
-                            elif tags_str:
-                                caption_parts.append(tags_str)
-                            elif desc_str:
-                                caption_parts.append(desc_str)
-
-                        caption = ", ".join(caption_parts)
-                        zf.writestr(f"{prefix}.txt", caption)
-                    elif requires_zip:
-                        # ZIP-only model without captions: use trigger word as caption
-                        zf.writestr(f"{prefix}.txt", lora.trigger_word)
-
-                    image_count += 1
-
-            if image_count == 0:
-                raise Exception("No image data could be loaded from source")
-
-            logger.info(f"Created ZIP with {image_count} images for LoRA training (captions={use_captions})")
-
-            # Upload ZIP to fal CDN
-            import fal_client
-            zip_bytes = zip_buffer.getvalue()
-            zip_url = fal_client.upload(zip_bytes, "application/zip")
-            logger.info(f"Uploaded training ZIP ({len(zip_bytes)} bytes) to fal CDN")
-
-            # Use the correct ZIP param name for the model
-            trainer_kwargs[zip_param_name] = zip_url
-            image_urls: list[str] = []
-        else:
-            # Default: encode images as base64 data URLs
-            image_urls = []
-            for img_id in folder_image_ids:
-                image_data = _run_async(image_service.get_image_data(img_id))
-                if image_data:
-                    image = image_service.get_image(img_id)
-                    mime = image.mime_type or "image/jpeg"
-                    b64 = base64.b64encode(image_data).decode("utf-8")
-                    image_urls.append(f"data:{mime};base64,{b64}")
-
-            if not image_urls:
-                raise Exception("No image data could be loaded from source")
-
-            logger.info(f"Prepared {len(image_urls)} images for LoRA training")
-
-        # Submit training
-        request_id = _run_async(
-            trainer.start_training(
-                image_urls=image_urls,
-                trigger_word=lora.trigger_word,
-                steps=steps,
-                is_style=is_style,
-                **trainer_kwargs,
+            # Submit training
+            request_id = _run_async(
+                trainer.start_training(
+                    image_urls=image_urls,
+                    trigger_word=lora.trigger_word,
+                    steps=steps,
+                    is_style=is_style,
+                    **trainer_kwargs,
+                )
             )
-        )
 
-        logger.info(f"LoRA training submitted: request_id={request_id}")
+            logger.info(f"LoRA training submitted: request_id={request_id}")
+
+            # Store request_id immediately so we can recover if worker dies during polling
+            gen_service.update_lora_status(
+                lora_model_id, LoraModelStatus.TRAINING,
+                provider_metadata={"request_id": request_id, "base_model": lora.base_model},
+            )
 
         # Poll for completion
         poll_interval = 15  # seconds
@@ -535,16 +551,31 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     return float(dot / norm)
 
 
+def _normalize_embedding_similarity(cosine_sim: float) -> float:
+    """Normalize cosine similarity to 0-10 scale.
+
+    Text embedding cosine similarity for same-described images typically
+    falls in the 0.5-0.95 range.  A linear `*10` mapping makes everything
+    look great (0.7 → 7.0).  Instead, stretch 0.5-0.95 across 0-10.
+    """
+    lower = 0.5
+    upper = 0.95
+    normalized = (cosine_sim - lower) / (upper - lower) * 10
+    return max(0.0, min(10.0, normalized))
+
+
 @celery_app.task(bind=True)
 def evaluate_lora(self, evaluation_id: int, job_id: int | None = None) -> dict:
     """
     Evaluate a LoRA model by generating images from training set descriptions
-    and comparing against originals.
+    and comparing against originals, plus optional creative prompt evaluation.
 
     1. Load LoraEvaluation, validate LoRA model
     2. Sample N random images from source (folder/cluster)
-    3. For each: generate using description, score pair
-    4. Aggregate scores
+    3. For each: generate using description, score pair (reference pairs)
+    4. If creative_count > 0: generate novel prompts, generate + score (creative pairs)
+    5. Generate AI assessment summary
+    6. Aggregate scores
     """
     write_log(
         category=LogCategory.TASK,
@@ -578,6 +609,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None) -> dict:
         metrics_enabled = config.get("metrics_enabled", ["embedding_similarity"])
         gen_params = config.get("generation_params", {})
         vision_eval_provider = config.get("vision_eval_provider")
+        creative_count = config.get("creative_count", 0)
 
         # Load source images from folder/cluster
         if lora.folder_id:
@@ -608,23 +640,25 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None) -> dict:
         if not candidate_images:
             raise Exception("No source images with descriptions found")
 
-        # Sample
+        # Sample for reference pairs
         sample_count = min(evaluation.sample_count, len(candidate_images))
         sampled = random.sample(candidate_images, sample_count)
+
+        total_items = sample_count + creative_count
 
         # Update job total
         if job_id:
             job = db.query(Job).filter(Job.id == job_id).first()
             if job:
-                job.total_items = sample_count
+                job.total_items = total_items
                 db.commit()
 
         # Get generator
         generator = get_generator(db=db, base_model=lora.base_model)
 
-        # Get optional evaluator
+        # Get evaluator (used for both vision_eval and creative eval)
         evaluator = None
-        if "vision_eval" in metrics_enabled:
+        if "vision_eval" in metrics_enabled or creative_count > 0:
             evaluator = get_evaluator(provider=vision_eval_provider, db=db)
 
         # Get embedder + describer for embedding similarity
@@ -634,8 +668,9 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None) -> dict:
             embedder = get_embedder(db=db)
             describer = get_describer(db=db)
 
-        completed_pairs = []
+        progress_idx = 0
 
+        # ========== PHASE 1: Reference pairs ==========
         for idx, image in enumerate(sampled):
             pair = None
             try:
@@ -647,6 +682,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None) -> dict:
                     evaluation_id=evaluation_id,
                     original_image_id=image.id,
                     prompt_used=prompt,
+                    pair_type="reference",
                 )
                 eval_service.update_pair_status(pair.id, "generating")
 
@@ -705,16 +741,15 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None) -> dict:
 
                         original_embedding = image.image_metadata.embedding
                         if original_embedding is not None and len(original_embedding) > 0:
-                            embedding_sim = _cosine_similarity(
+                            raw_sim = _cosine_similarity(
                                 list(original_embedding), gen_embedding
                             )
-                            # Normalize to 0-10 scale (cosine sim typically 0.3-0.9 range)
-                            embedding_sim = max(0, min(10, embedding_sim * 10))
+                            embedding_sim = _normalize_embedding_similarity(raw_sim)
                     except Exception as e:
                         logger.warning(f"Embedding similarity failed for pair {pair.id}: {e}")
 
                 # Vision AI evaluation
-                if evaluator:
+                if evaluator and "vision_eval" in metrics_enabled:
                     try:
                         original_data = _run_async(image_service.get_image_data(image.id))
                         if original_data:
@@ -761,37 +796,145 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None) -> dict:
                     metrics_detail=metrics_detail,
                 )
                 eval_service.update_pair_status(pair.id, "completed")
-                completed_pairs.append(pair.id)
 
-                # Update job progress
+                progress_idx += 1
                 if job_id:
                     job = db.query(Job).filter(Job.id == job_id).first()
                     if job:
-                        job.progress = idx + 1
+                        job.progress = progress_idx
                         db.commit()
 
             except Exception as e:
                 err_msg = _unwrap_error(e)
-                logger.error(f"Failed to process pair for image {image.id}: {err_msg}")
+                logger.error(f"Failed to process reference pair for image {image.id}: {err_msg}")
                 if pair:
                     eval_service.update_pair_status(pair.id, "failed", err_msg)
+                progress_idx += 1
 
-        # Aggregate scores
+        # ========== PHASE 2: Creative pairs ==========
+        if creative_count > 0 and evaluator:
+            try:
+                # Collect sample descriptions for prompt generation
+                sample_descriptions = [
+                    img.image_metadata.description_long
+                    for img in candidate_images
+                    if img.image_metadata and img.image_metadata.description_long
+                ]
+
+                # Generate creative prompts
+                creative_prompts = _run_async(
+                    evaluator.generate_creative_prompts(
+                        trigger_word=lora.trigger_word,
+                        sample_descriptions=sample_descriptions,
+                        count=creative_count,
+                    )
+                )
+                logger.info(f"Generated {len(creative_prompts)} creative prompts")
+
+                for c_idx, creative_prompt in enumerate(creative_prompts):
+                    pair = None
+                    try:
+                        pair = eval_service.create_pair(
+                            evaluation_id=evaluation_id,
+                            original_image_id=None,
+                            prompt_used=creative_prompt,
+                            pair_type="creative",
+                        )
+                        eval_service.update_pair_status(pair.id, "generating")
+
+                        # Generate image
+                        c_width = gen_params.get("width", 1024)
+                        c_height = gen_params.get("height", 1024)
+
+                        result = _run_async(
+                            generator.generate(
+                                prompt=creative_prompt,
+                                width=c_width,
+                                height=c_height,
+                                num_inference_steps=gen_params.get("num_inference_steps", 28),
+                                guidance_scale=gen_params.get("guidance_scale", 3.5),
+                                lora_url=lora.lora_url,
+                                lora_scale=gen_params.get("lora_scale", 1.0),
+                            )
+                        )
+
+                        # Save generated image
+                        object_key = f"eval_creative_{uuid.uuid4().hex}.png"
+                        thumbnails = _run_async(
+                            eval_service.save_eval_generated_image(result.image_data, object_key)
+                        )
+
+                        eval_service.update_pair_generated(
+                            pair.id,
+                            object_key=object_key,
+                            width=result.width,
+                            height=result.height,
+                            thumbnail_small=thumbnails.get("200"),
+                            thumbnail_medium=thumbnails.get("400"),
+                        )
+
+                        # Score with single-image evaluation (no reference comparison)
+                        eval_service.update_pair_status(pair.id, "scoring")
+
+                        eval_result = _run_async(
+                            evaluator.evaluate_single(
+                                image_data=result.image_data,
+                                mime_type="image/png",
+                                prompt_used=creative_prompt,
+                            )
+                        )
+
+                        vision_score = eval_result.overall
+                        vision_assessment = eval_result.assessment
+                        metrics_detail = {
+                            "realism": eval_result.style_fidelity,
+                            "prompt_adherence": eval_result.subject_accuracy,
+                            "detail_quality": eval_result.detail_preservation,
+                            "pair_type": "creative",
+                        }
+
+                        eval_service.update_pair_scores(
+                            pair.id,
+                            vision_score=vision_score,
+                            vision_assessment=vision_assessment,
+                            pair_score=vision_score,
+                            metrics_detail=metrics_detail,
+                        )
+                        eval_service.update_pair_status(pair.id, "completed")
+
+                    except Exception as e:
+                        err_msg = _unwrap_error(e)
+                        logger.error(f"Failed to process creative pair {c_idx}: {err_msg}")
+                        if pair:
+                            eval_service.update_pair_status(pair.id, "failed", err_msg)
+
+                    progress_idx += 1
+                    if job_id:
+                        job = db.query(Job).filter(Job.id == job_id).first()
+                        if job:
+                            job.progress = progress_idx
+                            db.commit()
+
+            except Exception as e:
+                logger.error(f"Creative prompt generation failed: {_unwrap_error(e)}")
+
+        # ========== PHASE 3: Aggregate scores ==========
         db.expire_all()
         evaluation = eval_service.get_evaluation(evaluation_id)
         pairs = evaluation.pairs if evaluation else []
 
         completed = [p for p in pairs if p.status == "completed"]
+        ref_completed = [p for p in completed if p.pair_type == "reference"]
+        creative_completed = [p for p in completed if p.pair_type == "creative"]
 
         avg_embedding = None
         avg_vision = None
         overall = None
-        assessments = []
 
-        if completed:
-            emb_scores = [p.embedding_similarity for p in completed if p.embedding_similarity is not None]
-            vis_scores = [p.vision_score for p in completed if p.vision_score is not None]
-            pair_scores = [p.pair_score for p in completed if p.pair_score is not None]
+        if ref_completed:
+            emb_scores = [p.embedding_similarity for p in ref_completed if p.embedding_similarity is not None]
+            vis_scores = [p.vision_score for p in ref_completed if p.vision_score is not None]
+            pair_scores = [p.pair_score for p in ref_completed if p.pair_score is not None]
 
             if emb_scores:
                 avg_embedding = sum(emb_scores) / len(emb_scores)
@@ -800,14 +943,57 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None) -> dict:
             if pair_scores:
                 overall = sum(pair_scores) / len(pair_scores)
 
-            assessments = [p.vision_assessment for p in completed if p.vision_assessment]
+        # Creative scores summary
+        creative_section = ""
+        avg_creative_score = None
+        if creative_completed:
+            creative_scores = [p.vision_score for p in creative_completed if p.vision_score is not None]
+            if creative_scores:
+                avg_creative_score = sum(creative_scores) / len(creative_scores)
+                creative_section = (
+                    f"\n## Creative/Generalization Test\n"
+                    f"{len(creative_completed)} creative prompts were generated and evaluated.\n"
+                    f"Average creative score: {avg_creative_score:.1f}/10\n"
+                )
 
-        assessment_summary = " | ".join(assessments) if assessments else None
+        # ========== PHASE 4: AI Assessment Summary ==========
+        assessment_summary = None
+        if evaluator:
+            try:
+                pair_assessments = []
+                for p in completed:
+                    if p.vision_assessment:
+                        pair_assessments.append({
+                            "score": f"{p.pair_score:.1f}" if p.pair_score is not None else "N/A",
+                            "assessment": p.vision_assessment,
+                            "type": p.pair_type,
+                        })
+
+                if pair_assessments:
+                    assessment_summary = _run_async(
+                        evaluator.summarize_assessments(
+                            model_name=lora.name,
+                            trigger_word=lora.trigger_word,
+                            pair_assessments=pair_assessments,
+                            overall_score=overall,
+                            avg_vision=avg_vision,
+                            avg_embedding=avg_embedding,
+                            creative_section=creative_section,
+                        )
+                    )
+            except Exception as e:
+                logger.warning(f"Assessment summary generation failed: {e}")
+                # Fallback: concatenate
+                assessments = [p.vision_assessment for p in completed if p.vision_assessment]
+                assessment_summary = " | ".join(assessments) if assessments else None
 
         aggregate_results = {
             "total_pairs": len(pairs),
             "completed_pairs": len(completed),
             "failed_pairs": len([p for p in pairs if p.status == "failed"]),
+            "reference_pairs": len(ref_completed),
+            "creative_pairs": len(creative_completed),
+            "avg_creative_score": avg_creative_score,
             "score_weights": {"vision": 0.7, "embedding": 0.3},
         }
 
@@ -823,11 +1009,13 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None) -> dict:
 
         _update_job_status(
             db, job_id, JobStatus.COMPLETED,
-            progress=sample_count,
+            progress=total_items,
             result={
                 "overall_score": overall,
                 "completed_pairs": len(completed),
                 "failed_pairs": len([p for p in pairs if p.status == "failed"]),
+                "creative_pairs": len(creative_completed),
+                "avg_creative_score": avg_creative_score,
             },
         )
 
@@ -844,6 +1032,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None) -> dict:
             "evaluation_id": evaluation_id,
             "overall_score": overall,
             "completed_pairs": len(completed),
+            "creative_pairs": len(creative_completed),
         }
 
     except Exception as e:
