@@ -66,14 +66,16 @@ jobs:
           NEXT_PUBLIC_ENV_LABEL: dev
         run: npm run build
 
+      - name: Copy SWA config to output
+        run: cp frontend/staticwebapp.config.json frontend/out/
+
       - name: Deploy to Azure Static Web Apps
         uses: Azure/static-web-apps-deploy@v1
         with:
           azure_static_web_apps_api_token: ${{ secrets.DEV_SWA_TOKEN }}
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: upload
-          app_location: frontend
-          output_location: out
+          app_location: frontend/out
           skip_app_build: true
 
   deploy-backend:
@@ -117,9 +119,6 @@ jobs:
             --resource-group ${{ secrets.DEV_RESOURCE_GROUP }} \
             --image ${{ secrets.ACR_LOGIN_SERVER }}/imggen-backend:dev
 
-      - name: Run Alembic migrations
-        run: |
-          az containerapp exec \
-            --name cae-imggen-dev-backend \
-            --resource-group ${{ secrets.DEV_RESOURCE_GROUP }} \
-            --command "alembic upgrade head"
+      # Note: az containerapp exec requires a TTY (not available in CI).
+      # Run migrations manually when needed:
+      #   az containerapp exec --name cae-imggen-dev-backend --resource-group rg-imggen-dev --command "alembic upgrade head"
