@@ -98,7 +98,7 @@ def recover_stuck_training_jobs(sender, **kwargs):
             )
             # Re-dispatch train_lora which will detect TRAINING + request_id and resume polling
             from app.workers.generation_tasks import train_lora
-            train_lora.delay(lora.id, lora.job_id)
+            train_lora.delay(lora.id, lora.job_id, lora.user_id)
 
         if stuck:
             logger.info(f"Recovery: re-dispatched {len(stuck)} stuck LoRA training job(s)")

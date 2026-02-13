@@ -73,7 +73,7 @@ def _unwrap_error(e: Exception) -> str:
 
 
 @celery_app.task(bind=True)
-def train_lora(self, lora_model_id: int, job_id: int | None = None) -> dict:
+def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int | None = None) -> dict:
     """
     Train a LoRA model from folder images via fal.ai.
 
@@ -93,7 +93,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None) -> dict:
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
 
-        gen_service = get_generation_service(db)
+        gen_service = get_generation_service(db, user_id)
         lora = gen_service.get_lora_model(lora_model_id)
         if not lora:
             return {"status": "error", "message": "LoRA model not found"}
@@ -112,7 +112,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None) -> dict:
             gen_service.update_lora_status(lora_model_id, LoraModelStatus.TRAINING)
 
             # Load source images (folder or cluster)
-            image_service = get_image_service(db)
+            image_service = get_image_service(db, user_id)
 
             if lora.folder_id:
                 from app.models.folder import FolderImage
@@ -320,7 +320,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None) -> dict:
             duration_ms=round(elapsed, 1),
             extra={"error": err_msg},
         )
-        gen_service = get_generation_service(db)
+        gen_service = get_generation_service(db, user_id)
         gen_service.update_lora_status(lora_model_id, LoraModelStatus.FAILED, err_msg)
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
         raise
@@ -329,7 +329,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None) -> dict:
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=30)
-def generate_image(self, generated_image_id: int, job_id: int | None = None) -> dict:
+def generate_image(self, generated_image_id: int, job_id: int | None = None, user_id: int | None = None) -> dict:
     """
     Generate a single image via fal.ai.
     """
@@ -344,7 +344,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None) -> 
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
 
-        gen_service = get_generation_service(db)
+        gen_service = get_generation_service(db, user_id)
         gen = gen_service.get_generated_image(generated_image_id)
         if not gen:
             return {"status": "error", "message": "Generated image record not found"}
@@ -430,7 +430,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None) -> 
 
 
 @celery_app.task(bind=True)
-def batch_generate(self, generated_image_ids: list[int], job_id: int | None = None) -> dict:
+def batch_generate(self, generated_image_ids: list[int], job_id: int | None = None, user_id: int | None = None) -> dict:
     """
     Generate multiple images. Dispatches individual generate_image tasks and polls for completion.
     """
@@ -456,7 +456,7 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
 
         # Dispatch individual tasks
         for gen_id in generated_image_ids:
-            generate_image.delay(gen_id)
+            generate_image.delay(gen_id, user_id=user_id)
 
         # Poll for completion
         poll_interval = 5
@@ -565,7 +565,7 @@ def _normalize_embedding_similarity(cosine_sim: float) -> float:
 
 
 @celery_app.task(bind=True)
-def evaluate_lora(self, evaluation_id: int, job_id: int | None = None) -> dict:
+def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: int | None = None) -> dict:
     """
     Evaluate a LoRA model by generating images from training set descriptions
     and comparing against originals, plus optional creative prompt evaluation.
@@ -588,9 +588,9 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None) -> dict:
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
 
-        eval_service = get_evaluation_service(db)
-        gen_service = get_generation_service(db)
-        image_service = get_image_service(db)
+        eval_service = get_evaluation_service(db, user_id)
+        gen_service = get_generation_service(db, user_id)
+        image_service = get_image_service(db, user_id)
 
         evaluation = eval_service.get_evaluation(evaluation_id)
         if not evaluation:
@@ -1048,7 +1048,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None) -> dict:
             duration_ms=round(elapsed, 1),
             extra={"error": err_msg},
         )
-        eval_service = get_evaluation_service(db)
+        eval_service = get_evaluation_service(db, user_id)
         eval_service.update_evaluation_status(evaluation_id, EvaluationStatus.FAILED, error_message=err_msg)
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
         raise

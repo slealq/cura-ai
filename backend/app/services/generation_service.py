@@ -16,8 +16,9 @@ logger = logging.getLogger(__name__)
 class GenerationService:
     """Service for LoRA model and generated image CRUD operations."""
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, user_id: int):
         self.db = db
+        self.user_id = user_id
         self.storage = get_storage_service()
 
     # --- LoRA Model CRUD ---
@@ -37,6 +38,7 @@ class GenerationService:
     ) -> LoraModel:
         """Create a new LoRA model record."""
         lora = LoraModel(
+            user_id=self.user_id,
             name=name,
             trigger_word=trigger_word,
             training_provider=training_provider,
@@ -59,7 +61,7 @@ class GenerationService:
         return (
             self.db.query(LoraModel)
             .options(joinedload(LoraModel.folder), joinedload(LoraModel.cluster))
-            .filter(LoraModel.id == lora_id)
+            .filter(LoraModel.id == lora_id, LoraModel.user_id == self.user_id)
             .first()
         )
 
@@ -71,7 +73,9 @@ class GenerationService:
         limit: int = 50,
     ) -> list[LoraModel]:
         """Get paginated list of LoRA models."""
-        query = self.db.query(LoraModel).options(joinedload(LoraModel.folder), joinedload(LoraModel.cluster))
+        query = self.db.query(LoraModel).options(
+            joinedload(LoraModel.folder), joinedload(LoraModel.cluster)
+        ).filter(LoraModel.user_id == self.user_id)
         if status:
             query = query.filter(LoraModel.status == status)
         if base_model:
@@ -80,7 +84,7 @@ class GenerationService:
 
     def count_lora_models(self, status: LoraModelStatus | None = None, base_model: str | None = None) -> int:
         """Count LoRA models with optional status filter."""
-        query = self.db.query(LoraModel)
+        query = self.db.query(LoraModel).filter(LoraModel.user_id == self.user_id)
         if status:
             query = query.filter(LoraModel.status == status)
         if base_model:
@@ -96,7 +100,7 @@ class GenerationService:
         provider_metadata: dict | None = None,
     ) -> LoraModel | None:
         """Update LoRA model status and related fields."""
-        lora = self.db.query(LoraModel).filter(LoraModel.id == lora_id).first()
+        lora = self.db.query(LoraModel).filter(LoraModel.id == lora_id, LoraModel.user_id == self.user_id).first()
         if not lora:
             return None
 
@@ -119,7 +123,7 @@ class GenerationService:
 
     def delete_lora_model(self, lora_id: int) -> bool:
         """Delete a LoRA model."""
-        lora = self.db.query(LoraModel).filter(LoraModel.id == lora_id).first()
+        lora = self.db.query(LoraModel).filter(LoraModel.id == lora_id, LoraModel.user_id == self.user_id).first()
         if lora:
             self.db.delete(lora)
             self.db.commit()
@@ -141,6 +145,7 @@ class GenerationService:
     ) -> GeneratedImage:
         """Create a new generated image record."""
         gen = GeneratedImage(
+            user_id=self.user_id,
             prompt=prompt,
             negative_prompt=negative_prompt,
             base_model=base_model,
@@ -167,7 +172,8 @@ class GenerationService:
     ) -> GeneratedImage | None:
         """Save generated image data to storage and update record."""
         gen = self.db.query(GeneratedImage).filter(
-            GeneratedImage.id == generated_image_id
+            GeneratedImage.id == generated_image_id,
+            GeneratedImage.user_id == self.user_id,
         ).first()
         if not gen:
             return None
@@ -207,7 +213,7 @@ class GenerationService:
         return (
             self.db.query(GeneratedImage)
             .options(joinedload(GeneratedImage.lora_model))
-            .filter(GeneratedImage.id == gen_id)
+            .filter(GeneratedImage.id == gen_id, GeneratedImage.user_id == self.user_id)
             .first()
         )
 
@@ -221,7 +227,7 @@ class GenerationService:
         """Get paginated list of generated images."""
         query = self.db.query(GeneratedImage).options(
             joinedload(GeneratedImage.lora_model)
-        )
+        ).filter(GeneratedImage.user_id == self.user_id)
         if lora_model_id is not None:
             query = query.filter(GeneratedImage.lora_model_id == lora_model_id)
         if status:
@@ -234,7 +240,7 @@ class GenerationService:
         status: GenerationStatus | None = None,
     ) -> int:
         """Count generated images with optional filters."""
-        query = self.db.query(GeneratedImage)
+        query = self.db.query(GeneratedImage).filter(GeneratedImage.user_id == self.user_id)
         if lora_model_id is not None:
             query = query.filter(GeneratedImage.lora_model_id == lora_model_id)
         if status:
@@ -243,7 +249,7 @@ class GenerationService:
 
     def delete_generated_image(self, gen_id: int) -> bool:
         """Delete a generated image record."""
-        gen = self.db.query(GeneratedImage).filter(GeneratedImage.id == gen_id).first()
+        gen = self.db.query(GeneratedImage).filter(GeneratedImage.id == gen_id, GeneratedImage.user_id == self.user_id).first()
         if gen:
             self.db.delete(gen)
             self.db.commit()
@@ -258,6 +264,6 @@ class GenerationService:
         return await self.storage.get_generated_image(gen.object_key)
 
 
-def get_generation_service(db: Session) -> GenerationService:
+def get_generation_service(db: Session, user_id: int) -> GenerationService:
     """Get generation service instance."""
-    return GenerationService(db)
+    return GenerationService(db, user_id)

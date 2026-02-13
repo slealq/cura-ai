@@ -4,7 +4,9 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from app.core.security import get_current_user
 from app.db.base import get_db
+from app.models.user import User
 from app.models import Image, ImageStatus, Job, JobStatus, JobType
 from app.schemas import BatchJobImageInfo, BatchReprocessRequest, JobListResponse, JobResponse
 from app.workers.tasks import describe_image, embed_image, run_batch_reprocess, run_full_pipeline, tag_image
@@ -51,9 +53,10 @@ async def list_jobs(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """List processing jobs with optional filters."""
-    query = db.query(Job)
+    query = db.query(Job).filter(Job.user_id == current_user.id)
 
     if job_type:
         query = query.filter(Job.job_type == job_type)
@@ -74,9 +77,9 @@ async def list_jobs(
 
 
 @router.get("/{job_id}", response_model=JobResponse)
-async def get_job(job_id: int, db: Session = Depends(get_db)):
+async def get_job(job_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get job details by ID."""
-    job = db.query(Job).filter(Job.id == job_id).first()
+    job = db.query(Job).filter(Job.id == job_id, Job.user_id == current_user.id).first()
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -85,9 +88,9 @@ async def get_job(job_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{job_id}/cancel")
-async def cancel_job(job_id: int, db: Session = Depends(get_db)):
+async def cancel_job(job_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Cancel a running or pending job."""
-    job = db.query(Job).filter(Job.id == job_id).first()
+    job = db.query(Job).filter(Job.id == job_id, Job.user_id == current_user.id).first()
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -107,7 +110,7 @@ async def cancel_job(job_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/pipeline/full")
-async def trigger_full_pipeline(db: Session = Depends(get_db)):
+async def trigger_full_pipeline(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Trigger the full processing pipeline.
 
@@ -119,13 +122,14 @@ async def trigger_full_pipeline(db: Session = Depends(get_db)):
     job = Job(
         job_type=JobType.FULL_PIPELINE,
         status=JobStatus.PENDING,
+        user_id=current_user.id,
     )
     db.add(job)
     db.commit()
     db.refresh(job)
 
     # Queue task
-    task = run_full_pipeline.delay(job.id)
+    task = run_full_pipeline.delay(job.id, current_user.id)
 
     # Update job with task ID
     job.celery_task_id = task.id
@@ -139,67 +143,67 @@ async def trigger_full_pipeline(db: Session = Depends(get_db)):
 
 
 @router.post("/pipeline/tag")
-async def trigger_batch_tag(db: Session = Depends(get_db)):
+async def trigger_batch_tag(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Tag all ingested images."""
-    images = db.query(Image).filter(Image.status == ImageStatus.INGESTED).all()
+    images = db.query(Image).filter(Image.status == ImageStatus.INGESTED, Image.user_id == current_user.id).all()
 
     if not images:
         return {"status": "skipped", "total": 0, "message": "No images ready for tagging"}
 
-    job = Job(job_type=JobType.TAG, status=JobStatus.PENDING, total_items=len(images))
+    job = Job(job_type=JobType.TAG, status=JobStatus.PENDING, total_items=len(images), user_id=current_user.id)
     db.add(job)
     db.commit()
     db.refresh(job)
 
     for img in images:
-        tag_image.delay(img.id)
+        tag_image.delay(img.id, user_id=current_user.id)
 
     return {"status": "queued", "job_id": job.id, "total": len(images), "message": f"Tagging {len(images)} images"}
 
 
 @router.post("/pipeline/describe")
-async def trigger_batch_describe(db: Session = Depends(get_db)):
+async def trigger_batch_describe(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Describe all tagged images."""
-    images = db.query(Image).filter(Image.status == ImageStatus.TAGGED).all()
+    images = db.query(Image).filter(Image.status == ImageStatus.TAGGED, Image.user_id == current_user.id).all()
 
     if not images:
         return {"status": "skipped", "total": 0, "message": "No images ready for describing"}
 
-    job = Job(job_type=JobType.DESCRIBE, status=JobStatus.PENDING, total_items=len(images))
+    job = Job(job_type=JobType.DESCRIBE, status=JobStatus.PENDING, total_items=len(images), user_id=current_user.id)
     db.add(job)
     db.commit()
     db.refresh(job)
 
     for img in images:
-        describe_image.delay(img.id)
+        describe_image.delay(img.id, user_id=current_user.id)
 
     return {"status": "queued", "job_id": job.id, "total": len(images), "message": f"Describing {len(images)} images"}
 
 
 @router.post("/pipeline/embed")
-async def trigger_batch_embed(db: Session = Depends(get_db)):
+async def trigger_batch_embed(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Embed all described images."""
-    images = db.query(Image).filter(Image.status == ImageStatus.DESCRIBED).all()
+    images = db.query(Image).filter(Image.status == ImageStatus.DESCRIBED, Image.user_id == current_user.id).all()
 
     if not images:
         return {"status": "skipped", "total": 0, "message": "No images ready for embedding"}
 
-    job = Job(job_type=JobType.EMBED, status=JobStatus.PENDING, total_items=len(images))
+    job = Job(job_type=JobType.EMBED, status=JobStatus.PENDING, total_items=len(images), user_id=current_user.id)
     db.add(job)
     db.commit()
     db.refresh(job)
 
     for img in images:
-        embed_image.delay(img.id)
+        embed_image.delay(img.id, user_id=current_user.id)
 
     return {"status": "queued", "job_id": job.id, "total": len(images), "message": f"Embedding {len(images)} images"}
 
 
 @router.post("/pipeline/reprocess-all")
-async def trigger_reprocess_all(db: Session = Depends(get_db)):
+async def trigger_reprocess_all(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Reprocess ALL images from scratch."""
     _check_no_active_batch(db)
-    images = db.query(Image).all()
+    images = db.query(Image).filter(Image.user_id == current_user.id).all()
 
     if not images:
         return {"status": "skipped", "total": 0, "message": "No images to reprocess"}
@@ -210,12 +214,13 @@ async def trigger_reprocess_all(db: Session = Depends(get_db)):
         job_type=JobType.BATCH_REPROCESS,
         status=JobStatus.PENDING,
         total_items=len(image_ids),
+        user_id=current_user.id,
     )
     db.add(job)
     db.commit()
     db.refresh(job)
 
-    task = run_batch_reprocess.delay(job.id, image_ids)
+    task = run_batch_reprocess.delay(job.id, image_ids, current_user.id)
     job.celery_task_id = task.id
     db.commit()
 
@@ -228,10 +233,10 @@ async def trigger_reprocess_all(db: Session = Depends(get_db)):
 
 
 @router.post("/pipeline/reprocess-failed")
-async def trigger_reprocess_failed(db: Session = Depends(get_db)):
+async def trigger_reprocess_failed(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Reprocess only FAILED images."""
     _check_no_active_batch(db)
-    images = db.query(Image).filter(Image.status == ImageStatus.FAILED).all()
+    images = db.query(Image).filter(Image.status == ImageStatus.FAILED, Image.user_id == current_user.id).all()
 
     if not images:
         return {"status": "skipped", "total": 0, "message": "No failed images to reprocess"}
@@ -242,12 +247,13 @@ async def trigger_reprocess_failed(db: Session = Depends(get_db)):
         job_type=JobType.BATCH_REPROCESS,
         status=JobStatus.PENDING,
         total_items=len(image_ids),
+        user_id=current_user.id,
     )
     db.add(job)
     db.commit()
     db.refresh(job)
 
-    task = run_batch_reprocess.delay(job.id, image_ids)
+    task = run_batch_reprocess.delay(job.id, image_ids, current_user.id)
     job.celery_task_id = task.id
     db.commit()
 
@@ -261,7 +267,7 @@ async def trigger_reprocess_failed(db: Session = Depends(get_db)):
 
 @router.post("/pipeline/reprocess-selected")
 async def trigger_reprocess_selected(
-    request: BatchReprocessRequest, db: Session = Depends(get_db)
+    request: BatchReprocessRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
 ):
     """Reprocess specific images by ID."""
     _check_no_active_batch(db)
@@ -278,12 +284,13 @@ async def trigger_reprocess_selected(
         job_type=JobType.BATCH_REPROCESS,
         status=JobStatus.PENDING,
         total_items=len(image_ids),
+        user_id=current_user.id,
     )
     db.add(job)
     db.commit()
     db.refresh(job)
 
-    task = run_batch_reprocess.delay(job.id, image_ids)
+    task = run_batch_reprocess.delay(job.id, image_ids, current_user.id)
     job.celery_task_id = task.id
     db.commit()
 
@@ -296,9 +303,9 @@ async def trigger_reprocess_selected(
 
 
 @router.get("/{job_id}/images", response_model=list[BatchJobImageInfo])
-async def get_job_images(job_id: int, db: Session = Depends(get_db)):
+async def get_job_images(job_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get images belonging to a batch job."""
-    job = db.query(Job).filter(Job.id == job_id).first()
+    job = db.query(Job).filter(Job.id == job_id, Job.user_id == current_user.id).first()
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -324,9 +331,9 @@ async def get_job_images(job_id: int, db: Session = Depends(get_db)):
 
 
 @router.delete("/{job_id}")
-async def delete_job(job_id: int, db: Session = Depends(get_db)):
+async def delete_job(job_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Delete a job record."""
-    job = db.query(Job).filter(Job.id == job_id).first()
+    job = db.query(Job).filter(Job.id == job_id, Job.user_id == current_user.id).first()
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")

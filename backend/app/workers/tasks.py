@@ -70,7 +70,7 @@ def _update_job_status(db: Session, job_id: int | None, status: JobStatus, **kwa
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
-def tag_image(self, image_id: int, tag_prompt: str | None = None, job_id: int | None = None) -> dict:
+def tag_image(self, image_id: int, user_id: int, tag_prompt: str | None = None, job_id: int | None = None) -> dict:
     """
     Tag an image with categorization tags.
 
@@ -83,7 +83,7 @@ def tag_image(self, image_id: int, tag_prompt: str | None = None, job_id: int | 
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
 
-        image_service = get_image_service(db)
+        image_service = get_image_service(db, user_id)
         image = image_service.get_image(image_id)
 
         if not image:
@@ -97,7 +97,7 @@ def tag_image(self, image_id: int, tag_prompt: str | None = None, job_id: int | 
 
         # Get composed prompt: settings default or wrap user-provided guidance
         if tag_prompt is None:
-            settings_service = get_settings_service(db)
+            settings_service = get_settings_service(db, user_id)
             tag_prompt = settings_service.get_tag_prompt()
         else:
             tag_prompt = compose_tag_prompt(tag_prompt)
@@ -121,7 +121,7 @@ def tag_image(self, image_id: int, tag_prompt: str | None = None, job_id: int | 
         # Auto-chain: re-embed if description exists (embedding depends on tags)
         image = image_service.get_image(image_id)
         if image and image.image_metadata and image.image_metadata.description_long:
-            embed_image.delay(image_id)
+            embed_image.delay(image_id, user_id)
 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(category=LogCategory.TASK, message=f"Task tag_image completed for image {image_id} in {elapsed:.0f}ms ({len(result.tags)} tags)",
@@ -145,7 +145,7 @@ def tag_image(self, image_id: int, tag_prompt: str | None = None, job_id: int | 
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
-def describe_image(self, image_id: int, description_prompt: str | None = None, job_id: int | None = None) -> dict:
+def describe_image(self, image_id: int, user_id: int, description_prompt: str | None = None, job_id: int | None = None) -> dict:
     """
     Generate a detailed description for an image.
 
@@ -158,7 +158,7 @@ def describe_image(self, image_id: int, description_prompt: str | None = None, j
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
 
-        image_service = get_image_service(db)
+        image_service = get_image_service(db, user_id)
         image = image_service.get_image(image_id)
 
         if not image:
@@ -171,7 +171,7 @@ def describe_image(self, image_id: int, description_prompt: str | None = None, j
 
         # Get composed prompt: settings default or wrap user-provided guidance
         if description_prompt is None:
-            settings_service = get_settings_service(db)
+            settings_service = get_settings_service(db, user_id)
             description_prompt = settings_service.get_description_prompt()
         else:
             description_prompt = compose_description_prompt(description_prompt)
@@ -194,7 +194,7 @@ def describe_image(self, image_id: int, description_prompt: str | None = None, j
         # Auto-chain: re-embed if tags exist (embedding depends on description)
         image = image_service.get_image(image_id)
         if image and image.image_metadata and image.image_metadata.tags:
-            embed_image.delay(image_id)
+            embed_image.delay(image_id, user_id)
 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(category=LogCategory.TASK, message=f"Task describe_image completed for image {image_id} in {elapsed:.0f}ms",
@@ -218,7 +218,7 @@ def describe_image(self, image_id: int, description_prompt: str | None = None, j
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
-def embed_image(self, image_id: int, job_id: int | None = None) -> dict:
+def embed_image(self, image_id: int, user_id: int, job_id: int | None = None) -> dict:
     """
     Generate embedding for an image based on its tags and description.
 
@@ -231,7 +231,7 @@ def embed_image(self, image_id: int, job_id: int | None = None) -> dict:
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
 
-        image_service = get_image_service(db)
+        image_service = get_image_service(db, user_id)
         image = image_service.get_image(image_id)
 
         if not image or not image.image_metadata:
@@ -286,7 +286,7 @@ def embed_image(self, image_id: int, job_id: int | None = None) -> dict:
 
 @celery_app.task(bind=True)
 def tag_and_describe_image(
-    self, image_id: int, tag_prompt: str | None = None, description_prompt: str | None = None
+    self, image_id: int, user_id: int, tag_prompt: str | None = None, description_prompt: str | None = None
 ) -> dict:
     """
     Combined task to tag and describe an image.
@@ -295,7 +295,7 @@ def tag_and_describe_image(
     """
     db = get_db()
     try:
-        image_service = get_image_service(db)
+        image_service = get_image_service(db, user_id)
         image = image_service.get_image(image_id)
 
         if not image:
@@ -307,7 +307,7 @@ def tag_and_describe_image(
             raise Exception("Failed to load image data")
 
         # Get composed prompts: settings default or wrap user-provided guidance
-        settings_service = get_settings_service(db)
+        settings_service = get_settings_service(db, user_id)
         if tag_prompt is None:
             tag_prompt = settings_service.get_tag_prompt()
         else:
@@ -354,7 +354,7 @@ def tag_and_describe_image(
 
 
 @celery_app.task(bind=True)
-def cluster_all_images(self, job_id: int | None = None) -> dict:
+def cluster_all_images(self, user_id: int, job_id: int | None = None) -> dict:
     """
     Cluster all embedded images.
 
@@ -373,8 +373,8 @@ def cluster_all_images(self, job_id: int | None = None) -> dict:
                 job.started_at = datetime.utcnow()
                 db.commit()
 
-        image_service = get_image_service(db)
-        cluster_service = get_cluster_service(db)
+        image_service = get_image_service(db, user_id)
+        cluster_service = get_cluster_service(db, user_id)
         clustering_service = get_clustering_service()
 
         # Get all embedded images
@@ -399,7 +399,7 @@ def cluster_all_images(self, job_id: int | None = None) -> dict:
         embeddings_array = np.array(embeddings)
 
         # Read clustering config from DB
-        settings_service = get_settings_service(db)
+        settings_service = get_settings_service(db, user_id)
         clustering_config = settings_service.get_clustering_config()
 
         # Run clustering
@@ -434,7 +434,7 @@ def cluster_all_images(self, job_id: int | None = None) -> dict:
         cluster_ids = [c.id for c in clusters]
         if cluster_ids:
             logger.info(f"Auto-dispatching summarization for {len(cluster_ids)} clusters")
-            summarize_clusters.delay(cluster_ids)
+            summarize_clusters.delay(cluster_ids, user_id)
 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(category=LogCategory.TASK,
@@ -466,7 +466,7 @@ def cluster_all_images(self, job_id: int | None = None) -> dict:
 
 
 @celery_app.task(bind=True)
-def summarize_cluster(self, cluster_id: int) -> dict:
+def summarize_cluster(self, cluster_id: int, user_id: int) -> dict:
     """
     Generate AI summary for a cluster.
 
@@ -477,7 +477,7 @@ def summarize_cluster(self, cluster_id: int) -> dict:
     task_start = time.monotonic()
     db = get_db()
     try:
-        cluster_service = get_cluster_service(db)
+        cluster_service = get_cluster_service(db, user_id)
         clustering_service = get_clustering_service()
 
         cluster = cluster_service.get_cluster(cluster_id)
@@ -541,7 +541,7 @@ def summarize_cluster(self, cluster_id: int) -> dict:
 
 
 @celery_app.task(bind=True)
-def summarize_clusters(self, cluster_ids: list[int], job_id: int | None = None) -> dict:
+def summarize_clusters(self, cluster_ids: list[int], user_id: int, job_id: int | None = None) -> dict:
     """Summarize multiple clusters."""
     db = get_db()
     try:
@@ -555,7 +555,7 @@ def summarize_clusters(self, cluster_ids: list[int], job_id: int | None = None) 
 
         results = []
         for i, cluster_id in enumerate(cluster_ids):
-            result = summarize_cluster(cluster_id)
+            result = summarize_cluster(cluster_id, user_id)
             results.append(result)
 
             if job_id:
@@ -587,7 +587,7 @@ def summarize_clusters(self, cluster_ids: list[int], job_id: int | None = None) 
 
 @celery_app.task(bind=True)
 def process_image_pipeline(
-    self, image_id: int, tag_prompt: str | None = None, description_prompt: str | None = None, job_id: int | None = None
+    self, image_id: int, user_id: int, tag_prompt: str | None = None, description_prompt: str | None = None, job_id: int | None = None
 ) -> dict:
     """
     Run full pipeline for a single image: tag -> describe -> embed.
@@ -601,7 +601,7 @@ def process_image_pipeline(
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
 
-        image_service = get_image_service(db)
+        image_service = get_image_service(db, user_id)
         image = image_service.get_image(image_id)
 
         if not image:
@@ -613,7 +613,7 @@ def process_image_pipeline(
             raise Exception("Failed to load image data")
 
         # Get composed prompts: settings default or wrap user-provided guidance
-        settings_service = get_settings_service(db)
+        settings_service = get_settings_service(db, user_id)
         if tag_prompt is None:
             tag_prompt = settings_service.get_tag_prompt()
         else:
@@ -682,7 +682,7 @@ def process_image_pipeline(
 
 
 @celery_app.task(bind=True)
-def run_full_pipeline(self, job_id: int) -> dict:
+def run_full_pipeline(self, job_id: int, user_id: int) -> dict:
     """
     Run full pipeline: process all pending images, then cluster and summarize.
     """
@@ -697,7 +697,7 @@ def run_full_pipeline(self, job_id: int) -> dict:
             job.started_at = datetime.utcnow()
             db.commit()
 
-        image_service = get_image_service(db)
+        image_service = get_image_service(db, user_id)
 
         # Get images that need processing
         pending_images = image_service.get_images(
@@ -714,7 +714,7 @@ def run_full_pipeline(self, job_id: int) -> dict:
 
         for i, image in enumerate(pending_images):
             try:
-                process_image_pipeline.delay(image.id)
+                process_image_pipeline.delay(image.id, user_id)
                 processed += 1
             except Exception as e:
                 logger.error(f"Failed to queue image {image.id}: {e}")
@@ -764,7 +764,7 @@ def run_full_pipeline(self, job_id: int) -> dict:
 
 
 @celery_app.task(bind=True, queue='clustering')
-def run_batch_reprocess(self, job_id: int, image_ids: list[int]) -> dict:
+def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int]) -> dict:
     """
     Reprocess a batch of images: reset each to INGESTED, dispatch process_image_pipeline,
     then poll until all images have finished processing.
@@ -800,7 +800,7 @@ def run_batch_reprocess(self, job_id: int, image_ids: list[int]) -> dict:
             job.result = {"image_ids": image_ids}
             db.commit()
 
-        image_service = get_image_service(db)
+        image_service = get_image_service(db, user_id)
         queued = 0
 
         # Phase 1: Reset images and dispatch pipeline tasks (skipped on re-delivery)
@@ -808,7 +808,7 @@ def run_batch_reprocess(self, job_id: int, image_ids: list[int]) -> dict:
             for image_id in image_ids:
                 try:
                     image_service.update_status(image_id, ImageStatus.INGESTED)
-                    process_image_pipeline.delay(image_id)
+                    process_image_pipeline.delay(image_id, user_id)
                     queued += 1
                 except Exception as e:
                     logger.error(f"Failed to queue reprocess for image {image_id}: {e}")

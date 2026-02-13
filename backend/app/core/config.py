@@ -67,10 +67,11 @@ class Settings(BaseSettings):
     batch_size: int = 10
     rate_limit_per_minute: int = 60
 
-    # Auth
-    auth_enabled: bool = False
-    admin_username: str = "admin"
-    admin_password: str = "admin"
+    # Auth / JWT
+    jwt_secret_key: str = "change-me-in-production-jwt-secret"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
+    refresh_token_expire_days: int = 7
 
     class Config:
         env_file = ".env"

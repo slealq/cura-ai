@@ -21,6 +21,7 @@ class Folder(Base):
     __tablename__ = "folders"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     image_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

@@ -3,10 +3,13 @@
 import './globals.css';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useState } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
 import { Toaster } from 'sonner';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
 import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
+import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { useEffect } from 'react';
 
 function AppShell({ children }: { children: React.ReactNode }) {
   const { resolvedTheme } = useTheme();
@@ -23,6 +26,42 @@ function AppShell({ children }: { children: React.ReactNode }) {
       <Toaster position="bottom-right" richColors theme={resolvedTheme} />
     </>
   );
+}
+
+function AuthGate({ children }: { children: React.ReactNode }) {
+  const { isLoading, isAuthenticated } = useAuth();
+  const pathname = usePathname();
+  const router = useRouter();
+  const { resolvedTheme } = useTheme();
+
+  useEffect(() => {
+    if (!isLoading && !isAuthenticated && pathname !== '/login') {
+      router.replace('/login');
+    }
+  }, [isLoading, isAuthenticated, pathname, router]);
+
+  if (isLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+      </div>
+    );
+  }
+
+  if (pathname === '/login') {
+    return (
+      <>
+        {children}
+        <Toaster position="bottom-right" richColors theme={resolvedTheme} />
+      </>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return null;
+  }
+
+  return <AppShell>{children}</AppShell>;
 }
 
 export default function RootLayout({
@@ -71,7 +110,9 @@ export default function RootLayout({
       <body className="min-h-screen bg-background">
         <QueryClientProvider client={queryClient}>
           <ThemeProvider>
-            <AppShell>{children}</AppShell>
+            <AuthProvider>
+              <AuthGate>{children}</AuthGate>
+            </AuthProvider>
           </ThemeProvider>
         </QueryClientProvider>
       </body>

@@ -409,3 +409,21 @@ export interface EvaluationListResponse {
   skip: number;
   limit: number;
 }
+
+export interface AuthUser {
+  id: number;
+  email: string;
+  display_name: string | null;
+  role: string;
+  is_active: boolean;
+  is_verified: boolean;
+  created_at: string;
+  last_login_at: string | null;
+}
+
+export interface TokenResponse {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+  user: AuthUser;
+}

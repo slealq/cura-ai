@@ -14,22 +14,24 @@ logger = logging.getLogger(__name__)
 class FolderService:
     """Service for folder CRUD and image management."""
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, user_id: int):
         self.db = db
+        self.user_id = user_id
 
     def create_folder(self, name: str, description: str | None = None) -> Folder:
-        folder = Folder(name=name, description=description)
+        folder = Folder(name=name, description=description, user_id=self.user_id)
         self.db.add(folder)
         self.db.commit()
         self.db.refresh(folder)
         return folder
 
     def get_folder(self, folder_id: int) -> Folder | None:
-        return self.db.query(Folder).filter(Folder.id == folder_id).first()
+        return self.db.query(Folder).filter(Folder.id == folder_id, Folder.user_id == self.user_id).first()
 
     def get_folders(self, skip: int = 0, limit: int = 50) -> list[Folder]:
         return (
             self.db.query(Folder)
+            .filter(Folder.user_id == self.user_id)
             .order_by(Folder.updated_at.desc())
             .offset(skip)
             .limit(limit)
@@ -37,7 +39,7 @@ class FolderService:
         )
 
     def count_folders(self) -> int:
-        return self.db.query(Folder).count()
+        return self.db.query(Folder).filter(Folder.user_id == self.user_id).count()
 
     def update_folder(
         self, folder_id: int, name: str | None = None, description: str | None = None
@@ -63,6 +65,10 @@ class FolderService:
 
     def add_images_to_folder(self, folder_id: int, image_ids: list[int]) -> int:
         """Add images to a folder. Returns count of newly added."""
+        # Verify folder belongs to user
+        folder_check = self.get_folder(folder_id)
+        if not folder_check:
+            return 0
         existing = set(
             r[0]
             for r in self.db.query(FolderImage.image_id)
@@ -88,6 +94,10 @@ class FolderService:
 
     def remove_images_from_folder(self, folder_id: int, image_ids: list[int]) -> int:
         """Remove images from a folder. Returns count removed."""
+        # Verify folder belongs to user
+        folder_check = self.get_folder(folder_id)
+        if not folder_check:
+            return 0
         deleted = (
             self.db.query(FolderImage)
             .filter(FolderImage.folder_id == folder_id, FolderImage.image_id.in_(image_ids))
@@ -168,12 +178,12 @@ class FolderService:
         return (
             self.db.query(Folder)
             .join(FolderImage, FolderImage.folder_id == Folder.id)
-            .filter(FolderImage.image_id == image_id)
+            .filter(FolderImage.image_id == image_id, Folder.user_id == self.user_id)
             .order_by(Folder.name)
             .all()
         )
 
 
-def get_folder_service(db: Session) -> FolderService:
+def get_folder_service(db: Session, user_id: int) -> FolderService:
     """Get folder service instance."""
-    return FolderService(db)
+    return FolderService(db, user_id)

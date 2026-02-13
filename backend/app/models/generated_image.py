@@ -24,6 +24,7 @@ class GeneratedImage(Base):
     __tablename__ = "generated_images"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
 
     # Prompt
     prompt: Mapped[str] = mapped_column(Text, nullable=False)

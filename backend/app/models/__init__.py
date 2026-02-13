@@ -10,6 +10,7 @@ from app.models.lora_model import LoraModel, LoraModelStatus
 from app.models.pipeline_log import LogCategory, LogLevel, PipelineLog
 from app.models.prompt_preset import PromptPreset
 from app.models.settings import AppSettings
+from app.models.user import User, UserRole
 
 __all__ = [
     "APIKey",
@@ -39,4 +40,6 @@ __all__ = [
     "PipelineLog",
     "PromptPreset",
     "AppSettings",
+    "User",
+    "UserRole",
 ]

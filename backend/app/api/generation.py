@@ -8,7 +8,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.security import get_current_user, get_current_user_from_token_param
 from app.db.base import get_db
+from app.models.user import User
 from app.models import Job, JobType, JobStatus
 from app.models.generated_image import GenerationStatus
 from app.models.lora_evaluation import EvaluationStatus
@@ -257,7 +259,7 @@ def _gen_to_response(gen) -> GeneratedImageResponse:
 
 
 @router.post("/lora/train", status_code=201)
-async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db)):
+async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Start LoRA training from a folder or cluster of images."""
     if not request.folder_id and not request.cluster_id:
         raise HTTPException(status_code=400, detail="Either folder_id or cluster_id is required")
@@ -296,7 +298,7 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db)):
         job_params["cluster_id"] = request.cluster_id
 
     # Get training config from settings
-    settings_service = get_settings_service(db)
+    settings_service = get_settings_service(db, current_user.id)
     training_defaults = settings_service.get_training_config(request.base_model)
 
     # Use model-aware default steps
@@ -312,6 +314,7 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db)):
             status=JobStatus.PENDING,
             total_items=1,
             parameters=job_params,
+            user_id=current_user.id,
         )
         db.add(job)
         db.commit()
@@ -322,7 +325,7 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Failed to create LoRA training job: {e}")
 
     # Create LoRA model record
-    gen_service = get_generation_service(db)
+    gen_service = get_generation_service(db, current_user.id)
     lora = gen_service.create_lora_model(
         name=request.name,
         trigger_word=request.trigger_word,
@@ -348,7 +351,7 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db)):
 
     # Dispatch Celery task
     from app.workers.generation_tasks import train_lora as train_lora_task
-    task = train_lora_task.delay(lora.id, job.id)
+    task = train_lora_task.delay(lora.id, job.id, current_user.id)
 
     job.celery_task_id = task.id
     db.commit()
@@ -367,9 +370,10 @@ async def list_lora_models(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """List LoRA models."""
-    gen_service = get_generation_service(db)
+    gen_service = get_generation_service(db, current_user.id)
     status_filter = LoraModelStatus(status) if status else None
     items = gen_service.get_lora_models(status=status_filter, base_model=base_model, skip=skip, limit=limit)
     total = gen_service.count_lora_models(status=status_filter, base_model=base_model)
@@ -382,9 +386,9 @@ async def list_lora_models(
 
 
 @router.get("/lora/{lora_id}", response_model=LoraModelResponse)
-async def get_lora_model(lora_id: int, db: Session = Depends(get_db)):
+async def get_lora_model(lora_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get LoRA model detail."""
-    gen_service = get_generation_service(db)
+    gen_service = get_generation_service(db, current_user.id)
     lora = gen_service.get_lora_model(lora_id)
     if not lora:
         raise HTTPException(status_code=404, detail="LoRA model not found")
@@ -392,13 +396,13 @@ async def get_lora_model(lora_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/lora/{lora_id}/recover")
-async def recover_lora_training(lora_id: int, db: Session = Depends(get_db)):
+async def recover_lora_training(lora_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Recover a stuck LoRA training job.
 
     For TRAINING models with a request_id: checks fal.ai status.
     If completed, fetches result and finalizes. If still running, re-dispatches polling.
     """
-    gen_service = get_generation_service(db)
+    gen_service = get_generation_service(db, current_user.id)
     lora = gen_service.get_lora_model(lora_id)
     if not lora:
         raise HTTPException(status_code=404, detail="LoRA model not found")
@@ -459,7 +463,7 @@ async def recover_lora_training(lora_id: int, db: Session = Depends(get_db)):
     else:
         # Still running — re-dispatch celery task to resume polling
         from app.workers.generation_tasks import train_lora as train_lora_task
-        task = train_lora_task.delay(lora_id, lora.job_id)
+        task = train_lora_task.delay(lora_id, lora.job_id, current_user.id)
         if lora.job_id:
             job = db.query(Job).filter(Job.id == lora.job_id).first()
             if job:
@@ -470,9 +474,9 @@ async def recover_lora_training(lora_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/lora/{lora_id}/retry")
-async def retry_lora_training(lora_id: int, db: Session = Depends(get_db)):
+async def retry_lora_training(lora_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Retry a FAILED LoRA training job from scratch."""
-    gen_service = get_generation_service(db)
+    gen_service = get_generation_service(db, current_user.id)
     lora = gen_service.get_lora_model(lora_id)
     if not lora:
         raise HTTPException(status_code=404, detail="LoRA model not found")
@@ -487,6 +491,7 @@ async def retry_lora_training(lora_id: int, db: Session = Depends(get_db)):
             status=JobStatus.PENDING,
             total_items=1,
             parameters={"trigger_word": lora.trigger_word, "retry_of_lora_id": lora_id},
+            user_id=current_user.id,
         )
         db.add(job)
         db.commit()
@@ -504,7 +509,7 @@ async def retry_lora_training(lora_id: int, db: Session = Depends(get_db)):
 
     # Dispatch
     from app.workers.generation_tasks import train_lora as train_lora_task
-    task = train_lora_task.delay(lora_id, job.id)
+    task = train_lora_task.delay(lora_id, job.id, current_user.id)
 
     job.celery_task_id = task.id
     db.commit()
@@ -513,9 +518,9 @@ async def retry_lora_training(lora_id: int, db: Session = Depends(get_db)):
 
 
 @router.delete("/lora/{lora_id}", status_code=204)
-async def delete_lora_model(lora_id: int, db: Session = Depends(get_db)):
+async def delete_lora_model(lora_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Delete a LoRA model."""
-    gen_service = get_generation_service(db)
+    gen_service = get_generation_service(db, current_user.id)
     if not gen_service.delete_lora_model(lora_id):
         raise HTTPException(status_code=404, detail="LoRA model not found")
 
@@ -524,9 +529,9 @@ async def delete_lora_model(lora_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/generate", status_code=201)
-async def generate_images(request: GenerateRequest, db: Session = Depends(get_db)):
+async def generate_images(request: GenerateRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Generate 1-8 images."""
-    gen_service = get_generation_service(db)
+    gen_service = get_generation_service(db, current_user.id)
 
     # Determine effective base_model
     effective_base_model = request.base_model or "flux-dev"
@@ -548,7 +553,7 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
             )
 
     # Get generation defaults from settings
-    settings_service = get_settings_service(db)
+    settings_service = get_settings_service(db, current_user.id)
     gen_defaults = settings_service.get_generation_config()
     provider = settings.default_generation_provider
 
@@ -563,6 +568,7 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
                 "num_images": request.num_images,
                 "lora_model_id": request.lora_model_id,
             },
+            user_id=current_user.id,
         )
         db.add(job)
         db.commit()
@@ -597,10 +603,10 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
     from app.workers.generation_tasks import generate_image as gen_task, batch_generate
 
     if request.num_images == 1:
-        task = gen_task.delay(gen_ids[0], job.id)
+        task = gen_task.delay(gen_ids[0], job.id, current_user.id)
         job.celery_task_id = task.id
     else:
-        task = batch_generate.delay(gen_ids, job.id)
+        task = batch_generate.delay(gen_ids, job.id, current_user.id)
         job.celery_task_id = task.id
 
     db.commit()
@@ -619,9 +625,10 @@ async def list_generated_images(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """List generated images."""
-    gen_service = get_generation_service(db)
+    gen_service = get_generation_service(db, current_user.id)
     status_filter = GenerationStatus(status) if status else None
     items = gen_service.get_generated_images(
         lora_model_id=lora_model_id,
@@ -642,9 +649,9 @@ async def list_generated_images(
 
 
 @router.get("/images/{gen_id}", response_model=GeneratedImageResponse)
-async def get_generated_image(gen_id: int, db: Session = Depends(get_db)):
+async def get_generated_image(gen_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get generated image detail."""
-    gen_service = get_generation_service(db)
+    gen_service = get_generation_service(db, current_user.id)
     gen = gen_service.get_generated_image(gen_id)
     if not gen:
         raise HTTPException(status_code=404, detail="Generated image not found")
@@ -652,9 +659,9 @@ async def get_generated_image(gen_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/images/{gen_id}/file")
-async def serve_generated_image(gen_id: int, db: Session = Depends(get_db)):
+async def serve_generated_image(gen_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_token_param)):
     """Serve generated image file."""
-    gen_service = get_generation_service(db)
+    gen_service = get_generation_service(db, current_user.id)
     gen = gen_service.get_generated_image(gen_id)
     if not gen or not gen.object_key:
         raise HTTPException(status_code=404, detail="Generated image file not found")
@@ -671,7 +678,7 @@ async def serve_generated_image(gen_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/thumbnails/{filename}")
-async def serve_generated_thumbnail(filename: str):
+async def serve_generated_thumbnail(filename: str, current_user: User = Depends(get_current_user_from_token_param)):
     """Serve generated image thumbnail."""
     storage_path = Path(settings.local_storage_path) / "generated_thumbnails" / filename
     if not storage_path.exists():
@@ -680,9 +687,9 @@ async def serve_generated_thumbnail(filename: str):
 
 
 @router.delete("/images/{gen_id}", status_code=204)
-async def delete_generated_image(gen_id: int, db: Session = Depends(get_db)):
+async def delete_generated_image(gen_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Delete a generated image."""
-    gen_service = get_generation_service(db)
+    gen_service = get_generation_service(db, current_user.id)
     if not gen_service.delete_generated_image(gen_id):
         raise HTTPException(status_code=404, detail="Generated image not found")
 
@@ -856,9 +863,9 @@ def _eval_to_list_item(evaluation) -> EvaluationListItem:
 
 
 @router.post("/lora/{lora_id}/evaluate", status_code=201)
-async def start_evaluation(lora_id: int, request: StartEvaluationRequest, db: Session = Depends(get_db)):
+async def start_evaluation(lora_id: int, request: StartEvaluationRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Start an evaluation for a LoRA model."""
-    gen_service = get_generation_service(db)
+    gen_service = get_generation_service(db, current_user.id)
     lora = gen_service.get_lora_model(lora_id)
     if not lora:
         raise HTTPException(status_code=404, detail="LoRA model not found")
@@ -878,6 +885,7 @@ async def start_evaluation(lora_id: int, request: StartEvaluationRequest, db: Se
                 "sample_count": request.sample_count,
                 "metrics": request.metrics_enabled,
             },
+            user_id=current_user.id,
         )
         db.add(job)
         db.commit()
@@ -888,7 +896,7 @@ async def start_evaluation(lora_id: int, request: StartEvaluationRequest, db: Se
         raise HTTPException(status_code=500, detail=f"Failed to create evaluation job: {e}")
 
     # Create evaluation record
-    eval_service = get_evaluation_service(db)
+    eval_service = get_evaluation_service(db, current_user.id)
     evaluation = eval_service.create_evaluation(
         lora_model_id=lora_id,
         sample_count=request.sample_count,
@@ -903,7 +911,7 @@ async def start_evaluation(lora_id: int, request: StartEvaluationRequest, db: Se
 
     # Dispatch Celery task
     from app.workers.generation_tasks import evaluate_lora as evaluate_task
-    task = evaluate_task.delay(evaluation.id, job.id)
+    task = evaluate_task.delay(evaluation.id, job.id, current_user.id)
 
     job.celery_task_id = task.id
     db.commit()
@@ -921,9 +929,10 @@ async def list_evaluations(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """List evaluations for a LoRA model."""
-    eval_service = get_evaluation_service(db)
+    eval_service = get_evaluation_service(db, current_user.id)
     items = eval_service.get_evaluations_for_model(lora_id, skip=skip, limit=limit)
     total = eval_service.count_evaluations(lora_id)
     return EvaluationListResponse(
@@ -935,9 +944,9 @@ async def list_evaluations(
 
 
 @router.get("/evaluations/{eval_id}", response_model=EvaluationResponse)
-async def get_evaluation(eval_id: int, db: Session = Depends(get_db)):
+async def get_evaluation(eval_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get evaluation detail with all pairs."""
-    eval_service = get_evaluation_service(db)
+    eval_service = get_evaluation_service(db, current_user.id)
     evaluation = eval_service.get_evaluation(eval_id)
     if not evaluation:
         raise HTTPException(status_code=404, detail="Evaluation not found")
@@ -945,15 +954,15 @@ async def get_evaluation(eval_id: int, db: Session = Depends(get_db)):
 
 
 @router.delete("/evaluations/{eval_id}", status_code=204)
-async def delete_evaluation(eval_id: int, db: Session = Depends(get_db)):
+async def delete_evaluation(eval_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Delete an evaluation and its pairs."""
-    eval_service = get_evaluation_service(db)
+    eval_service = get_evaluation_service(db, current_user.id)
     if not eval_service.delete_evaluation(eval_id):
         raise HTTPException(status_code=404, detail="Evaluation not found")
 
 
 @router.get("/evaluations/{eval_id}/pairs/{pair_id}/generated-file")
-async def serve_eval_generated_image(eval_id: int, pair_id: int, db: Session = Depends(get_db)):
+async def serve_eval_generated_image(eval_id: int, pair_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_token_param)):
     """Serve generated image file from an evaluation pair."""
     from app.models.lora_evaluation import EvaluationPair
 

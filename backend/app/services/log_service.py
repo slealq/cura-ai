@@ -25,11 +25,13 @@ def write_log(
     output_tokens: int | None = None,
     success: bool | None = None,
     extra: dict | None = None,
+    user_id: int | None = None,
 ) -> None:
     """Write a log entry. Opens and closes its own session to stay independent."""
     db = SessionLocal()
     try:
         entry = PipelineLog(
+            user_id=user_id,
             level=level,
             category=category,
             message=message,
@@ -56,6 +58,7 @@ def write_log(
 
 def query_logs(
     db: Session,
+    user_id: int,
     category: LogCategory | None = None,
     level: LogLevel | None = None,
     image_id: int | None = None,
@@ -65,7 +68,7 @@ def query_logs(
     limit: int = 50,
 ) -> tuple[list[PipelineLog], int]:
     """Query logs with filtering. Returns (logs, total_count)."""
-    query = db.query(PipelineLog)
+    query = db.query(PipelineLog).filter(PipelineLog.user_id == user_id)
 
     if category:
         query = query.filter(PipelineLog.category == category)

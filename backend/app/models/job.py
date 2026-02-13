@@ -43,6 +43,7 @@ class Job(Base):
     __tablename__ = "jobs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
 
     # Job identification
     celery_task_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)

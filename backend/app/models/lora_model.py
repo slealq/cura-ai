@@ -25,6 +25,7 @@ class LoraModel(Base):
     __tablename__ = "lora_models"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
 
     # Identity
     name: Mapped[str] = mapped_column(String(256), nullable=False)

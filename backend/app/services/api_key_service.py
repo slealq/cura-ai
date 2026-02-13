@@ -30,16 +30,19 @@ class APIKeyValidationResult:
 class APIKeyService:
     """Service for API key management."""
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, user_id: int):
         self.db = db
+        self.user_id = user_id
 
     def get_key(self, provider: APIProvider) -> APIKey | None:
         """Get API key for a provider."""
-        return self.db.query(APIKey).filter(APIKey.provider == provider.value).first()
+        return self.db.query(APIKey).filter(
+            APIKey.provider == provider.value, APIKey.user_id == self.user_id
+        ).first()
 
     def get_all_keys(self) -> list[APIKey]:
         """Get all stored API keys."""
-        return self.db.query(APIKey).all()
+        return self.db.query(APIKey).filter(APIKey.user_id == self.user_id).all()
 
     def get_decrypted_key(self, provider: APIProvider) -> str | None:
         """Get decrypted API key value for a provider."""
@@ -49,11 +52,11 @@ class APIKeyService:
         return None
 
     def resolve_key(self, provider: APIProvider) -> str | None:
-        """Resolve API key: DB first, then env var fallback.
+        """Resolve API key: user's DB key first, then env var fallback.
 
         This is the single source of truth for which key to use.
         """
-        # Try DB first
+        # Try user's DB key first
         db_key = self.get_decrypted_key(provider)
         if db_key:
             return db_key
@@ -92,6 +95,7 @@ class APIKeyService:
             return existing
         else:
             new_key = APIKey(
+                user_id=self.user_id,
                 provider=provider.value,
                 encrypted_key=encrypted,
                 key_suffix=key_suffix,
@@ -213,6 +217,6 @@ class APIKeyService:
         return api_key, result
 
 
-def get_api_key_service(db: Session) -> APIKeyService:
+def get_api_key_service(db: Session, user_id: int) -> APIKeyService:
     """Factory function to get APIKeyService instance."""
-    return APIKeyService(db)
+    return APIKeyService(db, user_id)

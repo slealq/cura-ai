@@ -9,7 +9,9 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.security import get_current_user, get_current_user_from_token_param
 from app.db.base import get_db
+from app.models.user import User
 from app.models import ImageSource, ImageStatus, Job, JobStatus, JobType
 from app.schemas import StepResponse
 from app.schemas import (
@@ -38,12 +40,13 @@ async def upload_image(
     file: UploadFile = File(...),
     folder_id: int | None = Query(None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Upload a single image for processing."""
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
 
-    image_service = get_image_service(db)
+    image_service = get_image_service(db, current_user.id)
 
     try:
         file_data = await file.read()
@@ -54,7 +57,7 @@ async def upload_image(
         )
 
         if folder_id:
-            folder_service = get_folder_service(db)
+            folder_service = get_folder_service(db, current_user.id)
             folder_service.add_images_to_folder(folder_id, [image.id])
 
         return UploadResponse(
@@ -73,9 +76,10 @@ async def upload_images_batch(
     files: list[UploadFile] = File(...),
     folder_id: int | None = Query(None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Upload multiple images for processing."""
-    image_service = get_image_service(db)
+    image_service = get_image_service(db, current_user.id)
     uploaded = []
     failed = []
     uploaded_image_ids = []
@@ -109,7 +113,7 @@ async def upload_images_batch(
     folder_error = None
     if folder_id and uploaded_image_ids:
         try:
-            folder_service = get_folder_service(db)
+            folder_service = get_folder_service(db, current_user.id)
             folder_service.add_images_to_folder(folder_id, uploaded_image_ids)
         except Exception as e:
             logger.error(f"Failed to add {len(uploaded_image_ids)} images to folder {folder_id}: {e}")
@@ -130,9 +134,10 @@ async def list_images(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """List images with optional filtering."""
-    image_service = get_image_service(db)
+    image_service = get_image_service(db, current_user.id)
     images = image_service.get_images(
         status=status,
         min_status=min_status,
@@ -151,11 +156,11 @@ async def list_images(
 
 
 @router.get("/stats", response_model=PipelineStats)
-async def get_pipeline_stats(db: Session = Depends(get_db)):
+async def get_pipeline_stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get pipeline processing statistics."""
-    image_service = get_image_service(db)
+    image_service = get_image_service(db, current_user.id)
     from app.services.cluster_service import get_cluster_service
-    cluster_service = get_cluster_service(db)
+    cluster_service = get_cluster_service(db, current_user.id)
 
     return PipelineStats(
         total_images=image_service.count_images(),
@@ -171,9 +176,9 @@ async def get_pipeline_stats(db: Session = Depends(get_db)):
 
 
 @router.get("/{image_id}", response_model=ImageResponse)
-async def get_image(image_id: int, db: Session = Depends(get_db)):
+async def get_image(image_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get image by ID."""
-    image_service = get_image_service(db)
+    image_service = get_image_service(db, current_user.id)
     image = image_service.get_image(image_id)
 
     if not image:
@@ -183,17 +188,17 @@ async def get_image(image_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{image_id}/folders")
-async def get_image_folders(image_id: int, db: Session = Depends(get_db)):
+async def get_image_folders(image_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get folders that contain this image."""
-    folder_service = get_folder_service(db)
+    folder_service = get_folder_service(db, current_user.id)
     folders = folder_service.get_image_folders(image_id)
     return [{"id": f.id, "name": f.name} for f in folders]
 
 
 @router.delete("/{image_id}")
-async def delete_image(image_id: int, db: Session = Depends(get_db)):
+async def delete_image(image_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Delete an image."""
-    image_service = get_image_service(db)
+    image_service = get_image_service(db, current_user.id)
 
     if not image_service.delete_image(image_id):
         raise HTTPException(status_code=404, detail="Image not found")
@@ -206,11 +211,12 @@ async def get_similar_images(
     image_id: int,
     limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Get images similar to the specified image based on embeddings."""
     from sqlalchemy import text
 
-    image_service = get_image_service(db)
+    image_service = get_image_service(db, current_user.id)
     image = image_service.get_image(image_id)
 
     if not image:
@@ -228,6 +234,7 @@ async def get_similar_images(
         FROM images i
         JOIN image_metadata m ON i.id = m.image_id
         WHERE i.id != :image_id
+        AND i.user_id = :user_id
         AND m.embedding IS NOT NULL
         ORDER BY m.embedding <-> :embedding
         LIMIT :limit
@@ -235,7 +242,7 @@ async def get_similar_images(
 
     result = db.execute(
         query,
-        {"image_id": image_id, "embedding": embedding_str, "limit": limit}
+        {"image_id": image_id, "user_id": current_user.id, "embedding": embedding_str, "limit": limit}
     )
     similar_ids = [row[0] for row in result]
 
@@ -256,9 +263,10 @@ async def reprocess_image(
     image_id: int,
     request: ReprocessRequest | None = None,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Reprocess an image through the pipeline with optional prompt overrides."""
-    image_service = get_image_service(db)
+    image_service = get_image_service(db, current_user.id)
     image = image_service.get_image(image_id)
 
     if not image:
@@ -274,6 +282,7 @@ async def reprocess_image(
         image_id=image_id,
         total_items=1,
         parameters={"tag_prompt": tag_prompt, "description_prompt": description_prompt},
+        user_id=current_user.id,
     )
     db.add(job)
     db.commit()
@@ -281,7 +290,7 @@ async def reprocess_image(
 
     # Reset status and queue for reprocessing
     image_service.update_status(image_id, ImageStatus.INGESTED)
-    task = process_image_pipeline.delay(image_id, tag_prompt=tag_prompt, description_prompt=description_prompt, job_id=job.id)
+    task = process_image_pipeline.delay(image_id, tag_prompt=tag_prompt, description_prompt=description_prompt, job_id=job.id, user_id=current_user.id)
     job.celery_task_id = task.id
     db.commit()
 
@@ -310,9 +319,10 @@ async def tag_image_endpoint(
     image_id: int,
     request: TagRequest | None = None,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Tag an image with structured metadata."""
-    image_service = get_image_service(db)
+    image_service = get_image_service(db, current_user.id)
     image = image_service.get_image(image_id)
 
     if not image:
@@ -329,12 +339,13 @@ async def tag_image_endpoint(
         image_id=image_id,
         total_items=1,
         parameters={"tag_prompt": tag_prompt} if tag_prompt else {},
+        user_id=current_user.id,
     )
     db.add(job)
     db.commit()
     db.refresh(job)
 
-    task = tag_image.delay(image_id, tag_prompt=tag_prompt, job_id=job.id)
+    task = tag_image.delay(image_id, tag_prompt=tag_prompt, job_id=job.id, user_id=current_user.id)
     job.celery_task_id = task.id
     db.commit()
 
@@ -346,9 +357,10 @@ async def describe_image_endpoint(
     image_id: int,
     request: DescribeRequest | None = None,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Generate caption and description for an image."""
-    image_service = get_image_service(db)
+    image_service = get_image_service(db, current_user.id)
     image = image_service.get_image(image_id)
 
     if not image:
@@ -365,12 +377,13 @@ async def describe_image_endpoint(
         image_id=image_id,
         total_items=1,
         parameters={"description_prompt": description_prompt} if description_prompt else {},
+        user_id=current_user.id,
     )
     db.add(job)
     db.commit()
     db.refresh(job)
 
-    task = describe_image.delay(image_id, description_prompt=description_prompt, job_id=job.id)
+    task = describe_image.delay(image_id, description_prompt=description_prompt, job_id=job.id, user_id=current_user.id)
     job.celery_task_id = task.id
     db.commit()
 
@@ -381,9 +394,10 @@ async def describe_image_endpoint(
 async def embed_image_endpoint(
     image_id: int,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Generate embedding for an image."""
-    image_service = get_image_service(db)
+    image_service = get_image_service(db, current_user.id)
     image = image_service.get_image(image_id)
 
     if not image:
@@ -397,12 +411,13 @@ async def embed_image_endpoint(
         status=JobStatus.PENDING,
         image_id=image_id,
         total_items=1,
+        user_id=current_user.id,
     )
     db.add(job)
     db.commit()
     db.refresh(job)
 
-    task = embed_image.delay(image_id, job_id=job.id)
+    task = embed_image.delay(image_id, job_id=job.id, user_id=current_user.id)
     job.celery_task_id = task.id
     db.commit()
 
@@ -411,7 +426,7 @@ async def embed_image_endpoint(
 
 # Thumbnail serving endpoint
 @router.get("/thumbnails/{filename}")
-async def get_thumbnail(filename: str):
+async def get_thumbnail(filename: str, current_user: User = Depends(get_current_user_from_token_param)):
     """Serve thumbnail file."""
     thumbnail_path = Path(settings.local_storage_path) / "thumbnails" / filename
 
@@ -423,7 +438,7 @@ async def get_thumbnail(filename: str):
 
 # Full image serving endpoint
 @router.get("/files/{filename}")
-async def get_image_file(filename: str):
+async def get_image_file(filename: str, current_user: User = Depends(get_current_user_from_token_param)):
     """Serve full image file."""
     image_path = Path(settings.local_storage_path) / "images" / filename
 

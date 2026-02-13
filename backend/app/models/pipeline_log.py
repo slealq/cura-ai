@@ -2,7 +2,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, Float, Index, Integer, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -26,6 +26,7 @@ class PipelineLog(Base):
     __tablename__ = "pipeline_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
 
     # Classification — values_callable ensures SQLAlchemy uses enum values (lowercase)
     # to match the PostgreSQL enum type created in the migration

@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type {
   APIKeyInfo,
+  AuthUser,
   BatchJobImage,
   BatchUploadResponse,
   Cluster,
@@ -29,6 +30,7 @@ import type {
   ProviderModel,
   SearchResponse,
   StepResponse,
+  TokenResponse,
   TrainingConfig,
 } from '@/types';
 
@@ -39,16 +41,96 @@ const api = axios.create({
   },
 });
 
-// Extract meaningful error messages from API responses
+// Attach Bearer token to all requests
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('access_token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// Track refresh state to avoid multiple simultaneous refreshes
+let isRefreshing = false;
+let refreshSubscribers: ((token: string) => void)[] = [];
+
+function onTokenRefreshed(token: string) {
+  refreshSubscribers.forEach((cb) => cb(token));
+  refreshSubscribers = [];
+}
+
+function addRefreshSubscriber(cb: (token: string) => void) {
+  refreshSubscribers.push(cb);
+}
+
+// Extract meaningful error messages + handle 401 with token refresh
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
+    const originalRequest = error.config;
+
+    // If 401 and not already retrying, try refreshing the token
+    if (
+      error.response?.status === 401 &&
+      !originalRequest._retry &&
+      !originalRequest.url?.includes('/auth/')
+    ) {
+      originalRequest._retry = true;
+
+      if (!isRefreshing) {
+        isRefreshing = true;
+        const refreshToken = localStorage.getItem('refresh_token');
+
+        if (refreshToken) {
+          try {
+            const { data } = await axios.post<TokenResponse>('/api/auth/refresh', {
+              refresh_token: refreshToken,
+            });
+            localStorage.setItem('access_token', data.access_token);
+            localStorage.setItem('refresh_token', data.refresh_token);
+            isRefreshing = false;
+            onTokenRefreshed(data.access_token);
+
+            originalRequest.headers.Authorization = `Bearer ${data.access_token}`;
+            return api(originalRequest);
+          } catch {
+            isRefreshing = false;
+            refreshSubscribers = [];
+            localStorage.removeItem('access_token');
+            localStorage.removeItem('refresh_token');
+            window.location.href = '/login';
+            return Promise.reject(error);
+          }
+        } else {
+          isRefreshing = false;
+          window.location.href = '/login';
+          return Promise.reject(error);
+        }
+      }
+
+      // If already refreshing, queue this request
+      return new Promise((resolve) => {
+        addRefreshSubscriber((token: string) => {
+          originalRequest.headers.Authorization = `Bearer ${token}`;
+          resolve(api(originalRequest));
+        });
+      });
+    }
+
     if (error.response?.data?.detail) {
       error.message = error.response.data.detail;
     }
     return Promise.reject(error);
   }
 );
+
+// Helper to append auth token to static file URLs (img src, etc.)
+function authUrl(url: string): string {
+  const token = localStorage.getItem('access_token');
+  if (!token) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}token=${token}`;
+}
 
 // Images API
 export const imagesApi = {
@@ -124,11 +206,11 @@ export const imagesApi = {
   },
 
   getThumbnailUrl: (filename: string): string => {
-    return `/api/images/thumbnails/${filename}`;
+    return authUrl(`/api/images/thumbnails/${filename}`);
   },
 
   getImageUrl: (filename: string): string => {
-    return `/api/images/files/${filename}`;
+    return authUrl(`/api/images/files/${filename}`);
   },
 
   getFolders: async (imageId: number): Promise<FolderBrief[]> => {
@@ -632,11 +714,11 @@ export const generationApi = {
   },
 
   getImageUrl: (id: number): string => {
-    return `/api/generation/images/${id}/file`;
+    return authUrl(`/api/generation/images/${id}/file`);
   },
 
   getThumbnailUrl: (filename: string): string => {
-    return `/api/generation/thumbnails/${filename}`;
+    return authUrl(`/api/generation/thumbnails/${filename}`);
   },
 
   // Evaluations
@@ -672,7 +754,7 @@ export const generationApi = {
   },
 
   getEvalGeneratedImageUrl: (evalId: number, pairId: number): string => {
-    return `/api/generation/evaluations/${evalId}/pairs/${pairId}/generated-file`;
+    return authUrl(`/api/generation/evaluations/${evalId}/pairs/${pairId}/generated-file`);
   },
 };
 
@@ -698,6 +780,29 @@ export const logsApi = {
 
   cleanup: async (days?: number): Promise<{ deleted: number }> => {
     const { data } = await api.delete('/logs/cleanup', { params: { days } });
+    return data;
+  },
+};
+
+// Auth API
+export const authApi = {
+  login: async (email: string, password: string): Promise<TokenResponse> => {
+    const { data } = await api.post('/auth/login', { email, password });
+    return data;
+  },
+
+  register: async (email: string, password: string, displayName?: string): Promise<TokenResponse> => {
+    const { data } = await api.post('/auth/register', { email, password, display_name: displayName || null });
+    return data;
+  },
+
+  refresh: async (refreshToken: string): Promise<TokenResponse> => {
+    const { data } = await api.post('/auth/refresh', { refresh_token: refreshToken });
+    return data;
+  },
+
+  me: async (): Promise<AuthUser> => {
+    const { data } = await api.get('/auth/me');
     return data;
   },
 };

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Image Model Generator - a full-stack app for AI-powered image tagging, description, clustering, semantic search, LoRA model training, and image generation. Images are processed through a pipeline: ingest → tag → describe → embed → cluster → summarize. Trained LoRA models can be evaluated against source images for quality measurement.
+Image Model Generator - a multi-user full-stack app for AI-powered image tagging, description, clustering, semantic search, LoRA model training, and image generation. Images are processed through a pipeline: ingest → tag → describe → embed → cluster → summarize. Trained LoRA models can be evaluated against source images for quality measurement. All data is isolated per user via `user_id` foreign keys on every table.
 
 ## Deploying Changes
 
@@ -49,9 +49,13 @@ Image Model Generator - a full-stack app for AI-powered image tagging, descripti
    docker compose logs celery-worker --tail=5
    ```
 
-7. **Quick smoke test:**
+7. **Quick smoke test** (all API endpoints except `/auth/login` and `/auth/register` require a Bearer token):
    ```bash
-   curl -s http://localhost:8000/api/images/stats | python3 -m json.tool
+   # Get a token
+   TOKEN=$(curl -s http://localhost:8000/api/auth/login -H "Content-Type: application/json" \
+     -d '{"email":"stuart.leal23@gmail.com","password":"password"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+   curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/images/stats | python3 -m json.tool
    curl -s http://localhost:3000 -o /dev/null -w "%{http_code}"
    ```
 
@@ -101,9 +105,11 @@ npm run lint         # ESLint
 **Docker services:** postgres, redis, backend, celery-worker, celery-worker-clustering, celery-generation, celery-beat (optional, profile=scheduled), frontend
 
 **Key patterns:**
+- **Multi-user auth** (`backend/app/core/security.py`): JWT-based authentication (access tokens 30min, refresh tokens 7 days) using bcrypt + python-jose. Every API endpoint (except `/auth/login` and `/auth/register`) requires `get_current_user` dependency. File-serving endpoints use `get_current_user_from_token_param` (accepts `?token=` query param for `<img src>` usage). Admin-only endpoints use `require_admin`.
+- **User data isolation**: All services accept `user_id` in their constructor (e.g., `get_image_service(db, user_id)`). All queries filter by `user_id`. Celery tasks receive `user_id` as an explicit parameter.
 - **Provider abstraction** (`backend/app/providers/`): Swappable AI providers (OpenAI/Anthropic/fal.ai) via base classes and factory functions (`get_tagger()`, `get_describer()`, `get_embedder()`, `get_cluster_summarizer()`, `get_trainer()`, `get_generator()`, `get_evaluator()`)
-- **Service layer** (`backend/app/services/`): Business logic decoupled from API routes
-- **Celery task chaining** (`backend/app/workers/tasks.py`): `process_image_pipeline()` orchestrates tag→describe→embed flow. Upstream changes auto-trigger re-embedding.
+- **Service layer** (`backend/app/services/`): Business logic decoupled from API routes. Each service takes `(db, user_id)` and filters all queries by user.
+- **Celery task chaining** (`backend/app/workers/tasks.py`): `process_image_pipeline()` orchestrates tag→describe→embed flow. Upstream changes auto-trigger re-embedding. All tasks accept `user_id` parameter.
 - **pgvector**: 1536-dim embeddings for similarity search via cosine distance
 - **Hybrid search**: Combines semantic (embedding) and text (tsvector) search with adaptive weighting
 
@@ -115,17 +121,19 @@ npm run lint         # ESLint
 5. `cluster_all_images` task → HDBSCAN/KMeans/Graph groups by embedding similarity (with optional UMAP reduction)
 6. `summarize_clusters` task → Generates cluster titles and descriptions
 
-**API routes** (`backend/app/api/`):
-- `images.py` — Image CRUD, upload (single/batch), reprocess, tag, describe, embed, similar images, file serving
+**API routes** (`backend/app/api/`): All endpoints require Bearer token auth (`get_current_user` dependency) unless noted.
+- `auth.py` — Login, register (public, no auth), refresh token, get current user, create user (admin-only)
+- `images.py` — Image CRUD, upload (single/batch), reprocess, tag, describe, embed, similar images, file serving (token via query param)
 - `folders.py` — Folder CRUD, add/remove images, folder-scoped image listing, folder reprocess
 - `clusters.py` — Cluster listing, detail, rename, pin, archive, merge, exclude image, summarize, recluster, export
 - `search.py` — Hybrid semantic+text search, tag filtering, tag listing
 - `jobs.py` — Job listing/detail/cancel/delete, pipeline triggers (full, tag-all, describe-all, embed-all, reprocess-all, reprocess-failed, reprocess-selected), batch job image listing
-- `settings.py` — Prompt presets CRUD, activate preset, prompt get/update/reset/suggest, clustering config get/update/reset, API key management (store/validate/delete), provider config, generation config (per-base-model), training config (per-base-model), base model selection
-- `generation.py` — LoRA training (from folders or clusters, with optional per-image captions, multi-base-model: flux-dev/qwen-2.5), image generation, model/image CRUD, model recover/retry, LoRA evaluation (reference + creative pairs with embedding similarity/vision scoring)
-- `logs.py` — Pipeline log queries, stats, cleanup
+- `settings.py` — Prompt presets CRUD, activate preset, prompt get/update/reset/suggest, clustering config get/update/reset, API key management (store/validate/delete, env var keys visible to admin only), provider config, generation config (per-base-model), training config (per-base-model), base model selection
+- `generation.py` — LoRA training (from folders or clusters, with optional per-image captions, multi-base-model: flux-dev/qwen-2.5), image generation, model/image CRUD, model recover/retry, LoRA evaluation (reference + creative pairs with embedding similarity/vision scoring), file serving (token via query param)
+- `logs.py` — Pipeline log queries, stats (filtered by user), cleanup (admin-only)
 
-**Database models** (`backend/app/models/`):
+**Database models** (`backend/app/models/`): All data models have a `user_id` foreign key to the `users` table (NOT NULL with CASCADE delete, except `PipelineLog` which is nullable). Composite unique constraints replace simple uniques where needed (e.g., `user_id + file_hash` on images).
+- `User` — Authentication and data ownership. Fields: email (unique), hashed_password, display_name, role (admin/user), is_active, is_verified, timestamps. Seed admin: stuart.leal23@gmail.com
 - `Image` + `ImageMetadata` (1:1) — Core image data with status tracking, tags, description, embedding, hashes, tsvector
 - `Cluster` + `ClusterMembership` — Clustering results with centroid, summary, pin/archive/rename, outlier exclusion
 - `Job` — Async job tracking (types: INGEST, TAG, DESCRIBE, EMBED, CLUSTER, SUMMARIZE_CLUSTER, FULL_PIPELINE, REPROCESS, BATCH_REPROCESS, LORA_TRAIN, GENERATE_IMAGE, BATCH_GENERATE, LORA_EVALUATE)
@@ -134,23 +142,35 @@ npm run lint         # ESLint
 - `GeneratedImage` — AI-generated images linked to LoRA models with prompt, params, and output files
 - `LoraEvaluation` + `EvaluationPair` — Quality evaluation of trained LoRA models. Generates images from source prompts, compares against originals via embedding similarity and vision scoring. Supports "reference" (vs original) and "creative" (novel prompt) pair types
 - `PromptPreset` — Named tag+description prompt pairs with active/default flag
-- `PipelineLog` — Structured logs (category, level, tokens, duration, provider/model)
+- `PipelineLog` — Structured logs (category, level, tokens, duration, provider/model). user_id is nullable (system-level logs)
 - `AppSetting` — Key-value config store
 - `APIKey` — Encrypted API key storage with validation status
 
 **Frontend structure** (`frontend/src/`):
-- Pages: Home (clusters), Folders, Folder Detail, All Images, Upload, Search, Cluster Detail, Models (with sub-components: TrainModal, FluxTrainForm, QwenTrainForm, SharedTrainFields, ModelSettings, EvaluationDetail), Generate, Jobs, Debug, Settings
-- Components: Header (search+stats), Sidebar (navigation), ImageCard, ImageDrawer (detail slide-over), ImageGrid (paginated with filters+batch actions), ClusterCard, FolderCard, GeneratedImageCard, AddToFolderDialog, PipelineProgress
-- API client: `lib/api.ts` — Typed Axios functions for all endpoints
+- Pages: Login (sign-in/sign-up toggle), Home (clusters), Folders, Folder Detail, All Images, Upload, Search, Cluster Detail, Models (with sub-components: TrainModal, FluxTrainForm, QwenTrainForm, SharedTrainFields, ModelSettings, EvaluationDetail), Generate, Jobs, Debug, Settings
+- Auth: `contexts/AuthContext.tsx` provides `login`, `register`, `logout`, `user`, `isAuthenticated`. `AuthGate` in layout redirects unauthenticated users to `/login`. Axios interceptors attach Bearer token to all requests and handle 401 with automatic token refresh.
+- Components: Header (search+stats), Sidebar (navigation + user menu with logout), ImageCard, ImageDrawer (detail slide-over), ImageGrid (paginated with filters+batch actions), ClusterCard, FolderCard, GeneratedImageCard, AddToFolderDialog, PipelineProgress
+- API client: `lib/api.ts` — Typed Axios functions for all endpoints. `authUrl()` helper appends `?token=` to image/thumbnail URLs for authenticated file serving via `<img src>`.
 - State: TanStack Query with polling (5s jobs, 3s logs, 10s stats)
 
-**Alembic migrations:** 16 versions (001-016) covering initial schema through LoRA evaluations and pair types
+**Alembic migrations:** 17 versions (001-017) covering initial schema through multi-user support. Migration 017 creates the `users` table, seeds the admin user, adds `user_id` to all 11 data tables with backfill, and converts simple unique constraints to composite (user_id + field).
+
+## Authentication
+
+- **JWT-based**: Access tokens (30min) + refresh tokens (7 days), HS256 algorithm
+- **Password hashing**: bcrypt (direct, not passlib)
+- **Seed admin**: stuart.leal23@gmail.com / password (created in migration 017)
+- **Public endpoints**: `POST /auth/login`, `POST /auth/register` (no auth required)
+- **Sign-up**: Open registration via `/auth/register`. New users get the `user` role. Only admins can create other admins via `POST /auth/users`.
+- **File serving**: Thumbnail/image endpoints accept token via `?token=` query parameter (required for `<img src>` tags which can't send Authorization headers)
+- **API key isolation**: Each user manages their own API keys. Server-level env var keys are only visible to admin users.
 
 ## Environment
 
 Requires `.env` in project root with:
-- `OPENAI_API_KEY` (required for embeddings; also used for vision if chosen)
-- `ANTHROPIC_API_KEY` (optional, for vision/summarization)
-- `FAL_API_KEY` (optional, for LoRA training and image generation via fal.ai)
+- `OPENAI_API_KEY` (required for embeddings; also used for vision if chosen — visible as fallback to admin only)
+- `ANTHROPIC_API_KEY` (optional, for vision/summarization — visible as fallback to admin only)
+- `FAL_API_KEY` (optional, for LoRA training and image generation via fal.ai — visible as fallback to admin only)
 - `DEFAULT_VISION_PROVIDER` (openai/anthropic)
 - `DATABASE_URL`, `REDIS_URL`, `CELERY_BROKER_URL`
+- `JWT_SECRET_KEY` (defaults to `change-me-in-production-jwt-secret` — **must override in production**)

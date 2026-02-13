@@ -14,8 +14,9 @@ logger = logging.getLogger(__name__)
 class EvaluationService:
     """Service for LoRA evaluation CRUD operations."""
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, user_id: int):
         self.db = db
+        self.user_id = user_id
         self.storage = get_storage_service()
 
     def create_evaluation(
@@ -27,6 +28,7 @@ class EvaluationService:
     ) -> LoraEvaluation:
         """Create a new evaluation record."""
         evaluation = LoraEvaluation(
+            user_id=self.user_id,
             lora_model_id=lora_model_id,
             sample_count=sample_count,
             config=config,
@@ -46,7 +48,7 @@ class EvaluationService:
                 joinedload(LoraEvaluation.pairs).joinedload(EvaluationPair.original_image),
                 joinedload(LoraEvaluation.lora_model),
             )
-            .filter(LoraEvaluation.id == eval_id)
+            .filter(LoraEvaluation.id == eval_id, LoraEvaluation.user_id == self.user_id)
             .first()
         )
 
@@ -57,7 +59,10 @@ class EvaluationService:
         return (
             self.db.query(LoraEvaluation)
             .options(joinedload(LoraEvaluation.lora_model))
-            .filter(LoraEvaluation.lora_model_id == lora_model_id)
+            .filter(
+                LoraEvaluation.lora_model_id == lora_model_id,
+                LoraEvaluation.user_id == self.user_id,
+            )
             .order_by(LoraEvaluation.created_at.desc())
             .offset(skip)
             .limit(limit)
@@ -68,7 +73,10 @@ class EvaluationService:
         """Count evaluations for a model."""
         return (
             self.db.query(LoraEvaluation)
-            .filter(LoraEvaluation.lora_model_id == lora_model_id)
+            .filter(
+                LoraEvaluation.lora_model_id == lora_model_id,
+                LoraEvaluation.user_id == self.user_id,
+            )
             .count()
         )
 
@@ -84,7 +92,9 @@ class EvaluationService:
         aggregate_results: dict | None = None,
     ) -> LoraEvaluation | None:
         """Update evaluation status and scores."""
-        evaluation = self.db.query(LoraEvaluation).filter(LoraEvaluation.id == eval_id).first()
+        evaluation = self.db.query(LoraEvaluation).filter(
+            LoraEvaluation.id == eval_id, LoraEvaluation.user_id == self.user_id
+        ).first()
         if not evaluation:
             return None
 
@@ -113,7 +123,9 @@ class EvaluationService:
 
     def delete_evaluation(self, eval_id: int) -> bool:
         """Delete an evaluation and its pairs."""
-        evaluation = self.db.query(LoraEvaluation).filter(LoraEvaluation.id == eval_id).first()
+        evaluation = self.db.query(LoraEvaluation).filter(
+            LoraEvaluation.id == eval_id, LoraEvaluation.user_id == self.user_id
+        ).first()
         if evaluation:
             self.db.delete(evaluation)
             self.db.commit()
@@ -228,6 +240,6 @@ class EvaluationService:
         return thumbnails
 
 
-def get_evaluation_service(db: Session) -> EvaluationService:
+def get_evaluation_service(db: Session, user_id: int) -> EvaluationService:
     """Get evaluation service instance."""
-    return EvaluationService(db)
+    return EvaluationService(db, user_id)

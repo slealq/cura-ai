@@ -6,7 +6,9 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.security import get_current_user
 from app.db.base import get_db
+from app.models.user import User
 from app.models import Image, ImageMetadata
 from app.providers import get_embedder
 from app.schemas import ImageResponse, SearchRequest, SearchResponse, ScoredImageResponse
@@ -31,6 +33,7 @@ def _adaptive_weights(query: str) -> tuple[float, float]:
 async def semantic_search(
     request: SearchRequest,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Hybrid search: combines semantic embedding similarity with keyword matching.
@@ -54,6 +57,7 @@ async def semantic_search(
             FROM images i
             JOIN image_metadata m ON i.id = m.image_id
             WHERE m.embedding IS NOT NULL
+            AND i.user_id = :user_id
         )
         SELECT id, semantic_score,
             raw_text_score / (raw_text_score + 1.0) AS text_score,
@@ -69,6 +73,7 @@ async def semantic_search(
         "sw": sw,
         "tw": tw,
         "limit": request.limit,
+        "user_id": current_user.id,
     })
     rows = result.fetchall()
 
@@ -82,7 +87,7 @@ async def semantic_search(
         for row in rows
     }
 
-    image_service = get_image_service(db)
+    image_service = get_image_service(db, current_user.id)
     images = image_service.get_images_by_ids(image_ids)
 
     id_to_image = {img.id: img for img in images}
@@ -110,18 +115,19 @@ async def filter_images(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Filter images by tags using JSON array containment."""
     if not tags:
         # No filters, return recent images
-        image_service = get_image_service(db)
+        image_service = get_image_service(db, current_user.id)
         images = image_service.get_images(skip=skip, limit=limit)
         return [ImageResponse.model_validate(img) for img in images]
 
     # Build dynamic SQL for JSON array containment
     # Each tag must be present in the tags JSON array
-    conditions = []
-    params = {"skip": skip, "limit": limit}
+    conditions = ["i.user_id = :user_id"]
+    params = {"skip": skip, "limit": limit, "user_id": current_user.id}
 
     for i, tag in enumerate(tags):
         param_name = f"tag_{i}"
@@ -143,14 +149,14 @@ async def filter_images(
     result = db.execute(sql_query, params)
     image_ids = [row[0] for row in result]
 
-    image_service = get_image_service(db)
+    image_service = get_image_service(db, current_user.id)
     images = image_service.get_images_by_ids(image_ids)
 
     return [ImageResponse.model_validate(img) for img in images]
 
 
 @router.get("/tags", response_model=list[str])
-async def get_available_tags(db: Session = Depends(get_db)):
+async def get_available_tags(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get all available tag values for filtering UI, sorted by frequency."""
     results = db.query(ImageMetadata.tags).filter(ImageMetadata.tags.isnot(None)).all()
 

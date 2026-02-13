@@ -66,6 +66,7 @@ class Image(Base):
     __tablename__ = "images"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
 
     # Source information
     source: Mapped[ImageSource] = mapped_column(Enum(ImageSource), nullable=False)
@@ -74,7 +75,7 @@ class Image(Base):
     original_filename: Mapped[str] = mapped_column(String(512), nullable=True)
 
     # Deduplication
-    file_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    file_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     perceptual_hash: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
 
     # Image properties

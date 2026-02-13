@@ -134,23 +134,28 @@ def compose_description_prompt(guidance: str) -> str:
 class SettingsService:
     """Service for managing application settings."""
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, user_id: int):
         self.db = db
+        self.user_id = user_id
 
     def get_setting(self, key: str, default: str | None = None) -> str | None:
         """Get a setting value by key."""
-        setting = self.db.query(AppSettings).filter(AppSettings.key == key).first()
+        setting = self.db.query(AppSettings).filter(
+            AppSettings.key == key, AppSettings.user_id == self.user_id
+        ).first()
         return setting.value if setting else default
 
     def set_setting(self, key: str, value: str, description: str | None = None) -> AppSettings:
         """Set or update a setting value."""
-        setting = self.db.query(AppSettings).filter(AppSettings.key == key).first()
+        setting = self.db.query(AppSettings).filter(
+            AppSettings.key == key, AppSettings.user_id == self.user_id
+        ).first()
         if setting:
             setting.value = value
             if description:
                 setting.description = description
         else:
-            setting = AppSettings(key=key, value=value, description=description)
+            setting = AppSettings(key=key, value=value, description=description, user_id=self.user_id)
             self.db.add(setting)
         self.db.commit()
         self.db.refresh(setting)
@@ -158,7 +163,9 @@ class SettingsService:
 
     def delete_setting(self, key: str) -> None:
         """Delete a setting by key."""
-        setting = self.db.query(AppSettings).filter(AppSettings.key == key).first()
+        setting = self.db.query(AppSettings).filter(
+            AppSettings.key == key, AppSettings.user_id == self.user_id
+        ).first()
         if setting:
             self.db.delete(setting)
             self.db.commit()
@@ -167,15 +174,21 @@ class SettingsService:
 
     def list_presets(self) -> list[PromptPreset]:
         """List all prompt presets, ordered by name."""
-        return self.db.query(PromptPreset).order_by(PromptPreset.name).all()
+        return self.db.query(PromptPreset).filter(
+            PromptPreset.user_id == self.user_id
+        ).order_by(PromptPreset.name).all()
 
     def get_preset(self, preset_id: int) -> PromptPreset | None:
         """Get a single preset by ID."""
-        return self.db.query(PromptPreset).filter(PromptPreset.id == preset_id).first()
+        return self.db.query(PromptPreset).filter(
+            PromptPreset.id == preset_id, PromptPreset.user_id == self.user_id
+        ).first()
 
     def get_default_preset(self) -> PromptPreset | None:
         """Get the currently active (default) preset."""
-        return self.db.query(PromptPreset).filter(PromptPreset.is_default.is_(True)).first()
+        return self.db.query(PromptPreset).filter(
+            PromptPreset.is_default.is_(True), PromptPreset.user_id == self.user_id
+        ).first()
 
     def _ensure_default_preset(self) -> PromptPreset:
         """Get the active preset, creating a Default one if none exists."""
@@ -187,6 +200,7 @@ class SettingsService:
             tag_prompt=DEFAULT_TAG_GUIDANCE,
             description_prompt=DEFAULT_DESCRIPTION_GUIDANCE,
             is_default=True,
+            user_id=self.user_id,
         )
         self.db.add(preset)
         self.db.commit()
@@ -200,6 +214,7 @@ class SettingsService:
             tag_prompt=tag_prompt,
             description_prompt=description_prompt,
             is_default=False,
+            user_id=self.user_id,
         )
         self.db.add(preset)
         self.db.commit()
@@ -237,7 +252,9 @@ class SettingsService:
         preset = self.get_preset(preset_id)
         if not preset:
             return None
-        self.db.query(PromptPreset).filter(PromptPreset.is_default.is_(True)).update({"is_default": False})
+        self.db.query(PromptPreset).filter(
+            PromptPreset.is_default.is_(True), PromptPreset.user_id == self.user_id
+        ).update({"is_default": False})
         preset.is_default = True
         self.db.commit()
         self.db.refresh(preset)
@@ -402,6 +419,6 @@ class SettingsService:
         return compose_description_prompt(guidance)
 
 
-def get_settings_service(db: Session) -> SettingsService:
+def get_settings_service(db: Session, user_id: int) -> SettingsService:
     """Get settings service instance."""
-    return SettingsService(db)
+    return SettingsService(db, user_id)

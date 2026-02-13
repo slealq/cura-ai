@@ -24,6 +24,7 @@ class LoraEvaluation(Base):
     __tablename__ = "lora_evaluations"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
 
     # Link to LoRA model
     lora_model_id: Mapped[int] = mapped_column(

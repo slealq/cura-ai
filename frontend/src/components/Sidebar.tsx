@@ -12,8 +12,10 @@ import {
   Bug,
   Sparkles,
   Box,
+  LogOut,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/contexts/AuthContext';
 
 const navigation = [
   { name: 'Upload', href: '/upload', icon: Upload },
@@ -28,6 +30,7 @@ const navigation = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const { user, logout } = useAuth();
 
   return (
     <aside className="w-64 bg-card border-r border-border flex flex-col">
@@ -66,9 +69,25 @@ export default function Sidebar() {
       </nav>
 
       <div className="p-4 border-t border-border">
-        <div className="text-xs text-muted-foreground">
-          <p>Cura.ai v0.1.0</p>
-        </div>
+        {user && (
+          <div className="flex items-center justify-between">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium truncate">
+                {user.display_name || user.email}
+              </p>
+              {user.display_name && (
+                <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+              )}
+            </div>
+            <button
+              onClick={logout}
+              className="ml-2 p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
+              title="Sign out"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   );

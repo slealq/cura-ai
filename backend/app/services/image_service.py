@@ -18,8 +18,9 @@ logger = logging.getLogger(__name__)
 class ImageService:
     """Service for image CRUD and management operations."""
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, user_id: int):
         self.db = db
+        self.user_id = user_id
         self.storage = get_storage_service()
 
     async def ingest_image(
@@ -46,8 +47,11 @@ class ImageService:
         # Compute hashes for deduplication
         file_hash = self.storage.compute_file_hash(file_data)
 
-        # Check for duplicate
-        existing = self.db.query(Image).filter(Image.file_hash == file_hash).first()
+        # Check for duplicate (scoped to this user)
+        existing = self.db.query(Image).filter(
+            Image.file_hash == file_hash,
+            Image.user_id == self.user_id,
+        ).first()
         if existing:
             logger.info(f"Duplicate image detected: {filename} (hash: {file_hash[:16]}...)")
             write_log(
@@ -78,6 +82,7 @@ class ImageService:
 
             # Create database record
             image = Image(
+                user_id=self.user_id,
                 source=source,
                 original_uri=original_uri,
                 object_key=object_key,
@@ -129,7 +134,7 @@ class ImageService:
         """Get image by ID."""
         return self.db.query(Image).options(
             joinedload(Image.image_metadata)
-        ).filter(Image.id == image_id).first()
+        ).filter(Image.id == image_id, Image.user_id == self.user_id).first()
 
     def get_images(
         self,
@@ -140,7 +145,9 @@ class ImageService:
         limit: int = 100,
     ) -> list[Image]:
         """Get paginated list of images."""
-        query = self.db.query(Image).options(joinedload(Image.image_metadata))
+        query = self.db.query(Image).options(joinedload(Image.image_metadata)).filter(
+            Image.user_id == self.user_id
+        )
 
         if status:
             query = query.filter(Image.status == status)
@@ -157,14 +164,17 @@ class ImageService:
         """Get images by list of IDs."""
         return self.db.query(Image).options(
             joinedload(Image.image_metadata)
-        ).filter(Image.id.in_(image_ids)).all()
+        ).filter(Image.id.in_(image_ids), Image.user_id == self.user_id).all()
 
     def get_images_for_clustering(self) -> list[Image]:
         """Get all images with embeddings for clustering (includes already-clustered)."""
         return (
             self.db.query(Image)
             .options(joinedload(Image.image_metadata))
-            .filter(Image.status.in_([ImageStatus.EMBEDDED, ImageStatus.CLUSTERED]))
+            .filter(
+                Image.user_id == self.user_id,
+                Image.status.in_([ImageStatus.EMBEDDED, ImageStatus.CLUSTERED]),
+            )
             .all()
         )
 
@@ -175,7 +185,7 @@ class ImageService:
         error_message: str | None = None,
     ) -> Image | None:
         """Update image processing status."""
-        image = self.db.query(Image).filter(Image.id == image_id).first()
+        image = self.db.query(Image).filter(Image.id == image_id, Image.user_id == self.user_id).first()
         if image:
             image.status = status
             if error_message:
@@ -233,7 +243,7 @@ class ImageService:
         min_status: ImageStatus | None = None,
     ) -> int:
         """Count images with optional status filter."""
-        query = self.db.query(Image)
+        query = self.db.query(Image).filter(Image.user_id == self.user_id)
         if status:
             query = query.filter(Image.status == status)
         elif min_status:
@@ -251,7 +261,7 @@ class ImageService:
 
     def delete_image(self, image_id: int) -> bool:
         """Delete an image and its metadata."""
-        image = self.db.query(Image).filter(Image.id == image_id).first()
+        image = self.db.query(Image).filter(Image.id == image_id, Image.user_id == self.user_id).first()
         if image:
             self.db.delete(image)
             self.db.commit()
@@ -259,6 +269,6 @@ class ImageService:
         return False
 
 
-def get_image_service(db: Session) -> ImageService:
+def get_image_service(db: Session, user_id: int) -> ImageService:
     """Get image service instance."""
-    return ImageService(db)
+    return ImageService(db, user_id)

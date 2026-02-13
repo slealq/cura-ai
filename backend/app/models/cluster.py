@@ -38,6 +38,7 @@ class Cluster(Base):
     __tablename__ = "clusters"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
 
     # Clustering metadata
     method: Mapped[ClusteringMethod] = mapped_column(Enum(ClusteringMethod), nullable=False)

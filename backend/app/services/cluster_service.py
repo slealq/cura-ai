@@ -23,8 +23,9 @@ logger = logging.getLogger(__name__)
 class ClusterService:
     """Service for cluster CRUD and management operations."""
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, user_id: int):
         self.db = db
+        self.user_id = user_id
         self.clustering_service = get_clustering_service()
 
     def get_cluster(self, cluster_id: int) -> Cluster | None:
@@ -32,7 +33,7 @@ class ClusterService:
         return (
             self.db.query(Cluster)
             .options(joinedload(Cluster.memberships))
-            .filter(Cluster.id == cluster_id)
+            .filter(Cluster.id == cluster_id, Cluster.user_id == self.user_id)
             .first()
         )
 
@@ -44,7 +45,7 @@ class ClusterService:
         limit: int = 100,
     ) -> list[Cluster]:
         """Get paginated list of clusters."""
-        query = self.db.query(Cluster)
+        query = self.db.query(Cluster).filter(Cluster.user_id == self.user_id)
 
         if run_id:
             query = query.filter(Cluster.run_id == run_id)
@@ -63,6 +64,7 @@ class ClusterService:
         # Get the latest run_id
         latest_run = (
             self.db.query(Cluster.run_id)
+            .filter(Cluster.user_id == self.user_id)
             .order_by(Cluster.created_at.desc())
             .first()
         )
@@ -128,6 +130,7 @@ class ClusterService:
                 representative_ids = [image_ids[i] for i in rep_indices]
 
             cluster = Cluster(
+                user_id=self.user_id,
                 method=result.method,
                 run_id=result.run_id,
                 centroid_embedding=centroid.tolist() if centroid is not None else None,
@@ -166,6 +169,7 @@ class ClusterService:
             noise_image_ids = [image_ids[i] for i in noise_indices]
 
             noise_cluster = Cluster(
+                user_id=self.user_id,
                 method=result.method,
                 run_id=result.run_id,
                 centroid_embedding=None,
@@ -201,7 +205,7 @@ class ClusterService:
         summarization_model: str,
     ) -> Cluster | None:
         """Update cluster with AI-generated summary."""
-        cluster = self.db.query(Cluster).filter(Cluster.id == cluster_id).first()
+        cluster = self.db.query(Cluster).filter(Cluster.id == cluster_id, Cluster.user_id == self.user_id).first()
         if cluster:
             cluster.summary_title = summary_title
             cluster.summary_description = summary_description
@@ -213,7 +217,7 @@ class ClusterService:
 
     def rename_cluster(self, cluster_id: int, display_name: str) -> Cluster | None:
         """Set user-defined display name for cluster."""
-        cluster = self.db.query(Cluster).filter(Cluster.id == cluster_id).first()
+        cluster = self.db.query(Cluster).filter(Cluster.id == cluster_id, Cluster.user_id == self.user_id).first()
         if cluster:
             cluster.display_name = display_name
             self.db.commit()
@@ -222,7 +226,7 @@ class ClusterService:
 
     def toggle_pin(self, cluster_id: int) -> Cluster | None:
         """Toggle pinned status of cluster."""
-        cluster = self.db.query(Cluster).filter(Cluster.id == cluster_id).first()
+        cluster = self.db.query(Cluster).filter(Cluster.id == cluster_id, Cluster.user_id == self.user_id).first()
         if cluster:
             cluster.is_pinned = not cluster.is_pinned
             self.db.commit()
@@ -231,7 +235,7 @@ class ClusterService:
 
     def archive_cluster(self, cluster_id: int) -> Cluster | None:
         """Archive a cluster."""
-        cluster = self.db.query(Cluster).filter(Cluster.id == cluster_id).first()
+        cluster = self.db.query(Cluster).filter(Cluster.id == cluster_id, Cluster.user_id == self.user_id).first()
         if cluster:
             cluster.is_archived = True
             self.db.commit()
@@ -242,7 +246,7 @@ class ClusterService:
         """Merge multiple clusters into one."""
         clusters = (
             self.db.query(Cluster)
-            .filter(Cluster.id.in_(cluster_ids))
+            .filter(Cluster.id.in_(cluster_ids), Cluster.user_id == self.user_id)
             .all()
         )
 
@@ -266,6 +270,7 @@ class ClusterService:
             all_representative_ids.extend(cluster.representative_image_ids[:2])
 
         merged_cluster = Cluster(
+            user_id=self.user_id,
             method=primary.method,
             run_id=primary.run_id,
             centroid_embedding=primary.centroid_embedding,
@@ -308,7 +313,7 @@ class ClusterService:
             membership.is_excluded = True
 
             # Update cluster size
-            cluster = self.db.query(Cluster).filter(Cluster.id == cluster_id).first()
+            cluster = self.db.query(Cluster).filter(Cluster.id == cluster_id, Cluster.user_id == self.user_id).first()
             if cluster:
                 cluster.size = max(0, cluster.size - 1)
 
@@ -318,7 +323,7 @@ class ClusterService:
 
     def delete_old_clusters(self, keep_run_id: str | None = None) -> int:
         """Delete old clusters, optionally keeping a specific run."""
-        query = self.db.query(Cluster)
+        query = self.db.query(Cluster).filter(Cluster.user_id == self.user_id)
         if keep_run_id:
             query = query.filter(Cluster.run_id != keep_run_id)
 
@@ -337,12 +342,12 @@ class ClusterService:
 
     def count_clusters(self, run_id: str | None = None) -> int:
         """Count clusters with optional run_id filter."""
-        query = self.db.query(Cluster)
+        query = self.db.query(Cluster).filter(Cluster.user_id == self.user_id)
         if run_id:
             query = query.filter(Cluster.run_id == run_id)
         return query.count()
 
 
-def get_cluster_service(db: Session) -> ClusterService:
+def get_cluster_service(db: Session, user_id: int) -> ClusterService:
     """Get cluster service instance."""
-    return ClusterService(db)
+    return ClusterService(db, user_id)

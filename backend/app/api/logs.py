@@ -6,7 +6,9 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.security import get_current_user, require_admin
 from app.db.base import get_db
+from app.models.user import User
 from app.models.pipeline_log import LogCategory, LogLevel, PipelineLog
 from app.services.log_service import cleanup_old_logs, query_logs
 
@@ -61,6 +63,7 @@ async def list_logs(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Query pipeline logs with filtering."""
     logs, total = query_logs(
@@ -72,6 +75,7 @@ async def list_logs(
         search=search,
         skip=skip,
         limit=limit,
+        user_id=current_user.id,
     )
 
     items = []
@@ -101,18 +105,19 @@ async def list_logs(
 
 
 @router.get("/stats", response_model=LogStatsResponse)
-async def get_log_stats(db: Session = Depends(get_db)):
+async def get_log_stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get summary statistics for logs."""
-    total = db.query(func.count(PipelineLog.id)).scalar() or 0
+    user_filter = PipelineLog.user_id == current_user.id
+    total = db.query(func.count(PipelineLog.id)).filter(user_filter).scalar() or 0
     api_calls = (
         db.query(func.count(PipelineLog.id))
-        .filter(PipelineLog.category == LogCategory.API_CALL)
+        .filter(user_filter, PipelineLog.category == LogCategory.API_CALL)
         .scalar()
         or 0
     )
     errors = (
         db.query(func.count(PipelineLog.id))
-        .filter(PipelineLog.level == LogLevel.ERROR)
+        .filter(user_filter, PipelineLog.level == LogLevel.ERROR)
         .scalar()
         or 0
     )
@@ -122,7 +127,7 @@ async def get_log_stats(db: Session = Depends(get_db)):
             func.coalesce(func.sum(PipelineLog.input_tokens), 0)
             + func.coalesce(func.sum(PipelineLog.output_tokens), 0)
         )
-        .filter(PipelineLog.category == LogCategory.API_CALL)
+        .filter(user_filter, PipelineLog.category == LogCategory.API_CALL)
         .scalar()
         or 0
     )
@@ -130,6 +135,7 @@ async def get_log_stats(db: Session = Depends(get_db)):
     avg_duration = (
         db.query(func.avg(PipelineLog.duration_ms))
         .filter(
+            user_filter,
             PipelineLog.category == LogCategory.API_CALL,
             PipelineLog.duration_ms.isnot(None),
         )
@@ -148,6 +154,7 @@ async def get_log_stats(db: Session = Depends(get_db)):
 @router.delete("/cleanup")
 async def cleanup_logs(
     days: int = Query(7, ge=1, le=90),
+    current_user: User = Depends(require_admin),
 ):
     """Delete logs older than specified days."""
     count = cleanup_old_logs(days=days)

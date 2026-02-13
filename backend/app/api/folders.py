@@ -5,7 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core.security import get_current_user
 from app.db.base import get_db
+from app.models.user import User
 from app.models import ImageStatus, Job, JobStatus, JobType
 from app.schemas import ImageListResponse, ImageResponse
 from app.services.folder_service import get_folder_service
@@ -71,8 +73,8 @@ class FolderBriefResponse(BaseModel):
 # --- Routes ---
 
 @router.post("", response_model=FolderResponse)
-async def create_folder(request: FolderCreateRequest, db: Session = Depends(get_db)):
-    folder_service = get_folder_service(db)
+async def create_folder(request: FolderCreateRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    folder_service = get_folder_service(db, current_user.id)
     folder = folder_service.create_folder(name=request.name, description=request.description)
     return _folder_to_response(folder, [])
 
@@ -82,8 +84,9 @@ async def list_folders(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    folder_service = get_folder_service(db)
+    folder_service = get_folder_service(db, current_user.id)
     folders = folder_service.get_folders(skip=skip, limit=limit)
     total = folder_service.count_folders()
 
@@ -96,8 +99,8 @@ async def list_folders(
 
 
 @router.get("/{folder_id}", response_model=FolderResponse)
-async def get_folder(folder_id: int, db: Session = Depends(get_db)):
-    folder_service = get_folder_service(db)
+async def get_folder(folder_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    folder_service = get_folder_service(db, current_user.id)
     folder = folder_service.get_folder(folder_id)
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
@@ -106,8 +109,8 @@ async def get_folder(folder_id: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/{folder_id}", response_model=FolderResponse)
-async def update_folder(folder_id: int, request: FolderUpdateRequest, db: Session = Depends(get_db)):
-    folder_service = get_folder_service(db)
+async def update_folder(folder_id: int, request: FolderUpdateRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    folder_service = get_folder_service(db, current_user.id)
     folder = folder_service.update_folder(folder_id, name=request.name, description=request.description)
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
@@ -116,16 +119,16 @@ async def update_folder(folder_id: int, request: FolderUpdateRequest, db: Sessio
 
 
 @router.delete("/{folder_id}")
-async def delete_folder(folder_id: int, db: Session = Depends(get_db)):
-    folder_service = get_folder_service(db)
+async def delete_folder(folder_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    folder_service = get_folder_service(db, current_user.id)
     if not folder_service.delete_folder(folder_id):
         raise HTTPException(status_code=404, detail="Folder not found")
     return {"status": "deleted", "folder_id": folder_id}
 
 
 @router.post("/{folder_id}/images")
-async def add_images_to_folder(folder_id: int, request: FolderImageIdsRequest, db: Session = Depends(get_db)):
-    folder_service = get_folder_service(db)
+async def add_images_to_folder(folder_id: int, request: FolderImageIdsRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    folder_service = get_folder_service(db, current_user.id)
     folder = folder_service.get_folder(folder_id)
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
@@ -134,8 +137,8 @@ async def add_images_to_folder(folder_id: int, request: FolderImageIdsRequest, d
 
 
 @router.delete("/{folder_id}/images")
-async def remove_images_from_folder(folder_id: int, request: FolderImageIdsRequest, db: Session = Depends(get_db)):
-    folder_service = get_folder_service(db)
+async def remove_images_from_folder(folder_id: int, request: FolderImageIdsRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    folder_service = get_folder_service(db, current_user.id)
     folder = folder_service.get_folder(folder_id)
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
@@ -151,8 +154,9 @@ async def list_folder_images(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    folder_service = get_folder_service(db)
+    folder_service = get_folder_service(db, current_user.id)
     folder = folder_service.get_folder(folder_id)
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
@@ -169,8 +173,8 @@ async def list_folder_images(
 
 
 @router.post("/{folder_id}/reprocess")
-async def reprocess_folder(folder_id: int, db: Session = Depends(get_db)):
-    folder_service = get_folder_service(db)
+async def reprocess_folder(folder_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    folder_service = get_folder_service(db, current_user.id)
     folder = folder_service.get_folder(folder_id)
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
@@ -183,12 +187,13 @@ async def reprocess_folder(folder_id: int, db: Session = Depends(get_db)):
         job_type=JobType.BATCH_REPROCESS,
         status=JobStatus.PENDING,
         total_items=len(image_ids),
+        user_id=current_user.id,
     )
     db.add(job)
     db.commit()
     db.refresh(job)
 
-    task = run_batch_reprocess.delay(job.id, image_ids)
+    task = run_batch_reprocess.delay(job.id, image_ids, current_user.id)
     job.celery_task_id = task.id
     db.commit()
 

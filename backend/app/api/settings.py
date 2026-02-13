@@ -8,7 +8,9 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.security import get_current_user
 from app.db.base import get_db
+from app.models.user import User
 from app.models.api_key import APIKeyStatus, APIProvider
 from app.services.api_key_service import get_api_key_service
 from app.services.settings_service import (
@@ -187,16 +189,16 @@ def _preset_to_response(preset) -> PresetResponse:
 
 
 @router.get("/presets", response_model=list[PresetResponse])
-async def list_presets(db: Session = Depends(get_db)):
+async def list_presets(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """List all prompt presets."""
-    service = get_settings_service(db)
+    service = get_settings_service(db, current_user.id)
     return [_preset_to_response(p) for p in service.list_presets()]
 
 
 @router.post("/presets", response_model=PresetResponse, status_code=201)
-async def create_preset(request: PresetCreateRequest, db: Session = Depends(get_db)):
+async def create_preset(request: PresetCreateRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Create a new prompt preset."""
-    service = get_settings_service(db)
+    service = get_settings_service(db, current_user.id)
     try:
         preset = service.create_preset(request.name, request.tag_prompt, request.description_prompt)
     except Exception:
@@ -205,9 +207,9 @@ async def create_preset(request: PresetCreateRequest, db: Session = Depends(get_
 
 
 @router.get("/presets/{preset_id}", response_model=PresetResponse)
-async def get_preset(preset_id: int, db: Session = Depends(get_db)):
+async def get_preset(preset_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get a single preset by ID."""
-    service = get_settings_service(db)
+    service = get_settings_service(db, current_user.id)
     preset = service.get_preset(preset_id)
     if not preset:
         raise HTTPException(status_code=404, detail="Preset not found")
@@ -215,9 +217,9 @@ async def get_preset(preset_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/presets/{preset_id}", response_model=PresetResponse)
-async def update_preset(preset_id: int, request: PresetUpdateRequest, db: Session = Depends(get_db)):
+async def update_preset(preset_id: int, request: PresetUpdateRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Update a preset's name and/or prompts."""
-    service = get_settings_service(db)
+    service = get_settings_service(db, current_user.id)
     preset = service.update_preset(preset_id, name=request.name, tag_prompt=request.tag_prompt, description_prompt=request.description_prompt)
     if not preset:
         raise HTTPException(status_code=404, detail="Preset not found")
@@ -225,9 +227,9 @@ async def update_preset(preset_id: int, request: PresetUpdateRequest, db: Sessio
 
 
 @router.delete("/presets/{preset_id}", status_code=204)
-async def delete_preset(preset_id: int, db: Session = Depends(get_db)):
+async def delete_preset(preset_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Delete a preset (cannot delete the active preset)."""
-    service = get_settings_service(db)
+    service = get_settings_service(db, current_user.id)
     preset = service.get_preset(preset_id)
     if not preset:
         raise HTTPException(status_code=404, detail="Preset not found")
@@ -236,9 +238,9 @@ async def delete_preset(preset_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/presets/{preset_id}/activate", response_model=PresetResponse)
-async def activate_preset(preset_id: int, db: Session = Depends(get_db)):
+async def activate_preset(preset_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Set a preset as the active default."""
-    service = get_settings_service(db)
+    service = get_settings_service(db, current_user.id)
     preset = service.set_default_preset(preset_id)
     if not preset:
         raise HTTPException(status_code=404, detail="Preset not found")
@@ -249,9 +251,9 @@ async def activate_preset(preset_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/prompts", response_model=PromptSettingsResponse)
-async def get_prompt_settings(db: Session = Depends(get_db)):
+async def get_prompt_settings(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get current default prompt settings."""
-    settings_service = get_settings_service(db)
+    settings_service = get_settings_service(db, current_user.id)
     active = settings_service._ensure_default_preset()
     return PromptSettingsResponse(
         description_prompt=active.description_prompt,
@@ -263,10 +265,10 @@ async def get_prompt_settings(db: Session = Depends(get_db)):
 
 @router.put("/prompts", response_model=PromptSettingsResponse)
 async def update_prompt_settings(
-    request: PromptSettingsRequest, db: Session = Depends(get_db)
+    request: PromptSettingsRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
 ):
     """Update active preset's prompts."""
-    settings_service = get_settings_service(db)
+    settings_service = get_settings_service(db, current_user.id)
     active = settings_service._ensure_default_preset()
 
     settings_service.update_preset(
@@ -288,9 +290,10 @@ async def update_prompt_settings(
 async def reset_prompt_settings(
     prompt_type: Literal["description", "tag", "all"] = "all",
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Reset active preset's prompts to factory defaults."""
-    settings_service = get_settings_service(db)
+    settings_service = get_settings_service(db, current_user.id)
     active = settings_service._ensure_default_preset()
 
     tag = None
@@ -312,7 +315,7 @@ async def reset_prompt_settings(
 
 
 @router.post("/prompts/suggest", response_model=PromptSuggestResponse)
-async def suggest_prompt(request: PromptSuggestRequest):
+async def suggest_prompt(request: PromptSuggestRequest, current_user: User = Depends(get_current_user)):
     """Use AI to suggest edits to a prompt based on a change request."""
     try:
         client = AsyncOpenAI(api_key=app_settings.openai_api_key)
@@ -361,80 +364,82 @@ def _api_key_to_response(key) -> APIKeyResponse:
 
 
 @router.get("/api-keys", response_model=list[APIKeyResponse])
-async def list_api_keys(db: Session = Depends(get_db)):
+async def list_api_keys(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """List all stored API keys (returns metadata only, never the actual key)."""
-    service = get_api_key_service(db)
+    service = get_api_key_service(db, current_user.id)
     keys = service.get_all_keys()
 
     # Build response including providers with no stored key
     stored = {k.provider: k for k in keys}
+    is_admin = current_user.role.value == "admin" if hasattr(current_user.role, 'value') else current_user.role == "admin"
     result = []
     for provider in APIProvider:
         if provider.value in stored:
             result.append(_api_key_to_response(stored[provider.value]))
         else:
-            # Check if env var is set
-            settings = get_settings()
-            env_keys = {
-                "openai": settings.openai_api_key,
-                "anthropic": settings.anthropic_api_key,
-                "fal": settings.fal_api_key,
-            }
-            env_key = env_keys.get(provider.value, "")
-            if env_key:
-                result.append(APIKeyResponse(
-                    provider=provider.value,
-                    key_suffix=env_key[-4:] if len(env_key) >= 4 else None,
-                    status="active",
-                    last_validated_at=None,
-                    last_error=None,
-                ))
-            else:
-                result.append(APIKeyResponse(
-                    provider=provider.value,
-                    key_suffix=None,
-                    status="not_set",
-                    last_validated_at=None,
-                    last_error=None,
-                ))
+            # Only show env var keys for admin users (they're server-level keys)
+            if is_admin:
+                settings = get_settings()
+                env_keys = {
+                    "openai": settings.openai_api_key,
+                    "anthropic": settings.anthropic_api_key,
+                    "fal": settings.fal_api_key,
+                }
+                env_key = env_keys.get(provider.value, "")
+                if env_key:
+                    result.append(APIKeyResponse(
+                        provider=provider.value,
+                        key_suffix=env_key[-4:] if len(env_key) >= 4 else None,
+                        status="active",
+                        last_validated_at=None,
+                        last_error=None,
+                    ))
+                    continue
+            result.append(APIKeyResponse(
+                provider=provider.value,
+                key_suffix=None,
+                status="not_set",
+                last_validated_at=None,
+                last_error=None,
+            ))
     return result
 
 
 @router.put("/api-keys/{provider}", response_model=APIKeyResponse)
-async def save_api_key(provider: str, request: APIKeySaveRequest, db: Session = Depends(get_db)):
+async def save_api_key(provider: str, request: APIKeySaveRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Save or update an API key (validates first)."""
     try:
         api_provider = APIProvider(provider)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
-    service = get_api_key_service(db)
+    service = get_api_key_service(db, current_user.id)
     api_key, result = await service.validate_and_save_key(api_provider, request.key)
     return _api_key_to_response(api_key)
 
 
 @router.delete("/api-keys/{provider}", status_code=204)
-async def delete_api_key(provider: str, db: Session = Depends(get_db)):
+async def delete_api_key(provider: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Remove a stored API key."""
     try:
         api_provider = APIProvider(provider)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
-    service = get_api_key_service(db)
+    service = get_api_key_service(db, current_user.id)
     if not service.delete_key(api_provider):
         raise HTTPException(status_code=404, detail="No stored key for this provider")
 
 
 @router.post("/api-keys/{provider}/validate", response_model=APIKeyResponse)
-async def validate_api_key(provider: str, db: Session = Depends(get_db)):
+async def validate_api_key(provider: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Re-validate an existing stored key."""
     try:
         api_provider = APIProvider(provider)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
-    service = get_api_key_service(db)
+    service = get_api_key_service(db, current_user.id)
     key_value = service.resolve_key(api_provider)
     if not key_value:
         raise HTTPException(status_code=404, detail="No key configured for this provider")
@@ -447,26 +452,26 @@ async def validate_api_key(provider: str, db: Session = Depends(get_db)):
 
 
 @router.get("/providers", response_model=ProviderConfigResponse)
-async def get_provider_config(db: Session = Depends(get_db)):
+async def get_provider_config(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get current provider configuration."""
-    service = get_settings_service(db)
+    service = get_settings_service(db, current_user.id)
     return service.get_provider_config()
 
 
 @router.put("/providers", response_model=ProviderConfigResponse)
 async def update_provider_config(
-    request: ProviderConfigUpdateRequest, db: Session = Depends(get_db)
+    request: ProviderConfigUpdateRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
 ):
     """Update provider configuration (partial update, merges with defaults)."""
-    service = get_settings_service(db)
+    service = get_settings_service(db, current_user.id)
     update = {k: v for k, v in request.model_dump().items() if v is not None}
     return service.set_provider_config(update)
 
 
 @router.post("/providers/reset", response_model=ProviderConfigResponse)
-async def reset_provider_config(db: Session = Depends(get_db)):
+async def reset_provider_config(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Reset provider configuration to defaults."""
-    service = get_settings_service(db)
+    service = get_settings_service(db, current_user.id)
     service.delete_setting("provider_config")
     return DEFAULT_PROVIDER_CONFIG
 
@@ -475,7 +480,7 @@ async def reset_provider_config(db: Session = Depends(get_db)):
 
 
 @router.get("/models/{provider}", response_model=list[ProviderModelInfo])
-async def get_provider_models(provider: str, db: Session = Depends(get_db)):
+async def get_provider_models(provider: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get available models for a provider."""
     if provider == "openai":
         return await _get_openai_models(db)
@@ -558,27 +563,27 @@ def _get_fal_models() -> list[ProviderModelInfo]:
 
 
 @router.get("/clustering", response_model=ClusteringConfigResponse)
-async def get_clustering_config(db: Session = Depends(get_db)):
+async def get_clustering_config(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get current clustering configuration."""
-    service = get_settings_service(db)
+    service = get_settings_service(db, current_user.id)
     return service.get_clustering_config()
 
 
 @router.put("/clustering", response_model=ClusteringConfigResponse)
 async def update_clustering_config(
-    request: ClusteringConfigUpdateRequest, db: Session = Depends(get_db)
+    request: ClusteringConfigUpdateRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
 ):
     """Update clustering configuration (partial update, merges with defaults)."""
-    service = get_settings_service(db)
+    service = get_settings_service(db, current_user.id)
     update = {k: v for k, v in request.model_dump().items() if v is not None}
     config = service.set_clustering_config(update)
     return config
 
 
 @router.post("/clustering/reset", response_model=ClusteringConfigResponse)
-async def reset_clustering_config(db: Session = Depends(get_db)):
+async def reset_clustering_config(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Reset clustering configuration to defaults."""
-    service = get_settings_service(db)
+    service = get_settings_service(db, current_user.id)
     service.delete_setting("clustering_config")
     return DEFAULT_CLUSTERING_CONFIG
 
@@ -619,40 +624,40 @@ class GenerationConfigUpdateRequest(BaseModel):
 
 
 @router.get("/base-model", response_model=BaseModelResponse)
-async def get_base_model(db: Session = Depends(get_db)):
+async def get_base_model(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get the active base model."""
-    service = get_settings_service(db)
+    service = get_settings_service(db, current_user.id)
     return {"base_model": service.get_base_model()}
 
 
 @router.put("/base-model", response_model=BaseModelResponse)
-async def update_base_model(request: BaseModelRequest, db: Session = Depends(get_db)):
+async def update_base_model(request: BaseModelRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Set the active base model."""
-    service = get_settings_service(db)
+    service = get_settings_service(db, current_user.id)
     return {"base_model": service.set_base_model(request.base_model)}
 
 
 @router.get("/generation", response_model=GenerationConfigResponse)
-async def get_generation_config(base_model: str | None = None, db: Session = Depends(get_db)):
+async def get_generation_config(base_model: str | None = None, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get current generation configuration, optionally scoped to a base model."""
-    service = get_settings_service(db)
+    service = get_settings_service(db, current_user.id)
     return service.get_generation_config(base_model)
 
 
 @router.put("/generation", response_model=GenerationConfigResponse)
 async def update_generation_config(
-    request: GenerationConfigUpdateRequest, base_model: str | None = None, db: Session = Depends(get_db)
+    request: GenerationConfigUpdateRequest, base_model: str | None = None, db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
 ):
     """Update generation configuration, optionally scoped to a base model."""
-    service = get_settings_service(db)
+    service = get_settings_service(db, current_user.id)
     update = {k: v for k, v in request.model_dump().items() if v is not None}
     return service.set_generation_config(update, base_model)
 
 
 @router.post("/generation/reset", response_model=GenerationConfigResponse)
-async def reset_generation_config(base_model: str | None = None, db: Session = Depends(get_db)):
+async def reset_generation_config(base_model: str | None = None, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Reset generation configuration to defaults."""
-    service = get_settings_service(db)
+    service = get_settings_service(db, current_user.id)
     if base_model:
         service.delete_setting(f"generation_config:{base_model}")
         return DEFAULT_GENERATION_CONFIGS.get(base_model, DEFAULT_GENERATION_CONFIG)
@@ -680,26 +685,26 @@ class TrainingConfigUpdateRequest(BaseModel):
 
 
 @router.get("/training", response_model=TrainingConfigResponse)
-async def get_training_config(base_model: str | None = None, db: Session = Depends(get_db)):
+async def get_training_config(base_model: str | None = None, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get current training configuration, optionally scoped to a base model."""
-    service = get_settings_service(db)
+    service = get_settings_service(db, current_user.id)
     return service.get_training_config(base_model)
 
 
 @router.put("/training", response_model=TrainingConfigResponse)
 async def update_training_config(
-    request: TrainingConfigUpdateRequest, base_model: str | None = None, db: Session = Depends(get_db)
+    request: TrainingConfigUpdateRequest, base_model: str | None = None, db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
 ):
     """Update training configuration, optionally scoped to a base model."""
-    service = get_settings_service(db)
+    service = get_settings_service(db, current_user.id)
     update = {k: v for k, v in request.model_dump().items() if v is not None}
     return service.set_training_config(update, base_model)
 
 
 @router.post("/training/reset", response_model=TrainingConfigResponse)
-async def reset_training_config(base_model: str | None = None, db: Session = Depends(get_db)):
+async def reset_training_config(base_model: str | None = None, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Reset training configuration to defaults."""
-    service = get_settings_service(db)
+    service = get_settings_service(db, current_user.id)
     if base_model:
         service.delete_setting(f"training_config:{base_model}")
         return DEFAULT_TRAINING_CONFIGS.get(base_model, DEFAULT_TRAINING_CONFIG)
