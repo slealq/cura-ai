@@ -1,5 +1,6 @@
 """Image service for managing image operations."""
 import logging
+import time
 from datetime import datetime
 
 from sqlalchemy import select
@@ -7,6 +8,8 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.models import Image, ImageMetadata, ImageSource, ImageStatus
 from app.models.image import STATUS_ORDER
+from app.models.pipeline_log import LogCategory, LogLevel
+from app.services.log_service import write_log
 from app.services.storage import get_storage_service
 
 logger = logging.getLogger(__name__)
@@ -38,6 +41,8 @@ class ImageService:
         Returns:
             Created Image model
         """
+        start = time.monotonic()
+
         # Compute hashes for deduplication
         file_hash = self.storage.compute_file_hash(file_data)
 
@@ -45,6 +50,15 @@ class ImageService:
         existing = self.db.query(Image).filter(Image.file_hash == file_hash).first()
         if existing:
             logger.info(f"Duplicate image detected: {filename} (hash: {file_hash[:16]}...)")
+            write_log(
+                category=LogCategory.PIPELINE,
+                message=f"Duplicate skipped: {filename}",
+                image_id=existing.id,
+                operation="ingest",
+                duration_ms=round((time.monotonic() - start) * 1000, 1),
+                success=True,
+                extra={"duplicate_of": existing.id, "filename": filename},
+            )
             return existing
 
         # Generate unique object key and save
@@ -52,40 +66,64 @@ class ImageService:
         mime_type = self.storage.get_mime_type(file_data)
         width, height = self.storage.get_image_dimensions(file_data)
 
-        # Save image
-        await self.storage.save_image(file_data, object_key, mime_type)
+        try:
+            # Save image
+            await self.storage.save_image(file_data, object_key, mime_type)
 
-        # Generate thumbnails
-        thumbnails = await self.storage.generate_thumbnails(file_data, object_key)
+            # Generate thumbnails
+            thumbnails = await self.storage.generate_thumbnails(file_data, object_key)
 
-        # Compute perceptual hash
-        perceptual_hash = self.storage.compute_perceptual_hash(file_data)
+            # Compute perceptual hash
+            perceptual_hash = self.storage.compute_perceptual_hash(file_data)
 
-        # Create database record
-        image = Image(
-            source=source,
-            original_uri=original_uri,
-            object_key=object_key,
-            original_filename=filename,
-            file_hash=file_hash,
-            perceptual_hash=perceptual_hash,
-            width=width,
-            height=height,
-            file_size=len(file_data),
-            mime_type=mime_type,
-            thumbnail_uri_small=thumbnails.get("200"),
-            thumbnail_uri_medium=thumbnails.get("400"),
-            thumbnail_uri_large=thumbnails.get("800"),
-            status=ImageStatus.INGESTED,
-            ingested_at=datetime.utcnow(),
-        )
+            # Create database record
+            image = Image(
+                source=source,
+                original_uri=original_uri,
+                object_key=object_key,
+                original_filename=filename,
+                file_hash=file_hash,
+                perceptual_hash=perceptual_hash,
+                width=width,
+                height=height,
+                file_size=len(file_data),
+                mime_type=mime_type,
+                thumbnail_uri_small=thumbnails.get("200"),
+                thumbnail_uri_medium=thumbnails.get("400"),
+                thumbnail_uri_large=thumbnails.get("800"),
+                status=ImageStatus.INGESTED,
+                ingested_at=datetime.utcnow(),
+            )
 
-        self.db.add(image)
-        self.db.commit()
-        self.db.refresh(image)
+            self.db.add(image)
+            self.db.commit()
+            self.db.refresh(image)
 
-        logger.info(f"Ingested image: {filename} -> {object_key}")
-        return image
+            elapsed = round((time.monotonic() - start) * 1000, 1)
+            logger.info(f"Ingested image: {filename} -> {object_key}")
+            write_log(
+                category=LogCategory.PIPELINE,
+                message=f"Ingested: {filename} ({width}x{height}, {len(file_data)} bytes)",
+                image_id=image.id,
+                operation="ingest",
+                duration_ms=elapsed,
+                success=True,
+                extra={"filename": filename, "object_key": object_key, "mime_type": mime_type},
+            )
+            return image
+        except Exception as e:
+            elapsed = round((time.monotonic() - start) * 1000, 1)
+            logger.error(f"Failed to ingest {filename}: {e}")
+            write_log(
+                category=LogCategory.PIPELINE,
+                message=f"Ingest failed: {filename} — {e}",
+                level=LogLevel.ERROR,
+                operation="ingest",
+                duration_ms=elapsed,
+                success=False,
+                extra={"filename": filename, "error": str(e)},
+            )
+            raise
 
     def get_image(self, image_id: int) -> Image | None:
         """Get image by ID."""

@@ -106,11 +106,20 @@ async def upload_images_batch(
             logger.error(f"Failed to upload {file.filename}: {e}")
             failed.append({"filename": file.filename, "error": str(e)})
 
+    folder_error = None
     if folder_id and uploaded_image_ids:
-        folder_service = get_folder_service(db)
-        folder_service.add_images_to_folder(folder_id, uploaded_image_ids)
+        try:
+            folder_service = get_folder_service(db)
+            folder_service.add_images_to_folder(folder_id, uploaded_image_ids)
+        except Exception as e:
+            logger.error(f"Failed to add {len(uploaded_image_ids)} images to folder {folder_id}: {e}")
+            folder_error = str(e)
 
-    return BatchUploadResponse(uploaded=uploaded, failed=failed)
+    return BatchUploadResponse(
+        uploaded=uploaded,
+        failed=failed,
+        folder_error=folder_error,
+    )
 
 
 @router.get("", response_model=ImageListResponse)

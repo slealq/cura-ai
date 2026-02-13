@@ -169,6 +169,7 @@ class BatchUploadResponse(BaseModel):
     uploaded: list[UploadResponse]
     failed: list[dict[str, str]]
     job_id: int | None = None
+    folder_error: str | None = None
 
 
 # Search schemas

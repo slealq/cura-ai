@@ -39,9 +39,19 @@ export default function UploadPage() {
       return imagesApi.upload(filesToUpload, folderId);
     },
     onSuccess: (data) => {
-      toast.success(`${data.uploaded.length} image${data.uploaded.length !== 1 ? 's' : ''} uploaded`, {
-        action: { label: 'View Images', onClick: () => router.push('/images') },
-      });
+      const count = data.uploaded.length;
+      const failCount = data.failed.length;
+      if (count > 0) {
+        toast.success(`${count} image${count !== 1 ? 's' : ''} uploaded${failCount > 0 ? ` (${failCount} failed)` : ''}`, {
+          action: { label: 'View Images', onClick: () => router.push('/images') },
+        });
+      }
+      if (failCount > 0 && count === 0) {
+        toast.error(`All ${failCount} uploads failed`);
+      }
+      if (data.folder_error) {
+        toast.error('Images uploaded but failed to add to folder. You can add them from the folder page.');
+      }
       queryClient.invalidateQueries({ queryKey: ['images'] });
       queryClient.invalidateQueries({ queryKey: ['folders'] });
       queryClient.invalidateQueries({ queryKey: ['stats'] });

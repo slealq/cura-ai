@@ -126,6 +126,7 @@ export interface BatchUploadResponse {
   uploaded: UploadResponse[];
   failed: Array<{ filename: string; error: string }>;
   job_id: number | null;
+  folder_error: string | null;
 }
 
 export interface LogEntry {
