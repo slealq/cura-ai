@@ -3,8 +3,8 @@
 Revision ID: 006_add_prompt_presets
 Revises: 005_add_pipeline_logs
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "006_add_prompt_presets"
 down_revision = "005_add_pipeline_logs"

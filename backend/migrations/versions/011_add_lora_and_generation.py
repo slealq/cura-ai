@@ -3,8 +3,8 @@
 Revision ID: 011_add_lora_and_generation
 Revises: 010_add_folders
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "011_add_lora_and_generation"
 down_revision = "010_add_folders"

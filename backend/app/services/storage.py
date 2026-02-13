@@ -1,12 +1,10 @@
 """Storage service for image files and thumbnails."""
 import hashlib
 import logging
-import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
-from typing import BinaryIO
 
 import imagehash
 from PIL import Image

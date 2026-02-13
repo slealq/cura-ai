@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.security import get_current_user
 from app.db.base import get_db
+from app.models.api_key import APIProvider
 from app.models.user import User
-from app.models.api_key import APIKeyStatus, APIProvider
 from app.services.api_key_service import get_api_key_service
 from app.services.settings_service import (
     DEFAULT_CLUSTERING_CONFIG,

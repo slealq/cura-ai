@@ -2,7 +2,6 @@
 import logging
 import uuid
 from datetime import datetime
-from pathlib import Path
 
 from sqlalchemy.orm import Session, joinedload
 

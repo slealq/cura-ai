@@ -1,20 +1,18 @@
 """Generation API endpoints for LoRA training, image generation, and evaluation."""
 import logging
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.security import get_current_user, get_current_user_from_token_param
 from app.db.base import get_db
-from app.models.user import User
-from app.models import Job, JobType, JobStatus
+from app.models import Job, JobStatus, JobType
 from app.models.generated_image import GenerationStatus
 from app.models.lora_evaluation import EvaluationStatus
 from app.models.lora_model import LoraModelStatus
+from app.models.user import User
 from app.services.evaluation_service import get_evaluation_service
 from app.services.generation_service import get_generation_service
 from app.services.settings_service import get_settings_service
@@ -290,7 +288,7 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db), c
 
         image_count = (
             db.query(ClusterMembership)
-            .filter(ClusterMembership.cluster_id == request.cluster_id, ClusterMembership.is_excluded == False)
+            .filter(ClusterMembership.cluster_id == request.cluster_id, ClusterMembership.is_excluded.is_(False))
             .count()
         )
         if image_count < 5:
@@ -554,7 +552,7 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
 
     # Get generation defaults from settings
     settings_service = get_settings_service(db, current_user.id)
-    gen_defaults = settings_service.get_generation_config()
+    settings_service.get_generation_config()
     provider = settings.default_generation_provider
 
     # Create job
@@ -600,7 +598,8 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
         gen_ids.append(gen.id)
 
     # Dispatch Celery tasks
-    from app.workers.generation_tasks import generate_image as gen_task, batch_generate
+    from app.workers.generation_tasks import batch_generate
+    from app.workers.generation_tasks import generate_image as gen_task
 
     if request.num_images == 1:
         task = gen_task.delay(gen_ids[0], job.id, current_user.id)

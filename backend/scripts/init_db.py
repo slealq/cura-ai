@@ -28,7 +28,6 @@ def init_db():
     from app.db.base import Base, engine
 
     # Import all models to register them with Base
-    from app.models import Cluster, ClusterMembership, Image, ImageMetadata, Job
 
     logger.info("Creating database tables...")
 

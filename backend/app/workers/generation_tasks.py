@@ -13,10 +13,10 @@ import numpy as np
 from sqlalchemy.orm import Session
 
 from app.db.base import SessionLocal
-from app.models import Job, JobStatus, JobType
+from app.models import Job, JobStatus
 from app.models.generated_image import GeneratedImage, GenerationStatus
 from app.models.lora_evaluation import EvaluationStatus
-from app.models.lora_model import LoraModel, LoraModelStatus
+from app.models.lora_model import LoraModelStatus
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers import get_describer, get_embedder, get_evaluator, get_generator, get_trainer
 from app.services.evaluation_service import get_evaluation_service
@@ -66,7 +66,7 @@ def _unwrap_error(e: Exception) -> str:
     """Extract a readable error message."""
     if hasattr(e, 'last_attempt'):
         try:
-            real = e.last_attempt.result()
+            e.last_attempt.result()
         except Exception as inner:
             return str(inner)
     return str(e)
@@ -126,7 +126,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
                     cm.image_id
                     for cm in db.query(ClusterMembership).filter(
                         ClusterMembership.cluster_id == lora.cluster_id,
-                        ClusterMembership.is_excluded == False,
+                        ClusterMembership.is_excluded.is_(False),
                     ).all()
                 ]
             else:
@@ -624,7 +624,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                 cm.image_id
                 for cm in db.query(ClusterMembership).filter(
                     ClusterMembership.cluster_id == lora.cluster_id,
-                    ClusterMembership.is_excluded == False,
+                    ClusterMembership.is_excluded.is_(False),
                 ).all()
             ]
         else:

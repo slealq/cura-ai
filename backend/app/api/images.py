@@ -1,24 +1,21 @@
 """Image API endpoints."""
 import logging
-from pathlib import Path
-from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.security import get_current_user, get_current_user_from_token_param
 from app.db.base import get_db
-from app.models.user import User
 from app.models import ImageSource, ImageStatus, Job, JobStatus, JobType
-from app.schemas import StepResponse
+from app.models.user import User
 from app.schemas import (
     BatchUploadResponse,
     ImageListResponse,
     ImageResponse,
     PipelineStats,
+    StepResponse,
     UploadResponse,
 )
 from app.services.folder_service import get_folder_service

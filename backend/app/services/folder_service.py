@@ -5,8 +5,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.folder import Folder, FolderImage
-from app.models.image import Image, ImageStatus
-from app.models.image import STATUS_ORDER
+from app.models.image import STATUS_ORDER, Image, ImageStatus
 
 logger = logging.getLogger(__name__)
 
