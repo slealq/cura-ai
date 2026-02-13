@@ -249,17 +249,17 @@ export default function UploadPage() {
 
       {/* Upload Results */}
       {uploadMutation.isSuccess && (
-        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+        <div className="bg-green-50 border border-green-200 dark:bg-green-900/30 dark:border-green-800 rounded-lg p-4">
           <div className="flex items-start gap-3">
-            <Check className="h-5 w-5 text-green-600 mt-0.5" />
+            <Check className="h-5 w-5 text-green-600 dark:text-green-400 mt-0.5" />
             <div>
-              <h3 className="font-medium text-green-800">Upload Complete</h3>
-              <p className="text-sm text-green-700 mt-1">
+              <h3 className="font-medium text-green-800 dark:text-green-300">Upload Complete</h3>
+              <p className="text-sm text-green-700 dark:text-green-400 mt-1">
                 {uploadMutation.data.uploaded.length} images uploaded and queued
                 for processing.
               </p>
               {uploadMutation.data.failed.length > 0 && (
-                <p className="text-sm text-red-600 mt-1">
+                <p className="text-sm text-red-600 dark:text-red-400 mt-1">
                   {uploadMutation.data.failed.length} images failed to upload.
                 </p>
               )}
@@ -269,12 +269,12 @@ export default function UploadPage() {
       )}
 
       {uploadMutation.isError && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+        <div className="bg-red-50 border border-red-200 dark:bg-red-900/30 dark:border-red-800 rounded-lg p-4">
           <div className="flex items-start gap-3">
-            <AlertCircle className="h-5 w-5 text-red-600 mt-0.5" />
+            <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400 mt-0.5" />
             <div>
-              <h3 className="font-medium text-red-800">Upload Failed</h3>
-              <p className="text-sm text-red-700 mt-1">
+              <h3 className="font-medium text-red-800 dark:text-red-300">Upload Failed</h3>
+              <p className="text-sm text-red-700 dark:text-red-400 mt-1">
                 Something went wrong. Please try again.
               </p>
             </div>

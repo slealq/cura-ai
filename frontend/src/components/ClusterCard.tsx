@@ -24,7 +24,7 @@ export default function ClusterCard({ cluster }: ClusterCardProps) {
 
   return (
     <Link href={`/clusters/${cluster.id}`}>
-      <div className="group bg-white rounded-xl border border-border overflow-hidden hover:shadow-lg transition-shadow">
+      <div className="group bg-card rounded-xl border border-border overflow-hidden hover:shadow-lg transition-shadow">
         {/* Thumbnail Grid */}
         <div className="aspect-video bg-muted relative">
           {images && images.length > 0 ? (
@@ -57,7 +57,7 @@ export default function ClusterCard({ cluster }: ClusterCardProps) {
 
           {/* Pinned indicator */}
           {cluster.is_pinned && (
-            <div className="absolute top-2 right-2 p-1.5 bg-white/90 rounded-full">
+            <div className="absolute top-2 right-2 p-1.5 bg-card/90 rounded-full">
               <Pin className="h-4 w-4 text-primary" />
             </div>
           )}

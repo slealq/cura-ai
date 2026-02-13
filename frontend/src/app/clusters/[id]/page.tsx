@@ -153,13 +153,13 @@ export default function ClusterDetailPage() {
                 />
                 <button
                   onClick={handleSaveEdit}
-                  className="p-1.5 hover:bg-green-100 rounded-lg text-green-600"
+                  className="p-1.5 hover:bg-green-100 dark:hover:bg-green-900/30 rounded-lg text-green-600 dark:text-green-400"
                 >
                   <Check className="h-5 w-5" />
                 </button>
                 <button
                   onClick={() => setIsEditing(false)}
-                  className="p-1.5 hover:bg-red-100 rounded-lg text-red-600"
+                  className="p-1.5 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg text-red-600 dark:text-red-400"
                 >
                   <X className="h-5 w-5" />
                 </button>
@@ -267,7 +267,7 @@ export default function ClusterDetailPage() {
 
           <button
             onClick={() => archiveMutation.mutate()}
-            className="p-2 border border-border rounded-lg hover:bg-red-50 hover:border-red-200 text-muted-foreground hover:text-red-600 transition-colors"
+            className="p-2 border border-border rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 hover:border-red-200 dark:hover:border-red-800 text-muted-foreground hover:text-red-600 dark:hover:text-red-400 transition-colors"
           >
             <Archive className="h-4 w-4" />
           </button>
@@ -320,7 +320,7 @@ export default function ClusterDetailPage() {
 
       {/* Floating action bar for selection */}
       {selectedIds.size > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white border border-border rounded-xl shadow-lg px-4 py-3 flex items-center gap-3 z-50">
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-card border border-border rounded-xl shadow-lg px-4 py-3 flex items-center gap-3 z-50">
           <span className="text-sm font-medium">
             {selectedIds.size} image{selectedIds.size !== 1 ? 's' : ''} selected
           </span>

@@ -97,7 +97,7 @@ export default function FoldersPage() {
           />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div
-              className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-4"
+              className="bg-card rounded-xl shadow-xl max-w-md w-full p-6 space-y-4"
               onClick={(e) => e.stopPropagation()}
             >
               <h3 className="text-lg font-semibold">Create Folder</h3>

@@ -107,7 +107,7 @@ export default function GeneratePage() {
       </div>
 
       {/* Generation Form */}
-      <section className="bg-white rounded-xl border border-border p-6 space-y-4">
+      <section className="bg-card rounded-xl border border-border p-6 space-y-4">
         {/* Prompt */}
         <div>
           <label className="block text-sm font-medium mb-1">Prompt</label>
@@ -344,7 +344,7 @@ export default function GeneratePage() {
           />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div
-              className="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto"
+              className="bg-card rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between p-4 border-b border-border">

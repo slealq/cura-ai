@@ -30,7 +30,7 @@ export default function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="w-64 bg-white border-r border-border flex flex-col">
+    <aside className="w-64 bg-card border-r border-border flex flex-col">
       <div className="p-6 border-b border-border">
         <Link href="/" className="flex items-center gap-2">
           <Folder className="h-8 w-8 text-primary" />

@@ -3,9 +3,10 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { imagesApi, settingsApi, clustersApi } from '@/lib/api';
-import { RotateCcw, Plus, Trash2, Check, Copy, Play, HelpCircle, Eye, EyeOff, Shield, ShieldAlert, ShieldCheck, ShieldX, Loader2 } from 'lucide-react';
+import { RotateCcw, Plus, Trash2, Check, Copy, Play, HelpCircle, Eye, EyeOff, Shield, ShieldAlert, ShieldCheck, ShieldX, Loader2, Sun, Moon, Monitor } from 'lucide-react';
 import { toast } from 'sonner';
-import { getStatusColor, cn } from '@/lib/utils';
+import { getStatusColor, cn, formatDate } from '@/lib/utils';
+import { useTheme } from '@/contexts/ThemeContext';
 import type { APIKeyInfo, ClusteringConfig, GenerationConfig, ProviderConfig, ProviderModel, TrainingConfig, PromptPreset } from '@/types';
 
 function PromptSuggest({
@@ -69,15 +70,15 @@ function PromptSuggest({
       </div>
 
       {suggestMutation.isError && (
-        <p className="text-sm text-red-600">
+        <p className="text-sm text-red-600 dark:text-red-400">
           Failed to generate suggestion. Please try again.
         </p>
       )}
 
       {suggestion && (
-        <div className="border border-blue-200 bg-blue-50 rounded-lg p-3 space-y-2">
-          <p className="text-xs font-medium text-blue-700">AI Suggestion:</p>
-          <div className="text-sm whitespace-pre-wrap bg-white rounded p-2 border border-blue-100 max-h-[200px] overflow-y-auto">
+        <div className="border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-900/30 rounded-lg p-3 space-y-2">
+          <p className="text-xs font-medium text-blue-700 dark:text-blue-300">AI Suggestion:</p>
+          <div className="text-sm whitespace-pre-wrap bg-card rounded p-2 border border-blue-100 dark:border-blue-800 max-h-[200px] overflow-y-auto">
             {suggestion}
           </div>
           <div className="flex gap-2">
@@ -225,8 +226,11 @@ export default function SettingsPage() {
         </p>
       </div>
 
+      {/* Appearance */}
+      <AppearanceSettings />
+
       {/* Pipeline Stats */}
-      <section className="bg-white rounded-xl border border-border p-6">
+      <section className="bg-card rounded-xl border border-border p-6">
         <h2 className="font-semibold mb-4">Pipeline Statistics</h2>
         {stats ? (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -243,7 +247,7 @@ export default function SettingsPage() {
               <p className="text-sm text-muted-foreground">Processed</p>
             </div>
             <div className="p-4 bg-muted/50 rounded-lg">
-              <p className="text-2xl font-bold text-red-600">{stats.failed}</p>
+              <p className="text-2xl font-bold text-red-600 dark:text-red-400">{stats.failed}</p>
               <p className="text-sm text-muted-foreground">Failed</p>
             </div>
           </div>
@@ -277,7 +281,7 @@ export default function SettingsPage() {
       </section>
 
       {/* Prompt Presets */}
-      <section className="bg-white rounded-xl border border-border p-6">
+      <section className="bg-card rounded-xl border border-border p-6">
         <div className="flex items-center justify-between mb-4">
           <div>
             <h2 className="font-semibold">Prompt Library</h2>
@@ -313,7 +317,7 @@ export default function SettingsPage() {
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium truncate">{preset.name}</span>
                   {preset.is_default && (
-                    <span className="shrink-0 ml-2 px-1.5 py-0.5 text-[10px] font-semibold bg-green-100 text-green-700 rounded">
+                    <span className="shrink-0 ml-2 px-1.5 py-0.5 text-[10px] font-semibold bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300 rounded">
                       Active
                     </span>
                   )}
@@ -384,7 +388,7 @@ export default function SettingsPage() {
                     <button
                       onClick={() => activateMutation.mutate(selectedPreset.id)}
                       disabled={activateMutation.isPending}
-                      className="flex items-center gap-1.5 px-4 py-2 text-sm border border-green-300 text-green-700 rounded-lg hover:bg-green-50 transition-colors disabled:opacity-50"
+                      className="flex items-center gap-1.5 px-4 py-2 text-sm border border-green-300 text-green-700 dark:border-green-800 dark:text-green-400 rounded-lg hover:bg-green-50 dark:hover:bg-green-900/30 transition-colors disabled:opacity-50"
                     >
                       <Check className="h-3.5 w-3.5" />
                       Set as Active
@@ -415,7 +419,7 @@ export default function SettingsPage() {
                     <button
                       onClick={() => deleteMutation.mutate(selectedPreset.id)}
                       disabled={deleteMutation.isPending}
-                      className="flex items-center gap-1.5 px-4 py-2 text-sm border border-red-200 text-red-600 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
+                      className="flex items-center gap-1.5 px-4 py-2 text-sm border border-red-200 text-red-600 dark:border-red-800 dark:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors disabled:opacity-50"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                       Delete
@@ -444,6 +448,94 @@ export default function SettingsPage() {
       {/* Clustering Settings */}
       <ClusteringSettings />
     </div>
+  );
+}
+
+function getTimezoneList(): string[] {
+  try {
+    return (Intl as unknown as { supportedValuesOf: (key: string) => string[] }).supportedValuesOf('timeZone');
+  } catch {
+    return [
+      'UTC',
+      'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+      'America/Sao_Paulo', 'America/Argentina/Buenos_Aires',
+      'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Moscow',
+      'Asia/Tokyo', 'Asia/Shanghai', 'Asia/Kolkata', 'Asia/Dubai',
+      'Australia/Sydney', 'Pacific/Auckland',
+    ];
+  }
+}
+
+function AppearanceSettings() {
+  const { theme, resolvedTheme, setTheme, timezone, setTimezone } = useTheme();
+  const timezones = getTimezoneList();
+  const browserTz = typeof window !== 'undefined'
+    ? Intl.DateTimeFormat().resolvedOptions().timeZone
+    : 'UTC';
+
+  const themeOptions = [
+    { value: 'light' as const, label: 'Light', icon: Sun },
+    { value: 'dark' as const, label: 'Dark', icon: Moon },
+    { value: 'auto' as const, label: 'Auto', icon: Monitor },
+  ];
+
+  return (
+    <section className="bg-card rounded-xl border border-border p-6">
+      <div className="mb-4">
+        <h2 className="font-semibold">Appearance</h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          Theme, timezone, and display preferences
+        </p>
+      </div>
+
+      <div className="space-y-4">
+        {/* Theme Toggle */}
+        <div>
+          <label className="block text-sm font-medium mb-2">Theme</label>
+          <div className="inline-flex rounded-lg border border-border">
+            {themeOptions.map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setTheme(opt.value)}
+                className={cn(
+                  'flex items-center gap-2 px-4 py-2 text-sm font-medium transition-colors first:rounded-l-lg last:rounded-r-lg',
+                  theme === opt.value
+                    ? 'bg-primary text-primary-foreground'
+                    : 'hover:bg-muted'
+                )}
+              >
+                <opt.icon className="h-4 w-4" />
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          {theme === 'auto' && (
+            <p className="text-xs text-muted-foreground mt-2">
+              Currently using <span className="font-medium">{resolvedTheme}</span> mode (light 7 AM - 7 PM in your configured timezone)
+            </p>
+          )}
+        </div>
+
+        {/* Timezone */}
+        <div>
+          <label className="block text-sm font-medium mb-2">Timezone</label>
+          <select
+            value={timezone}
+            onChange={(e) => setTimezone(e.target.value)}
+            className="w-full max-w-xs px-3 py-2 border border-border rounded-lg text-sm bg-card"
+          >
+            {timezones.map((tz) => (
+              <option key={tz} value={tz}>
+                {tz.replace(/_/g, ' ')}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground mt-1">
+            Browser detected: {browserTz.replace(/_/g, ' ')}
+          </p>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -523,7 +615,7 @@ function GenerationSettings() {
 
   if (genLoading || trainLoading || !genDraft || !trainDraft) {
     return (
-      <section className="bg-white rounded-xl border border-border p-6">
+      <section className="bg-card rounded-xl border border-border p-6">
         <h2 className="font-semibold mb-4">Generation &amp; Training</h2>
         <p className="text-muted-foreground text-sm">Loading...</p>
       </section>
@@ -531,7 +623,7 @@ function GenerationSettings() {
   }
 
   return (
-    <section className="bg-white rounded-xl border border-border p-6">
+    <section className="bg-card rounded-xl border border-border p-6">
       <div className="mb-4">
         <h2 className="font-semibold">Generation &amp; Training</h2>
         <p className="text-sm text-muted-foreground mt-1">
@@ -656,7 +748,7 @@ function GenerationSettings() {
                 onClick={() => setTrainDraft({ ...trainDraft, is_style: !trainDraft.is_style })}
                 className={cn(
                   'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors',
-                  trainDraft.is_style ? 'bg-primary' : 'bg-gray-300'
+                  trainDraft.is_style ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'
                 )}
               >
                 <span
@@ -746,7 +838,7 @@ function ClusteringSettings() {
 
   if (isLoading || !draft) {
     return (
-      <section className="bg-white rounded-xl border border-border p-6">
+      <section className="bg-card rounded-xl border border-border p-6">
         <h2 className="font-semibold mb-4">Clustering</h2>
         <p className="text-muted-foreground text-sm">Loading...</p>
       </section>
@@ -757,7 +849,7 @@ function ClusteringSettings() {
     setDraft((prev) => (prev ? { ...prev, ...partial } : prev));
 
   return (
-    <section className="bg-white rounded-xl border border-border p-6">
+    <section className="bg-card rounded-xl border border-border p-6">
       <div className="flex items-center justify-between mb-4">
         <div>
           <h2 className="font-semibold">Clustering</h2>
@@ -796,7 +888,7 @@ function ClusteringSettings() {
               onClick={() => update({ use_umap: !draft.use_umap })}
               className={cn(
                 'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors',
-                draft.use_umap ? 'bg-primary' : 'bg-gray-300'
+                draft.use_umap ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'
               )}
             >
               <span
@@ -811,7 +903,7 @@ function ClusteringSettings() {
             </span>
           </div>
           {!draft.use_umap && (
-            <p className="text-xs text-amber-600 mb-3">
+            <p className="text-xs text-amber-600 dark:text-amber-400 mb-3">
               Disabling UMAP on high-dimensional embeddings often results in poor cluster separation. Only disable if you know your embeddings are already low-dimensional.
             </p>
           )}
@@ -972,7 +1064,7 @@ function ClusteringSettings() {
             </div>
 
             {/* Quick tuning tips */}
-            <div className="mt-4 p-3 bg-blue-50 rounded-lg text-xs text-blue-800 space-y-1">
+            <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-900/30 rounded-lg text-xs text-blue-800 dark:text-blue-300 space-y-1">
               <p className="font-medium">Quick tuning guide:</p>
               <p>Too many small clusters? Increase min_cluster_size or switch to EOM.</p>
               <p>Everything in one big cluster? Decrease min_cluster_size, lower UMAP components, or try Leaf selection.</p>
@@ -1053,34 +1145,34 @@ const PROVIDER_LABELS: Record<string, string> = {
 function StatusBadge({ status }: { status: string }) {
   if (status === 'active') {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 rounded-full">
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300 rounded-full">
         <ShieldCheck className="h-3 w-3" /> Active
       </span>
     );
   }
   if (status === 'invalid') {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-red-100 text-red-700 rounded-full">
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300 rounded-full">
         <ShieldX className="h-3 w-3" /> Invalid
       </span>
     );
   }
   if (status === 'quota_exceeded') {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 rounded-full">
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300 rounded-full">
         <ShieldAlert className="h-3 w-3" /> Quota Exceeded
       </span>
     );
   }
   if (status === 'not_set') {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-500 rounded-full border border-dashed border-gray-300">
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-500 dark:bg-gray-900/50 dark:text-gray-400 rounded-full border border-dashed border-gray-300 dark:border-gray-600">
         <Shield className="h-3 w-3" /> Not Set
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-600 rounded-full">
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-900/50 dark:text-gray-400 rounded-full">
       <Shield className="h-3 w-3" /> Unknown
     </span>
   );
@@ -1143,7 +1235,7 @@ function APIKeysSettings() {
 
   if (isLoading) {
     return (
-      <section className="bg-white rounded-xl border border-border p-6">
+      <section className="bg-card rounded-xl border border-border p-6">
         <h2 className="font-semibold mb-4">API Keys</h2>
         <p className="text-muted-foreground text-sm">Loading...</p>
       </section>
@@ -1151,7 +1243,7 @@ function APIKeysSettings() {
   }
 
   return (
-    <section className="bg-white rounded-xl border border-border p-6">
+    <section className="bg-card rounded-xl border border-border p-6">
       <div className="mb-4">
         <h2 className="font-semibold">API Keys</h2>
         <p className="text-sm text-muted-foreground mt-1">
@@ -1209,7 +1301,7 @@ function APIKeysSettings() {
                     ) : (
                       <button
                         onClick={() => setConfirmDelete(key.provider)}
-                        className="px-2.5 py-1 text-xs border border-red-200 text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                        className="px-2.5 py-1 text-xs border border-red-200 text-red-600 dark:border-red-800 dark:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors"
                       >
                         Remove
                       </button>
@@ -1237,7 +1329,7 @@ function APIKeysSettings() {
 
             {key.last_validated_at && (
               <p className="text-[10px] text-muted-foreground mt-1">
-                Last validated: {new Date(key.last_validated_at).toLocaleString()}
+                Last validated: {formatDate(key.last_validated_at)}
               </p>
             )}
 
@@ -1331,7 +1423,7 @@ function ProviderModelSettings() {
 
   if (isLoading || !draft) {
     return (
-      <section className="bg-white rounded-xl border border-border p-6">
+      <section className="bg-card rounded-xl border border-border p-6">
         <h2 className="font-semibold mb-4">Provider &amp; Model Selection</h2>
         <p className="text-muted-foreground text-sm">Loading...</p>
       </section>
@@ -1348,7 +1440,7 @@ function ProviderModelSettings() {
   const currentVisionModel = visionProvider === 'openai' ? draft.openai_vision_model : draft.anthropic_vision_model;
 
   return (
-    <section className="bg-white rounded-xl border border-border p-6">
+    <section className="bg-card rounded-xl border border-border p-6">
       <div className="mb-4">
         <h2 className="font-semibold">Provider &amp; Model Selection</h2>
         <p className="text-sm text-muted-foreground mt-1">

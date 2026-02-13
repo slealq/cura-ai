@@ -36,7 +36,7 @@ export default function PipelineProgress({
                     ? 'h-2 w-2 bg-yellow-400'
                     : isCompleted
                       ? cn('h-2 w-2', step.color)
-                      : 'h-1.5 w-1.5 bg-white/30',
+                      : 'h-1.5 w-1.5 bg-muted-foreground/30',
                 isCurrent && 'h-2.5 w-2.5 ring-2 ring-white/50'
               )}
             />
@@ -76,7 +76,7 @@ export default function PipelineProgress({
                       : isCompleted
                         ? cn('h-2.5 w-2.5', step.color)
                         : 'h-2 w-2 bg-muted-foreground/30',
-                  isCurrent && 'h-3 w-3 ring-2 ring-offset-1 ring-offset-white ring-current'
+                  isCurrent && 'h-3 w-3 ring-2 ring-offset-1 ring-offset-card ring-current'
                 )}
                 style={isCurrent ? { color: 'var(--tw-shadow-color, currentColor)' } : undefined}
               />
@@ -84,7 +84,7 @@ export default function PipelineProgress({
                 className={cn(
                   'text-[10px] leading-none',
                   isStale
-                    ? 'text-yellow-600 font-medium'
+                    ? 'text-yellow-600 dark:text-yellow-400 font-medium'
                     : isCompleted
                       ? 'text-foreground font-medium'
                       : 'text-muted-foreground'
@@ -98,7 +98,7 @@ export default function PipelineProgress({
       })}
       {isFailed && (
         <div className="flex items-center gap-1 ml-1">
-          <span className="text-[10px] leading-none text-red-500 font-medium">
+          <span className="text-[10px] leading-none text-red-500 dark:text-red-400 font-medium">
             Failed
           </span>
         </div>

@@ -5,14 +5,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Trash2, Bug, ChevronRight, ChevronDown } from 'lucide-react';
 import { toast } from 'sonner';
 import { logsApi } from '@/lib/api';
-import { cn } from '@/lib/utils';
+import { cn, formatDateCompact } from '@/lib/utils';
 import type { LogEntry } from '@/types';
 
 const LEVEL_COLORS: Record<string, string> = {
-  error: 'bg-red-100 text-red-800',
-  warning: 'bg-yellow-100 text-yellow-800',
-  info: 'bg-blue-100 text-blue-800',
-  debug: 'bg-gray-100 text-gray-800',
+  error: 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300',
+  warning: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/50 dark:text-yellow-300',
+  info: 'bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300',
+  debug: 'bg-gray-100 text-gray-800 dark:bg-gray-900/50 dark:text-gray-300',
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -21,24 +21,6 @@ const CATEGORY_LABELS: Record<string, string> = {
   pipeline: 'Pipeline',
   system: 'System',
 };
-
-function formatTimestamp(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleTimeString('en-US', {
-    hour12: false,
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
-}
-
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  const today = new Date();
-  const isToday = d.toDateString() === today.toDateString();
-  if (isToday) return formatTimestamp(iso);
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + formatTimestamp(iso);
-}
 
 export default function DebugPage() {
   const queryClient = useQueryClient();
@@ -121,15 +103,15 @@ export default function DebugPage() {
               Total Logs
             </div>
           </div>
-          <div className="rounded-lg px-4 py-3 text-center bg-blue-100 text-blue-700">
+          <div className="rounded-lg px-4 py-3 text-center bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">
             <div className="text-2xl font-bold">{stats.api_calls}</div>
             <div className="text-xs font-medium mt-0.5">API Calls</div>
           </div>
-          <div className="rounded-lg px-4 py-3 text-center bg-red-100 text-red-700">
+          <div className="rounded-lg px-4 py-3 text-center bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300">
             <div className="text-2xl font-bold">{stats.errors}</div>
             <div className="text-xs font-medium mt-0.5">Errors</div>
           </div>
-          <div className="rounded-lg px-4 py-3 text-center bg-purple-100 text-purple-700">
+          <div className="rounded-lg px-4 py-3 text-center bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300">
             <div className="text-2xl font-bold">
               {stats.total_tokens.toLocaleString()}
             </div>
@@ -146,7 +128,7 @@ export default function DebugPage() {
             setCategory(e.target.value);
             setPage(0);
           }}
-          className="px-3 py-2 border border-border rounded-lg text-sm bg-white"
+          className="px-3 py-2 border border-border rounded-lg text-sm bg-card"
         >
           <option value="">All Categories</option>
           <option value="api_call">API Calls</option>
@@ -161,7 +143,7 @@ export default function DebugPage() {
             setLevel(e.target.value);
             setPage(0);
           }}
-          className="px-3 py-2 border border-border rounded-lg text-sm bg-white"
+          className="px-3 py-2 border border-border rounded-lg text-sm bg-card"
         >
           <option value="">All Levels</option>
           <option value="error">Errors</option>
@@ -200,7 +182,7 @@ export default function DebugPage() {
           </p>
         </div>
       ) : (
-        <div className="bg-white rounded-xl border border-border overflow-hidden">
+        <div className="bg-card rounded-xl border border-border overflow-hidden">
           <table className="w-full">
             <thead className="bg-muted/50">
               <tr>
@@ -289,7 +271,7 @@ function LogRow({ log }: { log: LogEntry }) {
                 ? <ChevronDown className="h-3 w-3" />
                 : <ChevronRight className="h-3 w-3" />
             )}
-            {formatDate(log.created_at)}
+            {formatDateCompact(log.created_at)}
           </span>
         </td>
         <td className="px-3 py-2">
@@ -408,7 +390,7 @@ function LogDetail({ log, extra }: { log: LogEntry; extra: Record<string, unknow
         <div>
           <h4 className="text-xs font-semibold text-muted-foreground mb-1">Guidance Used</h4>
           {guidance ? (
-            <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs whitespace-pre-wrap">
+            <div className="bg-amber-50 border border-amber-200 dark:bg-amber-900/30 dark:border-amber-800 rounded-lg px-3 py-2 text-xs whitespace-pre-wrap">
               {guidance}
             </div>
           ) : (
@@ -420,8 +402,8 @@ function LogDetail({ log, extra }: { log: LogEntry; extra: Record<string, unknow
       {/* Error */}
       {error && (
         <div>
-          <h4 className="text-xs font-semibold text-red-700 mb-1">Error</h4>
-          <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs font-mono whitespace-pre-wrap text-red-800">
+          <h4 className="text-xs font-semibold text-red-700 dark:text-red-400 mb-1">Error</h4>
+          <div className="bg-red-50 border border-red-200 dark:bg-red-900/30 dark:border-red-800 rounded-lg px-3 py-2 text-xs font-mono whitespace-pre-wrap text-red-800 dark:text-red-300">
             {error}
           </div>
         </div>
@@ -430,7 +412,7 @@ function LogDetail({ log, extra }: { log: LogEntry; extra: Record<string, unknow
       {/* Request prompt */}
       {requestPrompt && (
         <CollapsibleSection title="Request Prompt" defaultOpen={false}>
-          <div className="bg-white border border-border rounded-lg px-3 py-2 text-xs font-mono whitespace-pre-wrap max-h-[400px] overflow-y-auto">
+          <div className="bg-card border border-border rounded-lg px-3 py-2 text-xs font-mono whitespace-pre-wrap max-h-[400px] overflow-y-auto">
             {requestPrompt}
           </div>
         </CollapsibleSection>
@@ -439,7 +421,7 @@ function LogDetail({ log, extra }: { log: LogEntry; extra: Record<string, unknow
       {/* Response content */}
       {formattedResponse && (
         <CollapsibleSection title="Model Response" defaultOpen={true}>
-          <div className="bg-white border border-border rounded-lg px-3 py-2 text-xs font-mono whitespace-pre-wrap max-h-[400px] overflow-y-auto">
+          <div className="bg-card border border-border rounded-lg px-3 py-2 text-xs font-mono whitespace-pre-wrap max-h-[400px] overflow-y-auto">
             {formattedResponse}
           </div>
         </CollapsibleSection>
@@ -448,7 +430,7 @@ function LogDetail({ log, extra }: { log: LogEntry; extra: Record<string, unknow
       {/* Extra fields not already shown */}
       {Object.keys(extra).filter(k => !['guidance', 'request_prompt', 'response_content', 'error'].includes(k)).length > 0 && (
         <CollapsibleSection title="Extra Data" defaultOpen={false}>
-          <pre className="bg-white border border-border rounded-lg px-3 py-2 text-xs font-mono whitespace-pre-wrap max-h-[300px] overflow-y-auto">
+          <pre className="bg-card border border-border rounded-lg px-3 py-2 text-xs font-mono whitespace-pre-wrap max-h-[300px] overflow-y-auto">
             {JSON.stringify(
               Object.fromEntries(
                 Object.entries(extra).filter(([k]) => !['guidance', 'request_prompt', 'response_content', 'error'].includes(k))

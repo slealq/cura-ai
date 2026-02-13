@@ -6,15 +6,15 @@ import type { GeneratedImage } from '@/types';
 import { generationApi } from '@/lib/api';
 
 const statusStyles: Record<string, string> = {
-  pending: 'bg-gray-100 text-gray-700',
-  generating: 'bg-blue-100 text-blue-700',
-  completed: 'bg-green-100 text-green-700',
-  failed: 'bg-red-100 text-red-700',
+  pending: 'bg-gray-100 text-gray-700 dark:bg-gray-900/50 dark:text-gray-300',
+  generating: 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300',
+  completed: 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300',
+  failed: 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300',
 };
 
 const modelBadgeStyles: Record<string, string> = {
-  'flux-dev': 'bg-blue-100 text-blue-700',
-  'qwen-2.5': 'bg-orange-100 text-orange-700',
+  'flux-dev': 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300',
+  'qwen-2.5': 'bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300',
 };
 
 const modelLabels: Record<string, string> = {
@@ -36,7 +36,7 @@ export default function GeneratedImageCard({
   return (
     <div
       className={cn(
-        'group relative bg-white border border-border rounded-lg overflow-hidden transition-shadow hover:shadow-md',
+        'group relative bg-card border border-border rounded-lg overflow-hidden transition-shadow hover:shadow-md',
         onClick && 'cursor-pointer'
       )}
       onClick={onClick}
@@ -77,7 +77,7 @@ export default function GeneratedImageCard({
         {/* LoRA badge */}
         {image.lora_model_name && (
           <div className="absolute top-2 left-2">
-            <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-100 text-purple-700">
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300">
               {image.lora_model_name}
             </span>
           </div>
@@ -89,7 +89,7 @@ export default function GeneratedImageCard({
         <div className="absolute bottom-2 left-2 group-hover:opacity-0 transition-opacity">
           <span className={cn(
             'px-1.5 py-0.5 rounded-full text-[10px] font-semibold',
-            modelBadgeStyles[image.base_model] || 'bg-gray-100 text-gray-700'
+            modelBadgeStyles[image.base_model] || 'bg-gray-100 text-gray-700 dark:bg-gray-900/50 dark:text-gray-300'
           )}>
             {modelLabels[image.base_model] || image.base_model}
           </span>

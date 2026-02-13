@@ -14,7 +14,7 @@ export default function FolderCard({ folder }: FolderCardProps) {
 
   return (
     <Link href={`/images/folder/${folder.id}`}>
-      <div className="group bg-white rounded-xl border border-border overflow-hidden hover:shadow-lg transition-shadow">
+      <div className="group bg-card rounded-xl border border-border overflow-hidden hover:shadow-lg transition-shadow">
         {/* 2x2 Thumbnail Grid */}
         <div className="aspect-video bg-muted relative">
           {previews.length > 0 ? (

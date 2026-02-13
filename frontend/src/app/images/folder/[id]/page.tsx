@@ -122,7 +122,7 @@ export default function FolderDetailPage() {
           <div className="flex items-center gap-1">
             <Link
               href={`/models?train_folder=${folderId}`}
-              className="p-2 hover:bg-purple-50 rounded-lg transition-colors text-muted-foreground hover:text-purple-600"
+              className="p-2 hover:bg-purple-50 dark:hover:bg-purple-900/30 rounded-lg transition-colors text-muted-foreground hover:text-purple-600 dark:hover:text-purple-400"
               title="Train LoRA from this folder"
             >
               <Box className="h-4 w-4" />
@@ -162,7 +162,7 @@ export default function FolderDetailPage() {
           />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div
-              className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6 space-y-4"
+              className="bg-card rounded-xl shadow-xl max-w-sm w-full p-6 space-y-4"
               onClick={(e) => e.stopPropagation()}
             >
               <h3 className="text-lg font-semibold">Delete Folder</h3>

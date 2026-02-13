@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
-import { cn } from '@/lib/utils';
+import { cn, formatDate } from '@/lib/utils';
 import type { LoraModel } from '@/types';
 import { imagesApi } from '@/lib/api';
 
@@ -27,16 +27,16 @@ const BASE_MODELS = [
 ];
 
 const baseModelBadge: Record<string, string> = {
-  'flux-dev': 'bg-blue-100 text-blue-700',
-  'qwen-2.5': 'bg-orange-100 text-orange-700',
+  'flux-dev': 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300',
+  'qwen-2.5': 'bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300',
 };
 
 const statusConfig: Record<string, { icon: typeof Clock; color: string; label: string }> = {
-  pending: { icon: Clock, color: 'text-gray-500 bg-gray-100', label: 'Pending' },
-  training: { icon: Loader2, color: 'text-blue-600 bg-blue-100', label: 'Training' },
-  completed: { icon: CheckCircle, color: 'text-green-600 bg-green-100', label: 'Completed' },
-  failed: { icon: XCircle, color: 'text-red-600 bg-red-100', label: 'Failed' },
-  archived: { icon: Archive, color: 'text-gray-500 bg-gray-100', label: 'Archived' },
+  pending: { icon: Clock, color: 'text-gray-500 bg-gray-100 dark:bg-gray-900/50 dark:text-gray-400', label: 'Pending' },
+  training: { icon: Loader2, color: 'text-blue-600 bg-blue-100 dark:bg-blue-900/50 dark:text-blue-300', label: 'Training' },
+  completed: { icon: CheckCircle, color: 'text-green-600 bg-green-100 dark:bg-green-900/50 dark:text-green-300', label: 'Completed' },
+  failed: { icon: XCircle, color: 'text-red-600 bg-red-100 dark:bg-red-900/50 dark:text-red-300', label: 'Failed' },
+  archived: { icon: Archive, color: 'text-gray-500 bg-gray-100 dark:bg-gray-900/50 dark:text-gray-400', label: 'Archived' },
 };
 
 function getSourceInfo(model: LoraModel): { label: string; href: string } | null {
@@ -65,7 +65,7 @@ function LoraModelCard({
 
   return (
     <div
-      className="bg-white border border-border rounded-xl overflow-hidden hover:shadow-md transition-shadow cursor-pointer"
+      className="bg-card border border-border rounded-xl overflow-hidden hover:shadow-md transition-shadow cursor-pointer"
       onClick={onClick}
     >
       {/* Preview images strip */}
@@ -104,7 +104,7 @@ function LoraModelCard({
 
         <div className="mt-3 flex flex-wrap gap-3 text-xs text-muted-foreground items-center">
           <span>{model.training_images_count} images</span>
-          <span className={cn('px-1.5 py-0.5 rounded-full text-[10px] font-semibold', baseModelBadge[model.base_model] || 'bg-gray-100 text-gray-700')}>
+          <span className={cn('px-1.5 py-0.5 rounded-full text-[10px] font-semibold', baseModelBadge[model.base_model] || 'bg-gray-100 text-gray-700 dark:bg-gray-900/50 dark:text-gray-300')}>
             {BASE_MODELS.find((m) => m.value === model.base_model)?.label || model.base_model}
           </span>
           {sourceInfo && (
@@ -119,12 +119,12 @@ function LoraModelCard({
         </div>
 
         {model.error_message && (
-          <p className="mt-2 text-xs text-red-600 line-clamp-1">{model.error_message}</p>
+          <p className="mt-2 text-xs text-red-600 dark:text-red-400 line-clamp-1">{model.error_message}</p>
         )}
 
         <div className="mt-3 flex items-center justify-between">
           <span className="text-[10px] text-muted-foreground">
-            {new Date(model.created_at).toLocaleDateString()}
+            {formatDate(model.created_at)}
           </span>
           <div className="flex items-center gap-1">
             {model.status === 'completed' && (
@@ -307,7 +307,7 @@ export default function ModelsPage() {
           />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div
-              className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-4"
+              className="bg-card rounded-xl shadow-xl max-w-md w-full p-6 space-y-4"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between">
@@ -464,7 +464,7 @@ export default function ModelsPage() {
                       onClick={() => setTrainIsStyle(!trainIsStyle)}
                       className={cn(
                         'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors',
-                        trainIsStyle ? 'bg-primary' : 'bg-gray-300'
+                        trainIsStyle ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'
                       )}
                     >
                       <span
@@ -492,7 +492,7 @@ export default function ModelsPage() {
                       }}
                       className={cn(
                         'relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors',
-                        trainUseCaptions ? 'bg-primary' : 'bg-gray-300',
+                        trainUseCaptions ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600',
                         trainBaseModel === 'qwen-2.5' ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'
                       )}
                     >
@@ -571,7 +571,7 @@ export default function ModelsPage() {
           />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div
-              className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4"
+              className="bg-card rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between">
@@ -665,12 +665,12 @@ export default function ModelsPage() {
                 )}
 
                 <div className="text-xs text-muted-foreground space-y-1">
-                  <p>Created: {new Date(selectedModel.created_at).toLocaleString()}</p>
+                  <p>Created: {formatDate(selectedModel.created_at)}</p>
                   {selectedModel.training_started_at && (
-                    <p>Training started: {new Date(selectedModel.training_started_at).toLocaleString()}</p>
+                    <p>Training started: {formatDate(selectedModel.training_started_at)}</p>
                   )}
                   {selectedModel.training_completed_at && (
-                    <p>Training completed: {new Date(selectedModel.training_completed_at).toLocaleString()}</p>
+                    <p>Training completed: {formatDate(selectedModel.training_completed_at)}</p>
                   )}
                 </div>
               </div>

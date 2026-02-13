@@ -213,9 +213,9 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
       <div className="fixed inset-0 bg-black/50 z-40" onClick={onClose} />
 
       {/* Drawer */}
-      <div className="fixed inset-y-0 right-0 w-full max-w-xl bg-white shadow-xl z-50 overflow-y-auto">
+      <div className="fixed inset-y-0 right-0 w-full max-w-xl bg-card shadow-xl z-50 overflow-y-auto">
         {/* Header */}
-        <div className="sticky top-0 bg-white border-b border-border px-6 py-4 flex items-center justify-between">
+        <div className="sticky top-0 bg-card border-b border-border px-6 py-4 flex items-center justify-between">
           <h2 className="font-semibold truncate">
             {liveImage.original_filename || liveImage.object_key}
           </h2>
@@ -430,7 +430,7 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
           />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div
-              className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto"
+              className="bg-card rounded-xl shadow-xl max-w-2xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
               <h3 className="text-lg font-semibold">Tag Image</h3>
@@ -499,7 +499,7 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
           />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div
-              className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto"
+              className="bg-card rounded-xl shadow-xl max-w-2xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
               <h3 className="text-lg font-semibold">Describe Image</h3>
@@ -568,7 +568,7 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
           />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div
-              className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto"
+              className="bg-card rounded-xl shadow-xl max-w-2xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
               <h3 className="text-lg font-semibold">Reprocess Image</h3>

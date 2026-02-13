@@ -328,7 +328,7 @@ function ImageGridContent({ title, queryKeyPrefix, fetchImages, folderId }: Imag
 
       {/* Floating action bar for selection */}
       {selectedIds.size > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white border border-border rounded-xl shadow-lg px-4 py-3 flex items-center gap-3 z-50">
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-card border border-border rounded-xl shadow-lg px-4 py-3 flex items-center gap-3 z-50">
           <span className="text-sm font-medium">
             {selectedIds.size} image{selectedIds.size !== 1 ? 's' : ''} selected
           </span>
@@ -365,7 +365,7 @@ function ImageGridContent({ title, queryKeyPrefix, fetchImages, folderId }: Imag
               disabled={removeFromFolderMutation.isPending}
               className={cn(
                 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
-                'border border-red-300 text-red-700 hover:bg-red-50',
+                'border border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/30',
                 'disabled:opacity-50 disabled:cursor-not-allowed'
               )}
             >

@@ -185,7 +185,7 @@ export default function JobsPage() {
               title={hasBatchRunning ? 'A batch reprocess job is already running' : undefined}
               className={cn(
                 'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
-                'border border-red-300 text-red-700 hover:bg-red-50',
+                'border border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/30',
                 'disabled:opacity-50 disabled:cursor-not-allowed'
               )}
             >
@@ -271,7 +271,7 @@ export default function JobsPage() {
           </p>
         </div>
       ) : (
-        <div className="bg-white rounded-xl border border-border overflow-hidden">
+        <div className="bg-card rounded-xl border border-border overflow-hidden">
           <table className="w-full">
             <thead className="bg-muted/50">
               <tr>
@@ -373,12 +373,12 @@ export default function JobsPage() {
             .map((job) => (
               <div
                 key={job.id}
-                className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm"
+                className="bg-red-50 border border-red-200 dark:bg-red-900/30 dark:border-red-800 rounded-lg p-3 text-sm"
               >
-                <p className="font-medium text-red-800">
+                <p className="font-medium text-red-800 dark:text-red-300">
                   Job #{job.id} ({job.job_type})
                 </p>
-                <p className="text-red-700 mt-1">{job.error_message}</p>
+                <p className="text-red-700 dark:text-red-400 mt-1">{job.error_message}</p>
               </div>
             ))}
         </div>
@@ -438,7 +438,7 @@ function BatchImagesPill({ job }: { job: Job }) {
       </button>
 
       {open && (
-        <div className="absolute z-50 top-full mt-1 left-0 bg-white border border-border rounded-lg shadow-lg p-3 w-64 max-h-80 overflow-y-auto">
+        <div className="absolute z-50 top-full mt-1 left-0 bg-card border border-border rounded-lg shadow-lg p-3 w-64 max-h-80 overflow-y-auto">
           {loading ? (
             <div className="flex items-center justify-center py-4">
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
