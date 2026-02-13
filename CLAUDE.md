@@ -41,9 +41,12 @@ The badge is controlled by `NEXT_PUBLIC_ENV_LABEL` env var (`local`, `dev-backen
 2. Push to the personal branch: `git push -u origin u/slealq/my-feature`
 3. Create a PR to `dev` on GitHub (requires approval)
 4. After merging to `dev`, CI/CD deploys to the DEV environment
-5. Promote `dev` → `master` via PR when ready for production
+5. Promote `dev` → `master` via GitHub Actions: **Actions → "Promote to PROD" → Run workflow**
 
-**Enforcement:** A pre-push Git hook (`.githooks/pre-push`) blocks direct pushes to `master` and `dev`. New clones must run `./scripts/setup-hooks.sh` to activate hooks.
+**Enforcement:**
+- Pre-push Git hook (`.githooks/pre-push`) blocks direct pushes to `master` and `dev`. New clones must run `./scripts/setup-hooks.sh` to activate hooks.
+- CI guard job blocks PRs targeting `master` — only the promote workflow can update `master`.
+- Branches are auto-deleted after PR merge.
 
 **When committing changes via Claude Code:** Always commit to the current personal branch. Never push directly to `master` or `dev`.
 
