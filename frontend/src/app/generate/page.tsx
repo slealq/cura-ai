@@ -8,7 +8,6 @@ import { toast } from 'sonner';
 import Link from 'next/link';
 import GeneratedImageCard from '@/components/GeneratedImageCard';
 import { cn } from '@/lib/utils';
-import type { GeneratedImage } from '@/types';
 
 const SIZE_PRESETS = [
   { label: '1024 x 1024', w: 1024, h: 1024 },
@@ -41,8 +40,8 @@ export default function GeneratePage() {
   const [seed, setSeed] = useState<string>('');
   const [numImages, setNumImages] = useState(1);
 
-  // Full-size modal
-  const [selectedImage, setSelectedImage] = useState<GeneratedImage | null>(null);
+  // Full-size modal — store only the ID so the modal always uses fresh polled data
+  const [selectedImageId, setSelectedImageId] = useState<number | null>(null);
 
   // Fetch base model from settings to initialize
   const hasInitialized = useRef(false);
@@ -114,6 +113,9 @@ export default function GeneratePage() {
   };
 
   const images = generatedImages?.items || [];
+  const selectedImage = selectedImageId != null
+    ? images.find((img) => img.id === selectedImageId) ?? null
+    : null;
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
@@ -346,7 +348,7 @@ export default function GeneratePage() {
               <GeneratedImageCard
                 key={img.id}
                 image={img}
-                onClick={() => setSelectedImage(img)}
+                onClick={() => setSelectedImageId(img.id)}
               />
             ))}
           </div>
@@ -358,7 +360,7 @@ export default function GeneratePage() {
         <>
           <div
             className="fixed inset-0 bg-black/70 z-50"
-            onClick={() => setSelectedImage(null)}
+            onClick={() => setSelectedImageId(null)}
           />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div
@@ -368,7 +370,7 @@ export default function GeneratePage() {
               <div className="flex items-center justify-between p-4 border-b border-border">
                 <h3 className="font-semibold">Generated Image #{selectedImage.id}</h3>
                 <button
-                  onClick={() => setSelectedImage(null)}
+                  onClick={() => setSelectedImageId(null)}
                   className="p-1 hover:bg-muted rounded-lg transition-colors"
                 >
                   <X className="h-5 w-5" />
@@ -409,7 +411,7 @@ export default function GeneratePage() {
                     {selectedImage.lora_model_name && selectedImage.lora_model_id && (
                       <span>
                         <span className="font-medium">LoRA:</span>{' '}
-                        <Link href="/models" className="text-primary hover:underline" onClick={() => setSelectedImage(null)}>
+                        <Link href="/models" className="text-primary hover:underline" onClick={() => setSelectedImageId(null)}>
                           {selectedImage.lora_model_name}
                         </Link>
                       </span>
