@@ -551,17 +551,42 @@ function Hint({ text }: { text: string }) {
   );
 }
 
+const BASE_MODELS = [
+  { value: 'flux-dev', label: 'Flux' },
+  { value: 'qwen-2.5', label: 'Qwen 2.5' },
+];
+
 function GenerationSettings() {
   const queryClient = useQueryClient();
 
+  // Base model state
+  const { data: baseModelData, isLoading: baseModelLoading } = useQuery({
+    queryKey: ['base-model'],
+    queryFn: settingsApi.getBaseModel,
+  });
+  const baseModel = baseModelData?.base_model ?? 'flux-dev';
+
+  const setBaseModelMutation = useMutation({
+    mutationFn: (model: string) => settingsApi.updateBaseModel(model),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['base-model'] });
+      // Reset drafts so they reload from the new model's config
+      setGenDraft(null);
+      setTrainDraft(null);
+    },
+  });
+
+  // Fetch configs scoped to current base model
   const { data: genConfig, isLoading: genLoading } = useQuery({
-    queryKey: ['generation-config'],
-    queryFn: settingsApi.getGenerationConfig,
+    queryKey: ['generation-config', baseModel],
+    queryFn: () => settingsApi.getGenerationConfig(baseModel),
+    enabled: !baseModelLoading,
   });
 
   const { data: trainConfig, isLoading: trainLoading } = useQuery({
-    queryKey: ['training-config'],
-    queryFn: settingsApi.getTrainingConfig,
+    queryKey: ['training-config', baseModel],
+    queryFn: () => settingsApi.getTrainingConfig(baseModel),
+    enabled: !baseModelLoading,
   });
 
   const [genDraft, setGenDraft] = useState<GenerationConfig | null>(null);
@@ -576,9 +601,9 @@ function GenerationSettings() {
   }, [trainConfig, trainDraft]);
 
   const saveGenMutation = useMutation({
-    mutationFn: (cfg: Partial<GenerationConfig>) => settingsApi.updateGenerationConfig(cfg),
+    mutationFn: (cfg: Partial<GenerationConfig>) => settingsApi.updateGenerationConfig(cfg, baseModel),
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['generation-config'] });
+      queryClient.invalidateQueries({ queryKey: ['generation-config', baseModel] });
       setGenDraft(data);
       toast.success('Generation settings saved');
     },
@@ -586,18 +611,18 @@ function GenerationSettings() {
   });
 
   const resetGenMutation = useMutation({
-    mutationFn: settingsApi.resetGenerationConfig,
+    mutationFn: () => settingsApi.resetGenerationConfig(baseModel),
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['generation-config'] });
+      queryClient.invalidateQueries({ queryKey: ['generation-config', baseModel] });
       setGenDraft(data);
       toast.success('Generation settings reset');
     },
   });
 
   const saveTrainMutation = useMutation({
-    mutationFn: (cfg: Partial<TrainingConfig>) => settingsApi.updateTrainingConfig(cfg),
+    mutationFn: (cfg: Partial<TrainingConfig>) => settingsApi.updateTrainingConfig(cfg, baseModel),
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['training-config'] });
+      queryClient.invalidateQueries({ queryKey: ['training-config', baseModel] });
       setTrainDraft(data);
       toast.success('Training settings saved');
     },
@@ -605,15 +630,15 @@ function GenerationSettings() {
   });
 
   const resetTrainMutation = useMutation({
-    mutationFn: settingsApi.resetTrainingConfig,
+    mutationFn: () => settingsApi.resetTrainingConfig(baseModel),
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['training-config'] });
+      queryClient.invalidateQueries({ queryKey: ['training-config', baseModel] });
       setTrainDraft(data);
       toast.success('Training settings reset');
     },
   });
 
-  if (genLoading || trainLoading || !genDraft || !trainDraft) {
+  if (baseModelLoading || genLoading || trainLoading || !genDraft || !trainDraft) {
     return (
       <section className="bg-card rounded-xl border border-border p-6">
         <h2 className="font-semibold mb-4">Generation &amp; Training</h2>
@@ -622,30 +647,128 @@ function GenerationSettings() {
     );
   }
 
+  const isFlux = baseModel === 'flux-dev';
+  const isQwen = baseModel === 'qwen-2.5';
+  const trainStepsMax = isQwen ? 30000 : 4000;
+
   return (
     <section className="bg-card rounded-xl border border-border p-6">
       <div className="mb-4">
         <h2 className="font-semibold">Generation &amp; Training</h2>
         <p className="text-sm text-muted-foreground mt-1">
-          Default parameters for image generation and LoRA training
+          Default parameters for image generation and LoRA training. Settings are saved per model.
         </p>
       </div>
 
       <div className="space-y-6">
-        {/* Generation defaults */}
+        {/* Top-level Base Model selector */}
+        <div>
+          <label className="block text-sm font-medium mb-2">Base Model</label>
+          <div className="inline-flex rounded-lg border border-border">
+            {BASE_MODELS.map((m) => (
+              <button
+                key={m.value}
+                onClick={() => {
+                  if (m.value !== baseModel) {
+                    setBaseModelMutation.mutate(m.value);
+                  }
+                }}
+                disabled={setBaseModelMutation.isPending}
+                className={cn(
+                  'px-4 py-2 text-sm font-medium transition-colors first:rounded-l-lg last:rounded-r-lg',
+                  baseModel === m.value
+                    ? 'bg-primary text-primary-foreground'
+                    : 'hover:bg-muted'
+                )}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Training defaults (shown first) */}
+        <div className="border border-border rounded-lg p-4">
+          <h3 className="text-sm font-medium mb-3">Training Defaults</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Steps: {trainDraft.steps ?? 0}</label>
+              <input
+                type="range"
+                min={100}
+                max={trainStepsMax}
+                step={100}
+                value={trainDraft.steps ?? 1000}
+                onChange={(e) => setTrainDraft({ ...trainDraft, steps: parseInt(e.target.value) })}
+                className="w-full"
+              />
+              <div className="flex justify-between text-[10px] text-muted-foreground">
+                <span>100</span>
+                <span>{trainStepsMax}</span>
+              </div>
+            </div>
+            {isQwen && (
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">
+                  Learning Rate: {(trainDraft.learning_rate ?? 0.0005).toFixed(4)}
+                </label>
+                <input
+                  type="range"
+                  min={1}
+                  max={50}
+                  value={Math.round((trainDraft.learning_rate ?? 0.0005) * 10000)}
+                  onChange={(e) => setTrainDraft({ ...trainDraft, learning_rate: parseInt(e.target.value) / 10000 })}
+                  className="w-full"
+                />
+                <div className="flex justify-between text-[10px] text-muted-foreground">
+                  <span>0.0001</span>
+                  <span>0.005</span>
+                </div>
+              </div>
+            )}
+            {isFlux && (
+              <div className="flex items-center gap-3 pt-4">
+                <button
+                  onClick={() => setTrainDraft({ ...trainDraft, is_style: !(trainDraft.is_style ?? false) })}
+                  className={cn(
+                    'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors',
+                    (trainDraft.is_style ?? false) ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'inline-block h-4 w-4 transform rounded-full bg-white transition-transform mt-0.5',
+                      (trainDraft.is_style ?? false) ? 'translate-x-4 ml-0.5' : 'translate-x-0.5'
+                    )}
+                  />
+                </button>
+                <span className="text-sm">Style mode by default</span>
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2 mt-4">
+            <button
+              onClick={() => saveTrainMutation.mutate(trainDraft)}
+              disabled={saveTrainMutation.isPending}
+              className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+            >
+              {saveTrainMutation.isPending ? 'Saving...' : 'Save'}
+            </button>
+            <button
+              onClick={() => resetTrainMutation.mutate()}
+              disabled={resetTrainMutation.isPending}
+              className="flex items-center gap-1.5 px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Reset
+            </button>
+          </div>
+        </div>
+
+        {/* Generation defaults (shown second) */}
         <div className="border border-border rounded-lg p-4">
           <h3 className="text-sm font-medium mb-3">Generation Defaults</h3>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Base Model</label>
-              <select
-                value={genDraft.base_model}
-                onChange={(e) => setGenDraft({ ...genDraft, base_model: e.target.value })}
-                className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
-              >
-                <option value="flux-dev">Flux.1 Dev</option>
-              </select>
-            </div>
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Width: {genDraft.width}</label>
               <input
@@ -715,63 +838,6 @@ function GenerationSettings() {
             <button
               onClick={() => resetGenMutation.mutate()}
               disabled={resetGenMutation.isPending}
-              className="flex items-center gap-1.5 px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              Reset
-            </button>
-          </div>
-        </div>
-
-        {/* Training defaults */}
-        <div className="border border-border rounded-lg p-4">
-          <h3 className="text-sm font-medium mb-3">Training Defaults</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Steps: {trainDraft.steps}</label>
-              <input
-                type="range"
-                min={100}
-                max={4000}
-                step={100}
-                value={trainDraft.steps}
-                onChange={(e) => setTrainDraft({ ...trainDraft, steps: parseInt(e.target.value) })}
-                className="w-full"
-              />
-              <div className="flex justify-between text-[10px] text-muted-foreground">
-                <span>100</span>
-                <span>4000</span>
-              </div>
-            </div>
-            <div className="flex items-center gap-3 pt-4">
-              <button
-                onClick={() => setTrainDraft({ ...trainDraft, is_style: !trainDraft.is_style })}
-                className={cn(
-                  'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors',
-                  trainDraft.is_style ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'
-                )}
-              >
-                <span
-                  className={cn(
-                    'inline-block h-4 w-4 transform rounded-full bg-white transition-transform mt-0.5',
-                    trainDraft.is_style ? 'translate-x-4 ml-0.5' : 'translate-x-0.5'
-                  )}
-                />
-              </button>
-              <span className="text-sm">Style mode by default</span>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 mt-4">
-            <button
-              onClick={() => saveTrainMutation.mutate(trainDraft)}
-              disabled={saveTrainMutation.isPending}
-              className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
-            >
-              {saveTrainMutation.isPending ? 'Saving...' : 'Save'}
-            </button>
-            <button
-              onClick={() => resetTrainMutation.mutate()}
-              disabled={resetTrainMutation.isPending}
               className="flex items-center gap-1.5 px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
             >
               <RotateCcw className="h-3.5 w-3.5" />

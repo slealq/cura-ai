@@ -34,6 +34,7 @@ class TrainLoraRequest(BaseModel):
     description: str | None = None
     steps: int | None = None
     is_style: bool | None = None
+    learning_rate: float | None = None
     base_model: str = "flux-dev"
     use_captions: bool = False
     caption_include_tags: bool = True
@@ -260,7 +261,7 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db)):
 
     # Get training config from settings
     settings_service = get_settings_service(db)
-    training_defaults = settings_service.get_training_config()
+    training_defaults = settings_service.get_training_config(request.base_model)
 
     # Use model-aware default steps
     from app.providers.fal_provider import FAL_MODEL_CONFIG
@@ -300,6 +301,7 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db)):
             "use_captions": request.use_captions,
             "caption_include_tags": request.caption_include_tags,
             "caption_include_description": request.caption_include_description,
+            **({"learning_rate": request.learning_rate} if request.learning_rate is not None else {}),
         },
         training_images_count=image_count,
         job_id=job.id,

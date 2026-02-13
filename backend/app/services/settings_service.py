@@ -7,7 +7,6 @@ from app.models.prompt_preset import PromptPreset
 from app.models.settings import AppSettings
 
 DEFAULT_GENERATION_CONFIG = {
-    "base_model": "flux-dev",
     "width": 1024,
     "height": 1024,
     "num_inference_steps": 28,
@@ -18,7 +17,21 @@ DEFAULT_GENERATION_CONFIG = {
 DEFAULT_TRAINING_CONFIG = {
     "steps": 1000,
     "is_style": False,
+    "learning_rate": 0.0005,
 }
+
+# Per-model defaults
+DEFAULT_TRAINING_CONFIGS = {
+    "flux-dev": {"steps": 1000, "is_style": False},
+    "qwen-2.5": {"steps": 2000, "learning_rate": 0.0005},
+}
+
+DEFAULT_GENERATION_CONFIGS = {
+    "flux-dev": {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 3.5, "default_lora_scale": 1.0},
+    "qwen-2.5": {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 4.0, "default_lora_scale": 1.0},
+}
+
+DEFAULT_BASE_MODEL = "flux-dev"
 
 DEFAULT_PROVIDER_CONFIG = {
     "vision_provider": "openai",
@@ -255,10 +268,35 @@ class SettingsService:
         self.set_setting("clustering_config", json.dumps(current), description="Clustering parameters")
         return current
 
+    # --- Base model ---
+
+    def get_base_model(self) -> str:
+        """Get the active base model."""
+        return self.get_setting("base_model", DEFAULT_BASE_MODEL) or DEFAULT_BASE_MODEL
+
+    def set_base_model(self, base_model: str) -> str:
+        """Set the active base model."""
+        self.set_setting("base_model", base_model, description="Active base model for generation/training")
+        return base_model
+
     # --- Generation / Training config ---
 
-    def get_generation_config(self) -> dict:
-        """Get generation configuration from DB, or return defaults."""
+    def get_generation_config(self, base_model: str | None = None) -> dict:
+        """Get generation configuration, optionally scoped to a base model."""
+        if base_model:
+            # Try model-scoped key first
+            raw = self.get_setting(f"generation_config:{base_model}")
+            if raw:
+                try:
+                    config = json.loads(raw)
+                    defaults = DEFAULT_GENERATION_CONFIGS.get(base_model, DEFAULT_GENERATION_CONFIG)
+                    return {**defaults, **config}
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            # Fall back to model defaults
+            return dict(DEFAULT_GENERATION_CONFIGS.get(base_model, DEFAULT_GENERATION_CONFIG))
+
+        # Legacy: unscoped
         raw = self.get_setting("generation_config")
         if raw:
             try:
@@ -268,8 +306,18 @@ class SettingsService:
                 pass
         return dict(DEFAULT_GENERATION_CONFIG)
 
-    def set_generation_config(self, config: dict) -> dict:
-        """Validate and store generation config. Accepts partial dict, merges with defaults."""
+    def set_generation_config(self, config: dict, base_model: str | None = None) -> dict:
+        """Validate and store generation config, optionally scoped to a base model."""
+        if base_model:
+            current = self.get_generation_config(base_model)
+            defaults = DEFAULT_GENERATION_CONFIGS.get(base_model, DEFAULT_GENERATION_CONFIG)
+            for key in config:
+                if key in defaults:
+                    current[key] = config[key]
+            self.set_setting(f"generation_config:{base_model}", json.dumps(current), description=f"Generation parameters ({base_model})")
+            return current
+
+        # Legacy: unscoped
         current = self.get_generation_config()
         for key in config:
             if key in DEFAULT_GENERATION_CONFIG:
@@ -277,8 +325,20 @@ class SettingsService:
         self.set_setting("generation_config", json.dumps(current), description="Generation parameters")
         return current
 
-    def get_training_config(self) -> dict:
-        """Get training configuration from DB, or return defaults."""
+    def get_training_config(self, base_model: str | None = None) -> dict:
+        """Get training configuration, optionally scoped to a base model."""
+        if base_model:
+            raw = self.get_setting(f"training_config:{base_model}")
+            if raw:
+                try:
+                    config = json.loads(raw)
+                    defaults = DEFAULT_TRAINING_CONFIGS.get(base_model, DEFAULT_TRAINING_CONFIG)
+                    return {**defaults, **config}
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            return dict(DEFAULT_TRAINING_CONFIGS.get(base_model, DEFAULT_TRAINING_CONFIG))
+
+        # Legacy: unscoped
         raw = self.get_setting("training_config")
         if raw:
             try:
@@ -288,8 +348,18 @@ class SettingsService:
                 pass
         return dict(DEFAULT_TRAINING_CONFIG)
 
-    def set_training_config(self, config: dict) -> dict:
-        """Validate and store training config. Accepts partial dict, merges with defaults."""
+    def set_training_config(self, config: dict, base_model: str | None = None) -> dict:
+        """Validate and store training config, optionally scoped to a base model."""
+        if base_model:
+            current = self.get_training_config(base_model)
+            defaults = DEFAULT_TRAINING_CONFIGS.get(base_model, DEFAULT_TRAINING_CONFIG)
+            for key in config:
+                if key in defaults:
+                    current[key] = config[key]
+            self.set_setting(f"training_config:{base_model}", json.dumps(current), description=f"Training parameters ({base_model})")
+            return current
+
+        # Legacy: unscoped
         current = self.get_training_config()
         for key in config:
             if key in DEFAULT_TRAINING_CONFIG:

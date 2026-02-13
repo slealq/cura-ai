@@ -15,9 +15,11 @@ from app.services.settings_service import (
     DEFAULT_CLUSTERING_CONFIG,
     DEFAULT_DESCRIPTION_PROMPT,
     DEFAULT_GENERATION_CONFIG,
+    DEFAULT_GENERATION_CONFIGS,
     DEFAULT_PROVIDER_CONFIG,
     DEFAULT_TAG_PROMPT,
     DEFAULT_TRAINING_CONFIG,
+    DEFAULT_TRAINING_CONFIGS,
     get_settings_service,
 )
 
@@ -584,10 +586,21 @@ async def reset_clustering_config(db: Session = Depends(get_db)):
 # --- Generation config endpoints ---
 
 
+class BaseModelRequest(BaseModel):
+    """Request to set the active base model."""
+
+    base_model: str
+
+
+class BaseModelResponse(BaseModel):
+    """Response with the active base model."""
+
+    base_model: str
+
+
 class GenerationConfigResponse(BaseModel):
     """Current generation configuration."""
 
-    base_model: str
     width: int
     height: int
     num_inference_steps: int
@@ -598,7 +611,6 @@ class GenerationConfigResponse(BaseModel):
 class GenerationConfigUpdateRequest(BaseModel):
     """Partial update for generation configuration."""
 
-    base_model: str | None = None
     width: int | None = None
     height: int | None = None
     num_inference_steps: int | None = None
@@ -606,27 +618,44 @@ class GenerationConfigUpdateRequest(BaseModel):
     default_lora_scale: float | None = None
 
 
-@router.get("/generation", response_model=GenerationConfigResponse)
-async def get_generation_config(db: Session = Depends(get_db)):
-    """Get current generation configuration."""
+@router.get("/base-model", response_model=BaseModelResponse)
+async def get_base_model(db: Session = Depends(get_db)):
+    """Get the active base model."""
     service = get_settings_service(db)
-    return service.get_generation_config()
+    return {"base_model": service.get_base_model()}
+
+
+@router.put("/base-model", response_model=BaseModelResponse)
+async def update_base_model(request: BaseModelRequest, db: Session = Depends(get_db)):
+    """Set the active base model."""
+    service = get_settings_service(db)
+    return {"base_model": service.set_base_model(request.base_model)}
+
+
+@router.get("/generation", response_model=GenerationConfigResponse)
+async def get_generation_config(base_model: str | None = None, db: Session = Depends(get_db)):
+    """Get current generation configuration, optionally scoped to a base model."""
+    service = get_settings_service(db)
+    return service.get_generation_config(base_model)
 
 
 @router.put("/generation", response_model=GenerationConfigResponse)
 async def update_generation_config(
-    request: GenerationConfigUpdateRequest, db: Session = Depends(get_db)
+    request: GenerationConfigUpdateRequest, base_model: str | None = None, db: Session = Depends(get_db)
 ):
-    """Update generation configuration."""
+    """Update generation configuration, optionally scoped to a base model."""
     service = get_settings_service(db)
     update = {k: v for k, v in request.model_dump().items() if v is not None}
-    return service.set_generation_config(update)
+    return service.set_generation_config(update, base_model)
 
 
 @router.post("/generation/reset", response_model=GenerationConfigResponse)
-async def reset_generation_config(db: Session = Depends(get_db)):
+async def reset_generation_config(base_model: str | None = None, db: Session = Depends(get_db)):
     """Reset generation configuration to defaults."""
     service = get_settings_service(db)
+    if base_model:
+        service.delete_setting(f"generation_config:{base_model}")
+        return DEFAULT_GENERATION_CONFIGS.get(base_model, DEFAULT_GENERATION_CONFIG)
     service.delete_setting("generation_config")
     return DEFAULT_GENERATION_CONFIG
 
@@ -637,8 +666,9 @@ async def reset_generation_config(db: Session = Depends(get_db)):
 class TrainingConfigResponse(BaseModel):
     """Current training configuration."""
 
-    steps: int
-    is_style: bool
+    steps: int | None = None
+    is_style: bool | None = None
+    learning_rate: float | None = None
 
 
 class TrainingConfigUpdateRequest(BaseModel):
@@ -646,28 +676,32 @@ class TrainingConfigUpdateRequest(BaseModel):
 
     steps: int | None = None
     is_style: bool | None = None
+    learning_rate: float | None = None
 
 
 @router.get("/training", response_model=TrainingConfigResponse)
-async def get_training_config(db: Session = Depends(get_db)):
-    """Get current training configuration."""
+async def get_training_config(base_model: str | None = None, db: Session = Depends(get_db)):
+    """Get current training configuration, optionally scoped to a base model."""
     service = get_settings_service(db)
-    return service.get_training_config()
+    return service.get_training_config(base_model)
 
 
 @router.put("/training", response_model=TrainingConfigResponse)
 async def update_training_config(
-    request: TrainingConfigUpdateRequest, db: Session = Depends(get_db)
+    request: TrainingConfigUpdateRequest, base_model: str | None = None, db: Session = Depends(get_db)
 ):
-    """Update training configuration."""
+    """Update training configuration, optionally scoped to a base model."""
     service = get_settings_service(db)
     update = {k: v for k, v in request.model_dump().items() if v is not None}
-    return service.set_training_config(update)
+    return service.set_training_config(update, base_model)
 
 
 @router.post("/training/reset", response_model=TrainingConfigResponse)
-async def reset_training_config(db: Session = Depends(get_db)):
+async def reset_training_config(base_model: str | None = None, db: Session = Depends(get_db)):
     """Reset training configuration to defaults."""
     service = get_settings_service(db)
+    if base_model:
+        service.delete_setting(f"training_config:{base_model}")
+        return DEFAULT_TRAINING_CONFIGS.get(base_model, DEFAULT_TRAINING_CONFIG)
     service.delete_setting("training_config")
     return DEFAULT_TRAINING_CONFIG

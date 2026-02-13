@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { generationApi } from '@/lib/api';
+import { generationApi, settingsApi } from '@/lib/api';
 import { Loader2, Sparkles, ChevronDown, ChevronUp, X } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
@@ -43,6 +43,24 @@ export default function GeneratePage() {
 
   // Full-size modal
   const [selectedImage, setSelectedImage] = useState<GeneratedImage | null>(null);
+
+  // Fetch base model from settings to initialize
+  const hasInitialized = useRef(false);
+  const { data: baseModelData } = useQuery({
+    queryKey: ['base-model'],
+    queryFn: settingsApi.getBaseModel,
+  });
+
+  useEffect(() => {
+    if (baseModelData && !hasInitialized.current) {
+      hasInitialized.current = true;
+      const modelEntry = BASE_MODELS.find((m) => m.value === baseModelData.base_model);
+      if (modelEntry) {
+        setBaseModel(modelEntry.value);
+        setGuidance(modelEntry.defaultGuidance);
+      }
+    }
+  }, [baseModelData]);
 
   // Fetch completed LoRA models filtered by base model
   const { data: loraList } = useQuery({

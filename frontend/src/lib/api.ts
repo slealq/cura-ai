@@ -447,33 +447,55 @@ export const settingsApi = {
     return data;
   },
 
-  getGenerationConfig: async (): Promise<GenerationConfig> => {
-    const { data } = await api.get('/settings/generation');
+  getBaseModel: async (): Promise<{ base_model: string }> => {
+    const { data } = await api.get('/settings/base-model');
     return data;
   },
 
-  updateGenerationConfig: async (config: Partial<GenerationConfig>): Promise<GenerationConfig> => {
-    const { data } = await api.put('/settings/generation', config);
+  updateBaseModel: async (base_model: string): Promise<{ base_model: string }> => {
+    const { data } = await api.put('/settings/base-model', { base_model });
     return data;
   },
 
-  resetGenerationConfig: async (): Promise<GenerationConfig> => {
-    const { data } = await api.post('/settings/generation/reset');
+  getGenerationConfig: async (baseModel?: string): Promise<GenerationConfig> => {
+    const { data } = await api.get('/settings/generation', {
+      params: baseModel ? { base_model: baseModel } : undefined,
+    });
     return data;
   },
 
-  getTrainingConfig: async (): Promise<TrainingConfig> => {
-    const { data } = await api.get('/settings/training');
+  updateGenerationConfig: async (config: Partial<GenerationConfig>, baseModel?: string): Promise<GenerationConfig> => {
+    const { data } = await api.put('/settings/generation', config, {
+      params: baseModel ? { base_model: baseModel } : undefined,
+    });
     return data;
   },
 
-  updateTrainingConfig: async (config: Partial<TrainingConfig>): Promise<TrainingConfig> => {
-    const { data } = await api.put('/settings/training', config);
+  resetGenerationConfig: async (baseModel?: string): Promise<GenerationConfig> => {
+    const { data } = await api.post('/settings/generation/reset', null, {
+      params: baseModel ? { base_model: baseModel } : undefined,
+    });
     return data;
   },
 
-  resetTrainingConfig: async (): Promise<TrainingConfig> => {
-    const { data } = await api.post('/settings/training/reset');
+  getTrainingConfig: async (baseModel?: string): Promise<TrainingConfig> => {
+    const { data } = await api.get('/settings/training', {
+      params: baseModel ? { base_model: baseModel } : undefined,
+    });
+    return data;
+  },
+
+  updateTrainingConfig: async (config: Partial<TrainingConfig>, baseModel?: string): Promise<TrainingConfig> => {
+    const { data } = await api.put('/settings/training', config, {
+      params: baseModel ? { base_model: baseModel } : undefined,
+    });
+    return data;
+  },
+
+  resetTrainingConfig: async (baseModel?: string): Promise<TrainingConfig> => {
+    const { data } = await api.post('/settings/training/reset', null, {
+      params: baseModel ? { base_model: baseModel } : undefined,
+    });
     return data;
   },
 
@@ -535,6 +557,7 @@ export const generationApi = {
     use_captions?: boolean;
     caption_include_tags?: boolean;
     caption_include_description?: boolean;
+    learning_rate?: number;
   }): Promise<{ status: string; lora_model_id: number; job_id: number }> => {
     const { data } = await api.post('/generation/lora/train', params);
     return data;

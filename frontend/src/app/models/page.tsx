@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { generationApi, foldersApi, clustersApi } from '@/lib/api';
+import { generationApi } from '@/lib/api';
 import {
   Loader2,
   Plus,
@@ -20,10 +20,11 @@ import Link from 'next/link';
 import { cn, formatDate } from '@/lib/utils';
 import type { LoraModel } from '@/types';
 import { imagesApi } from '@/lib/api';
+import TrainLoraModal from './components/TrainLoraModal';
 
 const BASE_MODELS = [
-  { value: 'flux-dev', label: 'Flux', defaultSteps: 1000 },
-  { value: 'qwen-2.5', label: 'Qwen 2.5', defaultSteps: 2000 },
+  { value: 'flux-dev', label: 'Flux' },
+  { value: 'qwen-2.5', label: 'Qwen 2.5' },
 ];
 
 const baseModelBadge: Record<string, string> = {
@@ -154,58 +155,16 @@ function LoraModelCard({
   );
 }
 
-type SourceType = 'folder' | 'cluster';
-
 export default function ModelsPage() {
   const queryClient = useQueryClient();
   const [showTrainModal, setShowTrainModal] = useState(false);
   const [selectedModel, setSelectedModel] = useState<LoraModel | null>(null);
-
-  // Form state for training
-  const [trainName, setTrainName] = useState('');
-  const [trainTrigger, setTrainTrigger] = useState('');
-  const [trainBaseModel, setTrainBaseModel] = useState('flux-dev');
-  const [sourceType, setSourceType] = useState<SourceType>('folder');
-  const [trainFolderId, setTrainFolderId] = useState<number | undefined>(undefined);
-  const [trainClusterId, setTrainClusterId] = useState<number | undefined>(undefined);
-  const [trainSteps, setTrainSteps] = useState(1000);
-  const [trainIsStyle, setTrainIsStyle] = useState(false);
-  const [trainUseCaptions, setTrainUseCaptions] = useState(false);
-  const [trainCaptionTags, setTrainCaptionTags] = useState(true);
-  const [trainCaptionDescription, setTrainCaptionDescription] = useState(true);
 
   // Fetch LoRA models
   const { data: loraData, isLoading } = useQuery({
     queryKey: ['lora-models'],
     queryFn: () => generationApi.listLora(),
     refetchInterval: 5000,
-  });
-
-  // Fetch folders for dropdown
-  const { data: foldersData } = useQuery({
-    queryKey: ['folders'],
-    queryFn: () => foldersApi.list({ limit: 200 }),
-  });
-
-  // Fetch clusters for dropdown
-  const { data: clustersData } = useQuery({
-    queryKey: ['clusters'],
-    queryFn: () => clustersApi.list({ limit: 200 }),
-  });
-
-  // Train mutation
-  const trainMutation = useMutation({
-    mutationFn: generationApi.trainLora,
-    onSuccess: (data) => {
-      toast.success(`Training started! Job #${data.job_id}`);
-      queryClient.invalidateQueries({ queryKey: ['lora-models'] });
-      queryClient.invalidateQueries({ queryKey: ['jobs'] });
-      setShowTrainModal(false);
-      resetForm();
-    },
-    onError: (err: Error) => {
-      toast.error(`Failed to start training: ${err.message}`);
-    },
   });
 
   // Delete mutation
@@ -217,42 +176,6 @@ export default function ModelsPage() {
     },
     onError: () => toast.error('Failed to delete model'),
   });
-
-  const resetForm = () => {
-    setTrainName('');
-    setTrainTrigger('');
-    setTrainBaseModel('flux-dev');
-    setSourceType('folder');
-    setTrainFolderId(undefined);
-    setTrainClusterId(undefined);
-    setTrainSteps(1000);
-    setTrainIsStyle(false);
-    setTrainUseCaptions(false);
-    setTrainCaptionTags(true);
-    setTrainCaptionDescription(true);
-  };
-
-  const hasValidSource = sourceType === 'folder' ? !!trainFolderId : !!trainClusterId;
-
-  const handleTrain = () => {
-    if (!trainName.trim() || !trainTrigger.trim() || !hasValidSource) {
-      toast.error('Please fill in all required fields');
-      return;
-    }
-    trainMutation.mutate({
-      name: trainName.trim(),
-      trigger_word: trainTrigger.trim(),
-      base_model: trainBaseModel,
-      ...(sourceType === 'folder'
-        ? { folder_id: trainFolderId }
-        : { cluster_id: trainClusterId }),
-      steps: trainSteps,
-      is_style: trainBaseModel === 'flux-dev' ? trainIsStyle : undefined,
-      use_captions: trainUseCaptions,
-      caption_include_tags: trainCaptionTags,
-      caption_include_description: trainCaptionDescription,
-    });
-  };
 
   const models = loraData?.items || [];
 
@@ -299,268 +222,10 @@ export default function ModelsPage() {
       )}
 
       {/* Train Modal */}
-      {showTrainModal && (
-        <>
-          <div
-            className="fixed inset-0 bg-black/50 z-50"
-            onClick={() => setShowTrainModal(false)}
-          />
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div
-              className="bg-card rounded-xl shadow-xl max-w-md w-full p-6 space-y-4"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold">Train New LoRA</h3>
-                <button
-                  onClick={() => setShowTrainModal(false)}
-                  className="p-1 hover:bg-muted rounded-lg transition-colors"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-sm font-medium mb-1">Name *</label>
-                  <input
-                    type="text"
-                    value={trainName}
-                    onChange={(e) => setTrainName(e.target.value)}
-                    placeholder="My LoRA Model"
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1">Trigger Word *</label>
-                  <input
-                    type="text"
-                    value={trainTrigger}
-                    onChange={(e) => setTrainTrigger(e.target.value)}
-                    placeholder="e.g. TOK, MYSTYLE"
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm"
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {trainBaseModel === 'qwen-2.5'
-                      ? 'Used in per-image captions during training'
-                      : 'Use this word in your prompts to activate the LoRA'}
-                  </p>
-                </div>
-
-                {/* Base Model Selector */}
-                <div>
-                  <label className="block text-sm font-medium mb-1">Base Model *</label>
-                  <div className="flex rounded-lg border border-border overflow-hidden">
-                    {BASE_MODELS.map((m) => (
-                      <button
-                        key={m.value}
-                        onClick={() => {
-                          setTrainBaseModel(m.value);
-                          setTrainSteps(m.defaultSteps);
-                          if (m.value === 'qwen-2.5') {
-                            setTrainUseCaptions(true);
-                            setTrainIsStyle(false);
-                          }
-                        }}
-                        className={cn(
-                          'flex-1 px-3 py-1.5 text-sm font-medium transition-colors',
-                          trainBaseModel === m.value
-                            ? 'bg-primary text-primary-foreground'
-                            : 'hover:bg-muted'
-                        )}
-                      >
-                        {m.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Source Type Toggle */}
-                <div>
-                  <label className="block text-sm font-medium mb-1">Source *</label>
-                  <div className="flex rounded-lg border border-border overflow-hidden mb-2">
-                    <button
-                      onClick={() => {
-                        setSourceType('folder');
-                        setTrainClusterId(undefined);
-                      }}
-                      className={cn(
-                        'flex-1 px-3 py-1.5 text-sm font-medium transition-colors',
-                        sourceType === 'folder'
-                          ? 'bg-primary text-primary-foreground'
-                          : 'hover:bg-muted'
-                      )}
-                    >
-                      Folder
-                    </button>
-                    <button
-                      onClick={() => {
-                        setSourceType('cluster');
-                        setTrainFolderId(undefined);
-                      }}
-                      className={cn(
-                        'flex-1 px-3 py-1.5 text-sm font-medium transition-colors',
-                        sourceType === 'cluster'
-                          ? 'bg-primary text-primary-foreground'
-                          : 'hover:bg-muted'
-                      )}
-                    >
-                      Cluster
-                    </button>
-                  </div>
-
-                  {sourceType === 'folder' ? (
-                    <select
-                      value={trainFolderId ?? ''}
-                      onChange={(e) => setTrainFolderId(e.target.value ? parseInt(e.target.value) : undefined)}
-                      className="w-full px-3 py-2 border border-border rounded-lg text-sm"
-                    >
-                      <option value="">Select a folder...</option>
-                      {foldersData?.items.map((folder) => (
-                        <option key={folder.id} value={folder.id}>
-                          {folder.name} ({folder.image_count} images)
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <select
-                      value={trainClusterId ?? ''}
-                      onChange={(e) => setTrainClusterId(e.target.value ? parseInt(e.target.value) : undefined)}
-                      className="w-full px-3 py-2 border border-border rounded-lg text-sm"
-                    >
-                      <option value="">Select a cluster...</option>
-                      {clustersData?.items.map((cluster) => (
-                        <option key={cluster.id} value={cluster.id}>
-                          {cluster.display_name || cluster.summary_title || `Cluster ${cluster.id}`} ({cluster.size} images)
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1">
-                    Training Steps: {trainSteps}
-                  </label>
-                  <input
-                    type="range"
-                    min={100}
-                    max={4000}
-                    step={100}
-                    value={trainSteps}
-                    onChange={(e) => setTrainSteps(parseInt(e.target.value))}
-                    className="w-full"
-                  />
-                  <div className="flex justify-between text-[10px] text-muted-foreground">
-                    <span>100</span>
-                    <span>4000</span>
-                  </div>
-                </div>
-
-                {trainBaseModel === 'flux-dev' && (
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => setTrainIsStyle(!trainIsStyle)}
-                      className={cn(
-                        'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors',
-                        trainIsStyle ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          'inline-block h-4 w-4 transform rounded-full bg-white transition-transform mt-0.5',
-                          trainIsStyle ? 'translate-x-4 ml-0.5' : 'translate-x-0.5'
-                        )}
-                      />
-                    </button>
-                    <span className="text-sm">Style mode</span>
-                    <span className="text-xs text-muted-foreground">
-                      (for artistic styles rather than subjects)
-                    </span>
-                  </div>
-                )}
-
-                {/* Per-Image Captions */}
-                <div className="border-t border-border pt-3">
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => {
-                        if (trainBaseModel !== 'qwen-2.5') {
-                          setTrainUseCaptions(!trainUseCaptions);
-                        }
-                      }}
-                      className={cn(
-                        'relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors',
-                        trainUseCaptions ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600',
-                        trainBaseModel === 'qwen-2.5' ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          'inline-block h-4 w-4 transform rounded-full bg-white transition-transform mt-0.5',
-                          trainUseCaptions ? 'translate-x-4 ml-0.5' : 'translate-x-0.5'
-                        )}
-                      />
-                    </button>
-                    <span className="text-sm">Per-image captions</span>
-                    {trainBaseModel === 'qwen-2.5' && (
-                      <span className="text-xs text-orange-600">(required for Qwen)</span>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-1.5 ml-12">
-                    Include generated tags and descriptions as captions for each training image
-                  </p>
-
-                  {trainUseCaptions && (
-                    <div className="mt-3 ml-12 space-y-2">
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={trainCaptionTags}
-                          onChange={(e) => setTrainCaptionTags(e.target.checked)}
-                          className="rounded border-gray-300"
-                        />
-                        <span className="text-sm">Include tags</span>
-                      </label>
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={trainCaptionDescription}
-                          onChange={(e) => setTrainCaptionDescription(e.target.checked)}
-                          className="rounded border-gray-300"
-                        />
-                        <span className="text-sm">Include description</span>
-                      </label>
-                      {!trainCaptionTags && !trainCaptionDescription && (
-                        <p className="text-xs text-red-500">
-                          At least one caption source must be selected
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="flex gap-2 justify-end pt-2">
-                <button
-                  onClick={() => setShowTrainModal(false)}
-                  className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleTrain}
-                  disabled={trainMutation.isPending || !trainName.trim() || !trainTrigger.trim() || !hasValidSource || (trainUseCaptions && !trainCaptionTags && !trainCaptionDescription)}
-                  className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
-                >
-                  {trainMutation.isPending ? 'Starting...' : 'Start Training'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
+      <TrainLoraModal
+        open={showTrainModal}
+        onClose={() => setShowTrainModal(false)}
+      />
 
       {/* Detail Modal */}
       {selectedModel && (

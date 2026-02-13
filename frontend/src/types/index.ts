@@ -288,7 +288,6 @@ export interface GeneratedImageListResponse {
 }
 
 export interface GenerationConfig {
-  base_model: string;
   width: number;
   height: number;
   num_inference_steps: number;
@@ -297,8 +296,9 @@ export interface GenerationConfig {
 }
 
 export interface TrainingConfig {
-  steps: number;
-  is_style: boolean;
+  steps?: number;
+  is_style?: boolean;
+  learning_rate?: number;
 }
 
 export interface APIKeyInfo {
