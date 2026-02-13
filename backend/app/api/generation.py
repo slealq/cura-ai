@@ -66,6 +66,17 @@ class LoraPreviewImage(BaseModel):
     thumbnail_uri_small: str | None
 
 
+class LatestEvaluationSummary(BaseModel):
+    """Summary of the most recent evaluation for a LoRA model."""
+
+    id: int
+    status: str
+    overall_score: float | None
+    avg_embedding_similarity: float | None
+    avg_vision_score: float | None
+    completed_at: str | None
+
+
 class LoraModelResponse(BaseModel):
     """Response for a LoRA model."""
 
@@ -86,6 +97,7 @@ class LoraModelResponse(BaseModel):
     training_images_count: int
     job_id: int | None
     source_preview_images: list[LoraPreviewImage] = Field(default_factory=list)
+    latest_evaluation: LatestEvaluationSummary | None = None
     created_at: str
     training_started_at: str | None
     training_completed_at: str | None
@@ -167,6 +179,27 @@ def _get_source_preview_images(lora, db: Session) -> list[LoraPreviewImage]:
     return []
 
 
+def _get_latest_evaluation(lora, db: Session) -> LatestEvaluationSummary | None:
+    """Get the most recent evaluation for a LoRA model."""
+    from app.models.lora_evaluation import LoraEvaluation
+    eval_row = (
+        db.query(LoraEvaluation)
+        .filter(LoraEvaluation.lora_model_id == lora.id)
+        .order_by(LoraEvaluation.created_at.desc())
+        .first()
+    )
+    if not eval_row:
+        return None
+    return LatestEvaluationSummary(
+        id=eval_row.id,
+        status=eval_row.status.value if hasattr(eval_row.status, 'value') else eval_row.status,
+        overall_score=eval_row.overall_score,
+        avg_embedding_similarity=eval_row.avg_embedding_similarity,
+        avg_vision_score=eval_row.avg_vision_score,
+        completed_at=eval_row.completed_at.isoformat() if eval_row.completed_at else None,
+    )
+
+
 def _lora_to_response(lora, db: Session) -> LoraModelResponse:
     return LoraModelResponse(
         id=lora.id,
@@ -186,6 +219,7 @@ def _lora_to_response(lora, db: Session) -> LoraModelResponse:
         training_images_count=lora.training_images_count,
         job_id=lora.job_id,
         source_preview_images=_get_source_preview_images(lora, db),
+        latest_evaluation=_get_latest_evaluation(lora, db),
         created_at=lora.created_at.isoformat(),
         training_started_at=lora.training_started_at.isoformat() if lora.training_started_at else None,
         training_completed_at=lora.training_completed_at.isoformat() if lora.training_completed_at else None,

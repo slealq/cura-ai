@@ -120,6 +120,38 @@ function LoraModelCard({
           )}
         </div>
 
+        {/* Evaluation info */}
+        {model.status === 'completed' && (
+          <div className="mt-3">
+            {model.latest_evaluation ? (
+              <Link
+                href={`/models/${model.id}/evaluations/${model.latest_evaluation.id}`}
+                onClick={(e) => e.stopPropagation()}
+                className="flex items-center gap-2 text-xs px-2.5 py-1.5 rounded-lg bg-muted/50 hover:bg-muted transition-colors"
+              >
+                <FlaskConical className="h-3 w-3 text-amber-600 flex-shrink-0" />
+                {model.latest_evaluation.status === 'completed' && model.latest_evaluation.overall_score != null ? (
+                  <span>
+                    Score: <span className="font-semibold text-foreground">{model.latest_evaluation.overall_score.toFixed(1)}</span>
+                    <span className="text-muted-foreground">/10</span>
+                  </span>
+                ) : model.latest_evaluation.status === 'running' ? (
+                  <span className="flex items-center gap-1 text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Evaluating...
+                  </span>
+                ) : model.latest_evaluation.status === 'failed' ? (
+                  <span className="text-red-600 dark:text-red-400">Evaluation failed</span>
+                ) : (
+                  <span className="text-muted-foreground">Evaluation pending</span>
+                )}
+              </Link>
+            ) : (
+              <span className="text-[10px] text-muted-foreground/60 italic">Not evaluated yet</span>
+            )}
+          </div>
+        )}
+
         {model.error_message && (
           <p className="mt-2 text-xs text-red-600 dark:text-red-400 line-clamp-1">{model.error_message}</p>
         )}

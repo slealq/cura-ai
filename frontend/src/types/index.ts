@@ -226,6 +226,15 @@ export interface LoraPreviewImage {
   thumbnail_uri_small: string | null;
 }
 
+export interface LatestEvaluationSummary {
+  id: number;
+  status: string;
+  overall_score: number | null;
+  avg_embedding_similarity: number | null;
+  avg_vision_score: number | null;
+  completed_at: string | null;
+}
+
 export interface LoraModel {
   id: number;
   name: string;
@@ -244,6 +253,7 @@ export interface LoraModel {
   training_images_count: number;
   job_id: number | null;
   source_preview_images: LoraPreviewImage[];
+  latest_evaluation: LatestEvaluationSummary | null;
   created_at: string;
   training_started_at: string | null;
   training_completed_at: string | null;
