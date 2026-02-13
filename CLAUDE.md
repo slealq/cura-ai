@@ -8,9 +8,11 @@ Image Model Generator - a multi-user full-stack app for AI-powered image tagging
 
 ## Deploying Changes
 
-**This project runs via Docker Compose. After finishing any code changes, you MUST rebuild and restart the services so the changes take effect.** Do not wait for the user to ask — do this automatically after every implementation task.
+### Local (Docker Compose)
 
-### Steps to apply changes
+**This project runs via Docker Compose locally. After finishing any code changes, you MUST rebuild and restart the services so the changes take effect.** Do not wait for the user to ask — do this automatically after every implementation task.
+
+#### Steps to apply changes
 
 1. **If frontend files were changed**, verify the build first:
    ```bash
@@ -59,7 +61,7 @@ Image Model Generator - a multi-user full-stack app for AI-powered image tagging
    curl -s http://localhost:3000 -o /dev/null -w "%{http_code}"
    ```
 
-### When to rebuild what
+#### When to rebuild what
 
 | What changed | What to rebuild |
 |---|---|
@@ -69,11 +71,46 @@ Image Model Generator - a multi-user full-stack app for AI-powered image tagging
 | `requirements.txt` or `package.json` | `docker compose build --no-cache` |
 | New Alembic migration added | Rebuild backend, then `docker compose exec backend alembic upgrade head` |
 
+### Cloud (Azure DEV)
+
+The DEV environment runs on Azure. To deploy backend changes:
+
+```bash
+# Build for linux/amd64 (required — Apple Silicon builds arm64 by default)
+docker build --platform linux/amd64 -t acrimggen.azurecr.io/imggen-backend:latest backend/
+
+# Push to Azure Container Registry
+az acr login --name acrimggen
+docker push acrimggen.azurecr.io/imggen-backend:latest
+
+# Update Container Apps (they auto-pull latest)
+az containerapp update --name cae-imggen-dev-backend --resource-group rg-imggen-dev --image acrimggen.azurecr.io/imggen-backend:latest
+az containerapp update --name cae-imggen-dev-celery-worker --resource-group rg-imggen-dev --image acrimggen.azurecr.io/imggen-backend:latest
+az containerapp update --name cae-imggen-dev-celery-clustering --resource-group rg-imggen-dev --image acrimggen.azurecr.io/imggen-backend:latest
+az containerapp update --name cae-imggen-dev-celery-generation --resource-group rg-imggen-dev --image acrimggen.azurecr.io/imggen-backend:latest
+
+# Run migrations (add firewall rule for your IP first)
+MY_IP=$(curl -s ifconfig.me)
+az postgres flexible-server firewall-rule create --resource-group rg-imggen-dev --name psql-imggen-dev2 --rule-name AllowLocalDev --start-ip-address "$MY_IP" --end-ip-address "$MY_IP"
+docker run --rm -e DATABASE_URL="postgresql://imggenadmin:<password>@psql-imggen-dev2.postgres.database.azure.com:5432/imggen?sslmode=require" acrimggen.azurecr.io/imggen-backend:latest alembic upgrade head
+```
+
 ### Service URLs
 
+**Local:**
 - Frontend: http://localhost:3000
 - Backend API: http://localhost:8000
 - API docs: http://localhost:8000/api/docs
+
+**DEV (Azure):**
+- Backend API: https://cae-imggen-dev-backend.ambitioussand-1e60af3e.eastus.azurecontainerapps.io
+- API docs: https://cae-imggen-dev-backend.ambitioussand-1e60af3e.eastus.azurecontainerapps.io/api/docs
+- Frontend (Static Web App): https://victorious-mushroom-01a2cc60f.4.azurestaticapps.net
+
+**Frontend against DEV cloud backend (local dev):**
+```bash
+cd frontend && cp .env.dev .env.local && npm run dev
+```
 
 ## Commands (local development, outside Docker)
 
@@ -102,7 +139,22 @@ npm run lint         # ESLint
 
 **Stack:** Next.js 14 + FastAPI + PostgreSQL/pgvector + Celery/Redis
 
-**Docker services:** postgres, redis, backend, celery-worker, celery-worker-clustering, celery-generation, celery-beat (optional, profile=scheduled), frontend
+**Local Docker services:** postgres, redis, backend, celery-worker, celery-worker-clustering, celery-generation, celery-beat (optional, profile=scheduled), frontend
+
+**Azure Cloud services (per environment):**
+
+| Component | Azure Service | DEV Resource Name |
+|-----------|--------------|-------------------|
+| Image/file storage | Azure Blob Storage | `stimggendev` (container: `images`) |
+| Backend API + Celery workers | Azure Container Apps | `cae-imggen-dev-backend`, `cae-imggen-dev-celery-*` |
+| Docker images | Azure Container Registry (shared) | `acrimggen.azurecr.io` |
+| Database | Azure PostgreSQL Flexible Server (pgvector) | `psql-imggen-dev2` (eastus2) |
+| Message broker + cache | Azure Cache for Redis | `redis-imggen-dev` |
+| Frontend | Azure Static Web Apps | `swa-imggen-dev` (eastus2) |
+| Secrets | Azure Key Vault | `kv-imggen-dev` |
+| Infrastructure-as-code | Terraform (remote state in Azure Storage) | `stimggentfstate` / `tfstate` container |
+
+**Storage abstraction** (`backend/app/services/storage.py`): Supports `local` and `azure` backends via `STORAGE_BACKEND` config. Azure mode uses Blob Storage with SAS URL redirects for file serving (302 redirect instead of streaming bytes). Configured via `AZURE_STORAGE_CONNECTION_STRING` and `AZURE_STORAGE_CONTAINER`.
 
 **Key patterns:**
 - **Multi-user auth** (`backend/app/core/security.py`): JWT-based authentication (access tokens 30min, refresh tokens 7 days) using bcrypt + python-jose. Every API endpoint (except `/auth/login` and `/auth/register`) requires `get_current_user` dependency. File-serving endpoints use `get_current_user_from_token_param` (accepts `?token=` query param for `<img src>` usage). Admin-only endpoints use `require_admin`.
@@ -150,7 +202,7 @@ npm run lint         # ESLint
 - Pages: Login (sign-in/sign-up toggle), Home (clusters), Folders, Folder Detail, All Images, Upload, Search, Cluster Detail, Models (with sub-components: TrainModal, FluxTrainForm, QwenTrainForm, SharedTrainFields, ModelSettings, EvaluationDetail), Generate, Jobs, Debug, Settings
 - Auth: `contexts/AuthContext.tsx` provides `login`, `register`, `logout`, `user`, `isAuthenticated`. `AuthGate` in layout redirects unauthenticated users to `/login`. Axios interceptors attach Bearer token to all requests and handle 401 with automatic token refresh.
 - Components: Header (search+stats), Sidebar (navigation + user menu with logout), ImageCard, ImageDrawer (detail slide-over), ImageGrid (paginated with filters+batch actions), ClusterCard, FolderCard, GeneratedImageCard, AddToFolderDialog, PipelineProgress
-- API client: `lib/api.ts` — Typed Axios functions for all endpoints. `authUrl()` helper appends `?token=` to image/thumbnail URLs for authenticated file serving via `<img src>`.
+- API client: `lib/api.ts` — Typed Axios functions for all endpoints. `authUrl()` helper appends `?token=` to image/thumbnail URLs for authenticated file serving via `<img src>`. Supports cross-origin API calls via `NEXT_PUBLIC_API_URL` env var (used when frontend runs locally against cloud backend).
 - State: TanStack Query with polling (5s jobs, 3s logs, 10s stats)
 
 **Alembic migrations:** 17 versions (001-017) covering initial schema through multi-user support. Migration 017 creates the `users` table, seeds the admin user, adds `user_id` to all 11 data tables with backfill, and converts simple unique constraints to composite (user_id + field).
@@ -167,10 +219,40 @@ npm run lint         # ESLint
 
 ## Environment
 
-Requires `.env` in project root with:
+### Local (`.env` in project root)
 - `OPENAI_API_KEY` (required for embeddings; also used for vision if chosen — visible as fallback to admin only)
 - `ANTHROPIC_API_KEY` (optional, for vision/summarization — visible as fallback to admin only)
 - `FAL_API_KEY` (optional, for LoRA training and image generation via fal.ai — visible as fallback to admin only)
 - `DEFAULT_VISION_PROVIDER` (openai/anthropic)
 - `DATABASE_URL`, `REDIS_URL`, `CELERY_BROKER_URL`
 - `JWT_SECRET_KEY` (defaults to `change-me-in-production-jwt-secret` — **must override in production**)
+
+### Azure Cloud (set via Container App secrets in Terraform)
+All the above, plus:
+- `STORAGE_BACKEND` — `azure` (enables Azure Blob Storage; `local` for Docker Compose)
+- `AZURE_STORAGE_CONNECTION_STRING` — Azure Storage account connection string
+- `AZURE_STORAGE_CONTAINER` — Blob container name (default: `images`)
+- `ENVIRONMENT` — `local`, `dev`, or `prod`
+- `CORS_ORIGINS` — Comma-separated allowed origins (configurable in `backend/app/main.py`)
+
+### Frontend environment files
+- `frontend/.env.dev` — Points `NEXT_PUBLIC_API_URL` to DEV cloud backend
+- `frontend/.env.prod` — Points `NEXT_PUBLIC_API_URL` to PROD cloud backend
+- Copy to `.env.local` for local dev against cloud: `cp .env.dev .env.local`
+
+## Infrastructure
+
+**Terraform** (`infra/`): Modular Terraform configuration for Azure resources.
+- `infra/modules/` — Reusable modules: resource_group, storage, database, redis, container_registry, container_apps, static_web_app, key_vault
+- `infra/environments/dev/` — DEV environment config (eastus, PostgreSQL in eastus2)
+- `infra/environments/prod/` — PROD environment config (to be provisioned)
+- `infra/shared/` — Shared resources (ACR)
+- State stored in Azure Storage: `stimggentfstate` account, `tfstate` container
+
+**CI/CD** (`.github/workflows/`):
+- `ci.yml` — PR validation (lint + build)
+- `deploy-dev.yml` — Push to `dev` branch → build → ACR → deploy to DEV
+- `deploy-prod.yml` — Manual dispatch → retag dev image as prod → deploy to PROD
+- `terraform.yml` — Plan on PR, apply on merge for `infra/**` changes
+
+**Migration script** (`scripts/migrate_storage.py`): Migrates local filesystem images to Azure Blob Storage with concurrent uploads and incremental skip support.

@@ -661,29 +661,33 @@ async def get_generated_image(gen_id: int, db: Session = Depends(get_db), curren
 @router.get("/images/{gen_id}/file")
 async def serve_generated_image(gen_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_token_param)):
     """Serve generated image file."""
+    from app.services.storage import get_storage_service
+
     gen_service = get_generation_service(db, current_user.id)
     gen = gen_service.get_generated_image(gen_id)
     if not gen or not gen.object_key:
         raise HTTPException(status_code=404, detail="Generated image file not found")
 
-    storage_path = Path(settings.local_storage_path) / "generated" / gen.object_key
-    if not storage_path.exists():
-        raise HTTPException(status_code=404, detail="File not found on disk")
-
-    return FileResponse(
-        str(storage_path),
-        media_type=gen.mime_type or "image/png",
-        filename=gen.object_key,
+    storage = get_storage_service()
+    response = storage.get_file_response_with_filename(
+        "generated", gen.object_key, gen.mime_type or "image/png",
+        download_filename=gen.object_key,
     )
+    if response is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    return response
 
 
 @router.get("/thumbnails/{filename}")
 async def serve_generated_thumbnail(filename: str, current_user: User = Depends(get_current_user_from_token_param)):
     """Serve generated image thumbnail."""
-    storage_path = Path(settings.local_storage_path) / "generated_thumbnails" / filename
-    if not storage_path.exists():
+    from app.services.storage import get_storage_service
+
+    storage = get_storage_service()
+    response = storage.get_file_response("generated_thumbnails", filename, "image/jpeg")
+    if response is None:
         raise HTTPException(status_code=404, detail="Thumbnail not found")
-    return FileResponse(str(storage_path), media_type="image/jpeg")
+    return response
 
 
 @router.delete("/images/{gen_id}", status_code=204)
@@ -965,6 +969,7 @@ async def delete_evaluation(eval_id: int, db: Session = Depends(get_db), current
 async def serve_eval_generated_image(eval_id: int, pair_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_token_param)):
     """Serve generated image file from an evaluation pair."""
     from app.models.lora_evaluation import EvaluationPair
+    from app.services.storage import get_storage_service
 
     pair = db.query(EvaluationPair).filter(
         EvaluationPair.id == pair_id,
@@ -973,12 +978,11 @@ async def serve_eval_generated_image(eval_id: int, pair_id: int, db: Session = D
     if not pair or not pair.generated_object_key:
         raise HTTPException(status_code=404, detail="Generated image not found")
 
-    storage_path = Path(settings.local_storage_path) / "generated" / pair.generated_object_key
-    if not storage_path.exists():
-        raise HTTPException(status_code=404, detail="File not found on disk")
-
-    return FileResponse(
-        str(storage_path),
-        media_type="image/png",
-        filename=pair.generated_object_key,
+    storage = get_storage_service()
+    response = storage.get_file_response_with_filename(
+        "generated", pair.generated_object_key, "image/png",
+        download_filename=pair.generated_object_key,
     )
+    if response is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    return response

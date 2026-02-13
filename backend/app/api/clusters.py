@@ -251,7 +251,7 @@ async def trigger_all_cluster_summarization(db: Session = Depends(get_db), curre
 @router.get("/{cluster_id}/export")
 async def export_cluster(
     cluster_id: int,
-    format: str = Query("json", regex="^(json|zip)$"),
+    format: str = Query("json", pattern="^(json|zip)$"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -281,6 +281,9 @@ async def export_cluster(
 
     elif format == "zip":
         # Create ZIP with images
+        from app.services.storage import get_storage_service
+
+        storage = get_storage_service()
         buffer = io.BytesIO()
 
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -292,12 +295,16 @@ async def export_cluster(
             }
             zf.writestr("metadata.json", json.dumps(metadata, indent=2, default=str))
 
-            # Add images
-            storage_path = Path(settings.local_storage_path) / "images"
+            # Add images (read from storage backend)
             for img in images:
-                img_path = storage_path / img.object_key
-                if img_path.exists():
-                    zf.write(img_path, f"images/{img.original_filename or img.object_key}")
+                try:
+                    image_data = await storage.get_image(img.object_key)
+                    zf.writestr(
+                        f"images/{img.original_filename or img.object_key}",
+                        image_data,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to add image {img.object_key} to ZIP: {e}")
 
         buffer.seek(0)
 

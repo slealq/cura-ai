@@ -1,0 +1,115 @@
+name: Deploy to PROD
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  promote-image:
+    name: Re-tag DEV Image as PROD
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Log in to ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Pull DEV image, re-tag as PROD, and push
+        run: |
+          docker pull ${{ secrets.ACR_LOGIN_SERVER }}/imggen-backend:dev
+          docker tag ${{ secrets.ACR_LOGIN_SERVER }}/imggen-backend:dev \
+            ${{ secrets.ACR_LOGIN_SERVER }}/imggen-backend:prod
+          docker push ${{ secrets.ACR_LOGIN_SERVER }}/imggen-backend:prod
+
+  deploy-frontend:
+    name: Deploy Frontend to PROD SWA
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_URL: ${{ secrets.PROD_BACKEND_URL }}
+        run: npm run build
+
+      - name: Deploy to Azure Static Web Apps
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.PROD_SWA_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: upload
+          app_location: frontend
+          output_location: out
+          skip_app_build: true
+
+  deploy-backend:
+    name: Deploy Backend to PROD Container Apps
+    runs-on: ubuntu-latest
+    needs: promote-image
+
+    steps:
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Update backend Container App
+        run: |
+          az containerapp update \
+            --name ca-backend-prod \
+            --resource-group ${{ secrets.PROD_RESOURCE_GROUP }} \
+            --image ${{ secrets.ACR_LOGIN_SERVER }}/imggen-backend:prod
+
+      - name: Update celery-worker Container App
+        run: |
+          az containerapp update \
+            --name ca-celery-worker-prod \
+            --resource-group ${{ secrets.PROD_RESOURCE_GROUP }} \
+            --image ${{ secrets.ACR_LOGIN_SERVER }}/imggen-backend:prod
+
+      - name: Update celery-worker-clustering Container App
+        run: |
+          az containerapp update \
+            --name ca-celery-clustering-prod \
+            --resource-group ${{ secrets.PROD_RESOURCE_GROUP }} \
+            --image ${{ secrets.ACR_LOGIN_SERVER }}/imggen-backend:prod
+
+      - name: Update celery-worker-generation Container App
+        run: |
+          az containerapp update \
+            --name ca-celery-generation-prod \
+            --resource-group ${{ secrets.PROD_RESOURCE_GROUP }} \
+            --image ${{ secrets.ACR_LOGIN_SERVER }}/imggen-backend:prod
+
+      - name: Run Alembic migrations
+        run: |
+          az containerapp exec \
+            --name ca-backend-prod \
+            --resource-group ${{ secrets.PROD_RESOURCE_GROUP }} \
+            --command "alembic upgrade head"

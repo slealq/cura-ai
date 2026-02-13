@@ -23,11 +23,17 @@ class Settings(BaseSettings):
     celery_result_backend: str = "redis://localhost:6379/2"
 
     # Storage
-    storage_backend: Literal["local", "s3", "gcs"] = "local"
+    storage_backend: Literal["local", "s3", "gcs", "azure"] = "local"
     local_storage_path: str = "./storage"
     s3_bucket: str = ""
     s3_region: str = "us-east-1"
     gcs_bucket: str = ""
+    azure_storage_connection_string: str = ""
+    azure_storage_container: str = "images"
+
+    # Environment & CORS
+    environment: Literal["local", "dev", "prod"] = "local"
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
     # Watch folder
     watch_folder_path: str = "./watch_folder"

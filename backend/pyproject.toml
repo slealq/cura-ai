@@ -30,6 +30,7 @@ dependencies = [
     "tenacity>=8.2.3",
     "umap-learn>=0.5.5",
     "fal-client>=0.5.0",
+    "azure-storage-blob>=12.19.0",
 ]
 
 [project.optional-dependencies]

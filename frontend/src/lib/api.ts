@@ -34,8 +34,12 @@ import type {
   TrainingConfig,
 } from '@/types';
 
+const apiBaseURL = process.env.NEXT_PUBLIC_API_URL
+  ? `${process.env.NEXT_PUBLIC_API_URL}/api`
+  : '/api';
+
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: apiBaseURL,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -83,7 +87,7 @@ api.interceptors.response.use(
 
         if (refreshToken) {
           try {
-            const { data } = await axios.post<TokenResponse>('/api/auth/refresh', {
+            const { data } = await axios.post<TokenResponse>(`${apiBaseURL}/auth/refresh`, {
               refresh_token: refreshToken,
             });
             localStorage.setItem('access_token', data.access_token);
@@ -128,8 +132,10 @@ api.interceptors.response.use(
 function authUrl(url: string): string {
   const token = localStorage.getItem('access_token');
   if (!token) return url;
-  const sep = url.includes('?') ? '&' : '?';
-  return `${url}${sep}token=${token}`;
+  const base = process.env.NEXT_PUBLIC_API_URL || '';
+  const fullUrl = url.startsWith('/') ? `${base}${url}` : url;
+  const sep = fullUrl.includes('?') ? '&' : '?';
+  return `${fullUrl}${sep}token=${token}`;
 }
 
 // Images API

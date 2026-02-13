@@ -428,21 +428,23 @@ async def embed_image_endpoint(
 @router.get("/thumbnails/{filename}")
 async def get_thumbnail(filename: str, current_user: User = Depends(get_current_user_from_token_param)):
     """Serve thumbnail file."""
-    thumbnail_path = Path(settings.local_storage_path) / "thumbnails" / filename
+    from app.services.storage import get_storage_service
 
-    if not thumbnail_path.exists():
+    storage = get_storage_service()
+    response = storage.get_file_response("thumbnails", filename, "image/jpeg")
+    if response is None:
         raise HTTPException(status_code=404, detail="Thumbnail not found")
-
-    return FileResponse(thumbnail_path, media_type="image/jpeg")
+    return response
 
 
 # Full image serving endpoint
 @router.get("/files/{filename}")
 async def get_image_file(filename: str, current_user: User = Depends(get_current_user_from_token_param)):
     """Serve full image file."""
-    image_path = Path(settings.local_storage_path) / "images" / filename
+    from app.services.storage import get_storage_service
 
-    if not image_path.exists():
+    storage = get_storage_service()
+    response = storage.get_file_response("images", filename)
+    if response is None:
         raise HTTPException(status_code=404, detail="Image not found")
-
-    return FileResponse(image_path)
+    return response
