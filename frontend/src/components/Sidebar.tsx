@@ -35,8 +35,8 @@ export default function Sidebar() {
         <Link href="/" className="flex items-center gap-2">
           <Folder className="h-8 w-8 text-primary" />
           <div>
-            <h1 className="font-semibold text-lg">Design Pipeline</h1>
-            <p className="text-xs text-muted-foreground">Idea Ingestion</p>
+            <h1 className="font-semibold text-lg">Cura.ai</h1>
+            <p className="text-xs text-muted-foreground">Image Intelligence</p>
           </div>
         </Link>
       </div>
@@ -67,7 +67,7 @@ export default function Sidebar() {
 
       <div className="p-4 border-t border-border">
         <div className="text-xs text-muted-foreground">
-          <p>Design Idea Pipeline v0.1.0</p>
+          <p>Cura.ai v0.1.0</p>
         </div>
       </div>
     </aside>

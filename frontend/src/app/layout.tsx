@@ -26,6 +26,10 @@ export default function RootLayout({
 
   return (
     <html lang="en">
+      <head>
+        <title>Cura.ai</title>
+        <meta name="description" content="AI-powered image tagging, description, clustering, and semantic search" />
+      </head>
       <body className="min-h-screen bg-background">
         <QueryClientProvider client={queryClient}>
           <div className="flex h-screen">
