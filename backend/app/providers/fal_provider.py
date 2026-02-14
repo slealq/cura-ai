@@ -45,7 +45,7 @@ FAL_MODEL_CONFIG = {
 def _ensure_fal_key(api_key: str | None = None):
     """Set FAL_KEY env var for fal_client if not already set."""
     import os
-    key = api_key or settings.fal_api_key
+    key = api_key
     if key:
         os.environ["FAL_KEY"] = key
 

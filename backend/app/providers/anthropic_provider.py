@@ -64,7 +64,7 @@ class AnthropicTagger(BaseTagger):
     """Anthropic Claude vision-based image tagger."""
 
     def __init__(self, api_key: str | None = None, model: str | None = None, max_tokens: dict | None = None):
-        self.client = AsyncAnthropic(api_key=api_key or settings.anthropic_api_key)
+        self.client = AsyncAnthropic(api_key=api_key)
         self.model = model or settings.anthropic_vision_model
         self.token_limit = (max_tokens or {}).get("tag", 1000)
 
@@ -174,7 +174,7 @@ class AnthropicDescriber(BaseDescriber):
     """Anthropic Claude vision-based image describer."""
 
     def __init__(self, api_key: str | None = None, model: str | None = None, max_tokens: dict | None = None):
-        self.client = AsyncAnthropic(api_key=api_key or settings.anthropic_api_key)
+        self.client = AsyncAnthropic(api_key=api_key)
         self.model = model or settings.anthropic_vision_model
         self.token_limit = (max_tokens or {}).get("describe", 3000)
 
@@ -268,7 +268,7 @@ class AnthropicClusterSummarizer(BaseClusterSummarizer):
     """Anthropic Claude-based cluster summarizer."""
 
     def __init__(self, api_key: str | None = None, model: str | None = None, max_tokens: dict | None = None):
-        self.client = AsyncAnthropic(api_key=api_key or settings.anthropic_api_key)
+        self.client = AsyncAnthropic(api_key=api_key)
         self.model = model or settings.anthropic_vision_model
         self.token_limit = (max_tokens or {}).get("summarize", 500)
 
@@ -485,7 +485,7 @@ class AnthropicEvaluator(BaseEvaluator):
     """Anthropic Claude vision-based image pair evaluator."""
 
     def __init__(self, api_key: str | None = None, model: str | None = None):
-        self.client = AsyncAnthropic(api_key=api_key or settings.anthropic_api_key)
+        self.client = AsyncAnthropic(api_key=api_key)
         self.model = model or settings.anthropic_vision_model
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))

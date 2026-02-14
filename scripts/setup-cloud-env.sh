@@ -65,20 +65,7 @@ echo "  to share sessions between local and cloud."
 read -rsp "  JWT secret (Enter to skip): " JWT_SECRET
 echo ""
 
-# 5. Copy API keys from root .env
-OPENAI_KEY=""
-ANTHROPIC_KEY=""
-FAL_KEY=""
-ROOT_ENV="$PROJECT_ROOT/.env"
-if [ -f "$ROOT_ENV" ]; then
-    echo "--- Reading API keys from root .env ---"
-    OPENAI_KEY=$(grep -E '^OPENAI_API_KEY=' "$ROOT_ENV" | cut -d'=' -f2- || echo "")
-    ANTHROPIC_KEY=$(grep -E '^ANTHROPIC_API_KEY=' "$ROOT_ENV" | cut -d'=' -f2- || echo "")
-    FAL_KEY=$(grep -E '^FAL_API_KEY=' "$ROOT_ENV" | cut -d'=' -f2- || echo "")
-    echo "  OK"
-else
-    echo "--- No root .env found, API keys will be blank ---"
-fi
+# 5. API keys — managed per-user via Settings UI, no env var fallback
 
 # 6. Write .env.cloud
 echo ""
@@ -107,10 +94,10 @@ NEXT_PUBLIC_ENV_LABEL=cloud-native
 # JWT
 JWT_SECRET_KEY=${JWT_SECRET}
 
-# API keys
-OPENAI_API_KEY=${OPENAI_KEY}
-ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
-FAL_API_KEY=${FAL_KEY}
+# API keys — managed per-user via Settings UI
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+FAL_API_KEY=
 EOF
 
 echo "  Created: $ENV_FILE"

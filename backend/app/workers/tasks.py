@@ -80,7 +80,7 @@ def tag_image(self, image_id: int, user_id: int, tag_prompt: str | None = None, 
     Pipeline stage: 3
     """
     write_log(category=LogCategory.TASK, message=f"Task tag_image started for image {image_id}",
-              task_name="tag_image", image_id=image_id, job_id=job_id)
+              task_name="tag_image", image_id=image_id, job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
     db = get_db()
     try:
@@ -106,7 +106,7 @@ def tag_image(self, image_id: int, user_id: int, tag_prompt: str | None = None, 
             tag_prompt = compose_tag_prompt(tag_prompt)
 
         # Tag image
-        tagger = get_tagger(db=db)
+        tagger = get_tagger(db=db, user_id=user_id)
         result = run_async(tagger.tag_image(image_data, image.mime_type, tag_prompt))
 
         # Save metadata
@@ -128,7 +128,7 @@ def tag_image(self, image_id: int, user_id: int, tag_prompt: str | None = None, 
 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(category=LogCategory.TASK, message=f"Task tag_image completed for image {image_id} in {elapsed:.0f}ms ({len(result.tags)} tags)",
-                  task_name="tag_image", image_id=image_id, job_id=job_id, duration_ms=round(elapsed, 1))
+                  task_name="tag_image", image_id=image_id, job_id=job_id, duration_ms=round(elapsed, 1), user_id=user_id)
         return {"status": "success", "image_id": image_id, "tags": result.tags}
 
     except Exception as e:
@@ -137,7 +137,7 @@ def tag_image(self, image_id: int, user_id: int, tag_prompt: str | None = None, 
         logger.error(f"Failed to tag image {image_id}: {err_msg}")
         write_log(category=LogCategory.TASK, message=f"Task tag_image failed for image {image_id}: {err_msg}",
                   level=LogLevel.ERROR, task_name="tag_image", image_id=image_id, job_id=job_id,
-                  duration_ms=round(elapsed, 1), extra={"error": err_msg})
+                  duration_ms=round(elapsed, 1), extra={"error": err_msg}, user_id=user_id)
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
         image_service.update_status(image_id, ImageStatus.FAILED, err_msg)
         if isinstance(e, AIContentError):
@@ -155,7 +155,7 @@ def describe_image(self, image_id: int, user_id: int, description_prompt: str | 
     Pipeline stage: 4
     """
     write_log(category=LogCategory.TASK, message=f"Task describe_image started for image {image_id}",
-              task_name="describe_image", image_id=image_id, job_id=job_id)
+              task_name="describe_image", image_id=image_id, job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
     db = get_db()
     try:
@@ -180,7 +180,7 @@ def describe_image(self, image_id: int, user_id: int, description_prompt: str | 
             description_prompt = compose_description_prompt(description_prompt)
 
         # Generate description
-        describer = get_describer(db=db)
+        describer = get_describer(db=db, user_id=user_id)
         result = run_async(describer.describe_image(image_data, image.mime_type, description_prompt))
 
         # Save metadata
@@ -201,7 +201,7 @@ def describe_image(self, image_id: int, user_id: int, description_prompt: str | 
 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(category=LogCategory.TASK, message=f"Task describe_image completed for image {image_id} in {elapsed:.0f}ms",
-                  task_name="describe_image", image_id=image_id, job_id=job_id, duration_ms=round(elapsed, 1))
+                  task_name="describe_image", image_id=image_id, job_id=job_id, duration_ms=round(elapsed, 1), user_id=user_id)
         return {"status": "success", "image_id": image_id}
 
     except Exception as e:
@@ -210,7 +210,7 @@ def describe_image(self, image_id: int, user_id: int, description_prompt: str | 
         logger.error(f"Failed to describe image {image_id}: {err_msg}")
         write_log(category=LogCategory.TASK, message=f"Task describe_image failed for image {image_id}: {err_msg}",
                   level=LogLevel.ERROR, task_name="describe_image", image_id=image_id, job_id=job_id,
-                  duration_ms=round(elapsed, 1), extra={"error": err_msg})
+                  duration_ms=round(elapsed, 1), extra={"error": err_msg}, user_id=user_id)
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
         image_service.update_status(image_id, ImageStatus.FAILED, err_msg)
         if isinstance(e, AIContentError):
@@ -228,7 +228,7 @@ def embed_image(self, image_id: int, user_id: int, job_id: int | None = None) ->
     Pipeline stage: 5
     """
     write_log(category=LogCategory.TASK, message=f"Task embed_image started for image {image_id}",
-              task_name="embed_image", image_id=image_id, job_id=job_id)
+              task_name="embed_image", image_id=image_id, job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
     db = get_db()
     try:
@@ -255,7 +255,7 @@ def embed_image(self, image_id: int, user_id: int, job_id: int | None = None) ->
         text = "\n".join(text_parts)
 
         # Generate embedding
-        embedder = get_embedder(db=db)
+        embedder = get_embedder(db=db, user_id=user_id)
         result = run_async(embedder.embed_text(text))
 
         # Save embedding
@@ -271,7 +271,7 @@ def embed_image(self, image_id: int, user_id: int, job_id: int | None = None) ->
 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(category=LogCategory.TASK, message=f"Task embed_image completed for image {image_id} in {elapsed:.0f}ms",
-                  task_name="embed_image", image_id=image_id, job_id=job_id, duration_ms=round(elapsed, 1))
+                  task_name="embed_image", image_id=image_id, job_id=job_id, duration_ms=round(elapsed, 1), user_id=user_id)
         return {"status": "success", "image_id": image_id, "dimensions": result.dimensions}
 
     except Exception as e:
@@ -279,7 +279,7 @@ def embed_image(self, image_id: int, user_id: int, job_id: int | None = None) ->
         logger.error(f"Failed to embed image {image_id}: {e}")
         write_log(category=LogCategory.TASK, message=f"Task embed_image failed for image {image_id}: {e}",
                   level=LogLevel.ERROR, task_name="embed_image", image_id=image_id, job_id=job_id,
-                  duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)})
+                  duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)}, user_id=user_id)
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=_unwrap_error(e))
         image_service.update_status(image_id, ImageStatus.FAILED, _unwrap_error(e))
         raise self.retry(exc=e)
@@ -321,11 +321,11 @@ def tag_and_describe_image(
             description_prompt = compose_description_prompt(description_prompt)
 
         # Tag image
-        tagger = get_tagger(db=db)
+        tagger = get_tagger(db=db, user_id=user_id)
         tag_result = run_async(tagger.tag_image(image_data, image.mime_type, tag_prompt))
 
         # Describe image
-        describer = get_describer(db=db)
+        describer = get_describer(db=db, user_id=user_id)
         description_result = run_async(describer.describe_image(image_data, image.mime_type, description_prompt))
 
         # Save metadata
@@ -364,7 +364,7 @@ def cluster_all_images(self, user_id: int, job_id: int | None = None) -> dict:
     Pipeline stage: 6
     """
     write_log(category=LogCategory.TASK, message="Task cluster_all_images started",
-              task_name="cluster_all_images", job_id=job_id)
+              task_name="cluster_all_images", job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
     db = get_db()
     try:
@@ -442,7 +442,7 @@ def cluster_all_images(self, user_id: int, job_id: int | None = None) -> dict:
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(category=LogCategory.TASK,
                   message=f"Task cluster_all_images completed in {elapsed:.0f}ms ({len(image_ids)} images, {result.n_clusters} clusters)",
-                  task_name="cluster_all_images", job_id=job_id, duration_ms=round(elapsed, 1))
+                  task_name="cluster_all_images", job_id=job_id, duration_ms=round(elapsed, 1), user_id=user_id)
         return {
             "status": "success",
             "n_clusters": result.n_clusters,
@@ -456,7 +456,7 @@ def cluster_all_images(self, user_id: int, job_id: int | None = None) -> dict:
         logger.error(f"Clustering failed: {e}")
         write_log(category=LogCategory.TASK, message=f"Task cluster_all_images failed: {e}",
                   level=LogLevel.ERROR, task_name="cluster_all_images", job_id=job_id,
-                  duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)})
+                  duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)}, user_id=user_id)
         if job_id:
             job = db.query(Job).filter(Job.id == job_id).first()
             if job:
@@ -476,7 +476,7 @@ def summarize_cluster(self, cluster_id: int, user_id: int) -> dict:
     Pipeline stage: 7
     """
     write_log(category=LogCategory.TASK, message=f"Task summarize_cluster started for cluster {cluster_id}",
-              task_name="summarize_cluster")
+              task_name="summarize_cluster", user_id=user_id)
     task_start = time.monotonic()
     db = get_db()
     try:
@@ -508,7 +508,7 @@ def summarize_cluster(self, cluster_id: int, user_id: int) -> dict:
         common_tags = clustering_service.compute_common_tags(all_tags)
 
         # Generate summary
-        summarizer = get_cluster_summarizer(db=db)
+        summarizer = get_cluster_summarizer(db=db, user_id=user_id)
         result = run_async(
             summarizer.summarize_cluster(common_tags, descriptions, cluster.size)
         )
@@ -525,7 +525,7 @@ def summarize_cluster(self, cluster_id: int, user_id: int) -> dict:
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(category=LogCategory.TASK,
                   message=f"Task summarize_cluster completed for cluster {cluster_id} in {elapsed:.0f}ms: {result.summary_title}",
-                  task_name="summarize_cluster", duration_ms=round(elapsed, 1))
+                  task_name="summarize_cluster", duration_ms=round(elapsed, 1), user_id=user_id)
         return {
             "status": "success",
             "cluster_id": cluster_id,
@@ -537,7 +537,7 @@ def summarize_cluster(self, cluster_id: int, user_id: int) -> dict:
         logger.error(f"Failed to summarize cluster {cluster_id}: {e}")
         write_log(category=LogCategory.TASK, message=f"Task summarize_cluster failed for cluster {cluster_id}: {e}",
                   level=LogLevel.ERROR, task_name="summarize_cluster",
-                  duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)})
+                  duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)}, user_id=user_id)
         raise
     finally:
         db.close()
@@ -598,7 +598,7 @@ def process_image_pipeline(
     Clusters are run separately after batch ingestion.
     """
     write_log(category=LogCategory.TASK, message=f"Task process_image_pipeline started for image {image_id}",
-              task_name="process_image_pipeline", image_id=image_id, job_id=job_id)
+              task_name="process_image_pipeline", image_id=image_id, job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
     db = get_db()
     try:
@@ -627,11 +627,11 @@ def process_image_pipeline(
             description_prompt = compose_description_prompt(description_prompt)
 
         # Tag
-        tagger = get_tagger(db=db)
+        tagger = get_tagger(db=db, user_id=user_id)
         tag_result = run_async(tagger.tag_image(image_data, image.mime_type, tag_prompt))
 
         # Describe
-        describer = get_describer(db=db)
+        describer = get_describer(db=db, user_id=user_id)
         description_result = run_async(describer.describe_image(image_data, image.mime_type, description_prompt))
 
         # Build text for embedding
@@ -642,7 +642,7 @@ def process_image_pipeline(
         text = "\n".join(text_parts)
 
         # Embed
-        embedder = get_embedder(db=db)
+        embedder = get_embedder(db=db, user_id=user_id)
         embed_result = run_async(embedder.embed_text(text))
 
         # Save all metadata at once
@@ -663,7 +663,7 @@ def process_image_pipeline(
 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(category=LogCategory.TASK, message=f"Task process_image_pipeline completed for image {image_id} in {elapsed:.0f}ms",
-                  task_name="process_image_pipeline", image_id=image_id, job_id=job_id, duration_ms=round(elapsed, 1))
+                  task_name="process_image_pipeline", image_id=image_id, job_id=job_id, duration_ms=round(elapsed, 1), user_id=user_id)
         return {
             "status": "success",
             "image_id": image_id,
@@ -676,7 +676,7 @@ def process_image_pipeline(
         logger.error(f"Pipeline failed for image {image_id}: {err_msg}")
         write_log(category=LogCategory.TASK, message=f"Task process_image_pipeline failed for image {image_id}: {err_msg}",
                   level=LogLevel.ERROR, task_name="process_image_pipeline", image_id=image_id, job_id=job_id,
-                  duration_ms=round(elapsed, 1), extra={"error": err_msg})
+                  duration_ms=round(elapsed, 1), extra={"error": err_msg}, user_id=user_id)
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
         image_service.update_status(image_id, ImageStatus.FAILED, _unwrap_error(e))
         raise
@@ -690,7 +690,7 @@ def run_full_pipeline(self, job_id: int, user_id: int) -> dict:
     Run full pipeline: process all pending images, then cluster and summarize.
     """
     write_log(category=LogCategory.TASK, message="Task run_full_pipeline started",
-              task_name="run_full_pipeline", job_id=job_id)
+              task_name="run_full_pipeline", job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
     db = get_db()
     try:
@@ -742,7 +742,7 @@ def run_full_pipeline(self, job_id: int, user_id: int) -> dict:
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(category=LogCategory.TASK,
                   message=f"Task run_full_pipeline completed in {elapsed:.0f}ms ({processed} processed, {failed} failed)",
-                  task_name="run_full_pipeline", job_id=job_id, duration_ms=round(elapsed, 1))
+                  task_name="run_full_pipeline", job_id=job_id, duration_ms=round(elapsed, 1), user_id=user_id)
         return {
             "status": "success",
             "processed": processed,
@@ -754,7 +754,7 @@ def run_full_pipeline(self, job_id: int, user_id: int) -> dict:
         logger.error(f"Full pipeline failed: {e}")
         write_log(category=LogCategory.TASK, message=f"Task run_full_pipeline failed: {e}",
                   level=LogLevel.ERROR, task_name="run_full_pipeline", job_id=job_id,
-                  duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)})
+                  duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)}, user_id=user_id)
         if job_id:
             job = db.query(Job).filter(Job.id == job_id).first()
             if job:
@@ -776,7 +776,7 @@ def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int]) -
     Phase 1 is skipped and we go straight to polling.
     """
     write_log(category=LogCategory.TASK, message=f"Task run_batch_reprocess started ({len(image_ids)} images)",
-              task_name="run_batch_reprocess", job_id=job_id)
+              task_name="run_batch_reprocess", job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
     db = get_db()
     try:
@@ -794,7 +794,7 @@ def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int]) -
             logger.info(f"Batch reprocess job {job_id} already dispatched, skipping to Phase 2")
             write_log(category=LogCategory.TASK,
                       message=f"Re-delivery detected for job {job_id}, skipping dispatch (already sent)",
-                      task_name="run_batch_reprocess", job_id=job_id)
+                      task_name="run_batch_reprocess", job_id=job_id, user_id=user_id)
 
         if job and not already_dispatched:
             job.status = JobStatus.RUNNING
@@ -875,7 +875,7 @@ def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int]) -
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(category=LogCategory.TASK,
                   message=f"Task run_batch_reprocess completed in {elapsed:.0f}ms ({succeeded} succeeded, {failed_count} failed)",
-                  task_name="run_batch_reprocess", job_id=job_id, duration_ms=round(elapsed, 1))
+                  task_name="run_batch_reprocess", job_id=job_id, duration_ms=round(elapsed, 1), user_id=user_id)
         return {"status": "success", "total": len(image_ids), "succeeded": succeeded, "failed": failed_count}
 
     except Exception as e:
@@ -883,7 +883,7 @@ def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int]) -
         logger.error(f"Batch reprocess failed: {e}")
         write_log(category=LogCategory.TASK, message=f"Task run_batch_reprocess failed: {e}",
                   level=LogLevel.ERROR, task_name="run_batch_reprocess", job_id=job_id,
-                  duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)})
+                  duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)}, user_id=user_id)
         job = db.query(Job).filter(Job.id == job_id).first()
         if job:
             job.status = JobStatus.FAILED

@@ -69,7 +69,7 @@ class OpenAITagger(BaseTagger):
     """OpenAI vision-based image tagger."""
 
     def __init__(self, api_key: str | None = None, model: str | None = None, max_tokens: dict | None = None):
-        self.client = AsyncOpenAI(api_key=api_key or settings.openai_api_key)
+        self.client = AsyncOpenAI(api_key=api_key)
         self.model = model or settings.openai_vision_model
         self.token_limit = (max_tokens or {}).get("tag", 1000)
 
@@ -176,7 +176,7 @@ class OpenAIDescriber(BaseDescriber):
     """OpenAI vision-based image describer."""
 
     def __init__(self, api_key: str | None = None, model: str | None = None, max_tokens: dict | None = None):
-        self.client = AsyncOpenAI(api_key=api_key or settings.openai_api_key)
+        self.client = AsyncOpenAI(api_key=api_key)
         self.model = model or settings.openai_vision_model
         self.token_limit = (max_tokens or {}).get("describe", 3000)
 
@@ -270,7 +270,7 @@ class OpenAIEmbedder(BaseEmbedder):
     """OpenAI text embedding provider."""
 
     def __init__(self, api_key: str | None = None, model: str | None = None):
-        self.client = AsyncOpenAI(api_key=api_key or settings.openai_api_key)
+        self.client = AsyncOpenAI(api_key=api_key)
         self.model = model or settings.openai_embedding_model
         self._dimensions = 1536  # text-embedding-3-small default
 
@@ -338,7 +338,7 @@ class OpenAIClusterSummarizer(BaseClusterSummarizer):
     """OpenAI-based cluster summarizer."""
 
     def __init__(self, api_key: str | None = None, model: str | None = None, max_tokens: dict | None = None):
-        self.client = AsyncOpenAI(api_key=api_key or settings.openai_api_key)
+        self.client = AsyncOpenAI(api_key=api_key)
         self.model = model or settings.openai_vision_model
         self.token_limit = (max_tokens or {}).get("summarize", 500)
 
@@ -557,7 +557,7 @@ class OpenAIEvaluator(BaseEvaluator):
     """OpenAI vision-based image pair evaluator."""
 
     def __init__(self, api_key: str | None = None, model: str | None = None):
-        self.client = AsyncOpenAI(api_key=api_key or settings.openai_api_key)
+        self.client = AsyncOpenAI(api_key=api_key)
         self.model = model or settings.openai_vision_model
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))

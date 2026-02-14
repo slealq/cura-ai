@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.security import get_current_user
 from app.db.base import get_db
 from app.models import Image, ImageStatus, Job, JobStatus, JobType
+from app.models.generated_image import GeneratedImage, GenerationStatus
 from app.models.user import User
 from app.schemas import BatchJobImageInfo, BatchReprocessRequest, JobListResponse, JobResponse
 from app.workers.tasks import (
@@ -110,6 +111,20 @@ async def cancel_job(job_id: int, db: Session = Depends(get_db), current_user: U
         celery_app.control.revoke(job.celery_task_id, terminate=True)
 
     job.status = JobStatus.CANCELLED
+
+    # Clean up associated generated images that are still pending/generating
+    if job.job_type in (JobType.GENERATE_IMAGE, JobType.BATCH_GENERATE):
+        db.query(GeneratedImage).filter(
+            GeneratedImage.job_id == job_id,
+            GeneratedImage.status.in_([GenerationStatus.PENDING, GenerationStatus.GENERATING]),
+        ).update(
+            {
+                GeneratedImage.status: GenerationStatus.FAILED,
+                GeneratedImage.error_message: "Cancelled by user",
+            },
+            synchronize_session="fetch",
+        )
+
     db.commit()
 
     return {"status": "cancelled", "job_id": job_id}
