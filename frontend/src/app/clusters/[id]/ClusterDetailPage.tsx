@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, usePathname } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
@@ -20,14 +20,15 @@ import { clustersApi } from '@/lib/api';
 import ImageCard from '@/components/ImageCard';
 import ImageDrawer from '@/components/ImageDrawer';
 import AddToFolderDialog from '@/components/AddToFolderDialog';
-import { cn } from '@/lib/utils';
+import { cn, useRouteParam } from '@/lib/utils';
 import type { Image } from '@/types';
 
 export default function ClusterDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const pathname = usePathname();
   const queryClient = useQueryClient();
-  const clusterId = Number(params.id);
+  const clusterId = useRouteParam(params.id as string, 1, pathname);
 
   const [selectedImage, setSelectedImage] = useState<Image | null>(null);
   const [isEditing, setIsEditing] = useState(false);

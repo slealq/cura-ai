@@ -1,20 +1,21 @@
 'use client';
 
 import { useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, usePathname } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Loader2, ArrowLeft, Pencil, Trash2, Box } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import { foldersApi } from '@/lib/api';
 import ImageGrid from '@/components/ImageGrid';
-import { cn } from '@/lib/utils';
+import { cn, useRouteParam } from '@/lib/utils';
 
 export default function FolderDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const pathname = usePathname();
   const queryClient = useQueryClient();
-  const folderId = Number(params.id);
+  const folderId = useRouteParam(params.id as string, 2, pathname);
 
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState('');

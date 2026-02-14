@@ -404,12 +404,33 @@ python scripts/sync_data.py --direction local-to-cloud ... --skip-db
 
 All data tables for sync-enabled users in FK dependency order: users → images → image_metadata → folders → folder_images → clusters → cluster_memberships → jobs → lora_models → generated_images → lora_evaluations → evaluation_pairs → prompt_presets → app_settings.
 
-**Excluded:** `api_keys` (encrypted per-environment, not portable), `pipeline_logs` (large, low value).
+**Excluded:** `api_keys` (encrypted per-environment, not portable), `pipeline_logs` (large, low value), `hashed_password` (users table — passwords are environment-specific).
 
-**ID mapping:** Records matched by natural keys (email for users, object_key for images, etc.). Foreign keys remapped via old→new ID maps built incrementally. Upsert: existing records updated, new ones inserted.
+**ID mapping:** Records matched by natural keys (see table below). Foreign keys remapped via old→new ID maps built incrementally. Upsert: existing records updated, new ones inserted. Each row uses a database SAVEPOINT so a single row failure doesn't abort the transaction.
+
+| Table | Natural Key |
+|---|---|
+| users | email |
+| images | object_key |
+| image_metadata | image_id |
+| folders | user_id, name |
+| folder_images | folder_id, image_id |
+| clusters | user_id, run_id, created_at |
+| cluster_memberships | cluster_id, image_id |
+| jobs | user_id, created_at, job_type |
+| lora_models | user_id, name |
+| generated_images | object_key (fallback: user_id, created_at, prompt) |
+| lora_evaluations | user_id, created_at |
+| evaluation_pairs | generated_object_key |
+| prompt_presets | user_id, name |
+| app_settings | user_id, key |
+
+**Natural key design rules:** Natural keys must uniquely identify each row. Avoid using FK columns (like `lora_model_id`) in natural keys — FK IDs differ between source and destination, breaking the remap lookup. Use stable non-FK columns instead (e.g., `user_id` + `created_at`). Also avoid keys where multiple rows can share the same values (e.g., all clusters in a run share the same `run_id`).
 
 **Thumbnail URI translation:** Paths automatically converted between formats:
 - Local: `/app/storage/thumbnails/abc123_200.jpg`
 - Azure: `azure://images/thumbnails/abc123_200.jpg`
 
-**File sync:** Original images + thumbnails uploaded/downloaded concurrently (10 workers). Skips files that already exist at destination.
+**File sync:** Original images, thumbnails, generated images, and generated thumbnails uploaded/downloaded concurrently (10 workers). Skips files that already exist at destination. File paths are derived from `object_key` values in the `images` and `generated_images` tables.
+
+**Performance note:** The DB sync performs individual upserts per row over the network (~5ms/row to Azure). A full sync of ~6000 rows takes ~30 minutes. Use `--skip-files` or `--skip-db` to sync only what's needed. For bulk file uploads without DB sync, `az storage blob upload-batch` is much faster.
