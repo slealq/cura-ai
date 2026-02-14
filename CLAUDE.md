@@ -135,11 +135,13 @@ Push to the `dev` branch. The `deploy-dev.yml` workflow will:
 1. Build backend Docker image and push to ACR (tagged `:dev`)
 2. Build frontend with DEV backend URL, deploy to Azure Static Web App
 3. Update all 4 Container Apps with the new image
-4. Run Alembic migrations via `az containerapp exec`
+
+**Note:** Alembic migrations are NOT auto-run by CI (`az containerapp exec` requires a TTY). Run migrations manually when needed:
+```bash
+az containerapp exec --name cae-imggen-dev-backend --resource-group rg-imggen-dev --command "alembic upgrade head"
+```
 
 **Required GitHub Secrets:** `ACR_LOGIN_SERVER`, `ACR_USERNAME`, `ACR_PASSWORD`, `DEV_BACKEND_URL`, `DEV_SWA_TOKEN`, `DEV_RESOURCE_GROUP`, `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`
-
-**Note:** The workflow references Container App names `ca-backend-dev`, `ca-celery-worker-dev`, etc. These must match the actual Terraform-provisioned names (currently `cae-imggen-dev-backend`, `cae-imggen-dev-celery-worker`, etc.). Update the workflow or Terraform if they diverge.
 
 #### Manual (from local machine)
 
@@ -193,18 +195,17 @@ Terraform config exists at `infra/environments/prod/` with production-grade sett
 #### What exists
 
 - **Terraform IaC** (`infra/environments/prod/`): Resource group `rg-imggen-prod`, PostgreSQL `psql-imggen-prod` (B_Standard_B2s, 65GB, geo-redundant), Redis `redis-imggen-prod` (Standard tier), Container Apps with higher scaling (backend 2-5 replicas, workers 2-4), Static Web App (Standard tier), Key Vault with purge protection
-- **CI/CD** (`.github/workflows/deploy-prod.yml`): Manual dispatch → re-tags `imggen-backend:dev` as `:prod` in ACR → deploys frontend to PROD SWA → updates PROD Container Apps → runs migrations
+- **CI/CD** (`.github/workflows/deploy-prod.yml`): Manual dispatch → re-tags `imggen-backend:dev` as `:prod` in ACR → deploys frontend to PROD SWA → updates PROD Container Apps. Migrations must be run manually.
 - **Frontend env** (`frontend/.env.prod`): `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_ENV_LABEL=prod`
 
 #### Before provisioning PROD
 
-1. **Fix Container App naming mismatch**: The CI/CD workflow references `ca-backend-prod`, `ca-celery-worker-prod`, etc., but Terraform generates `cae-imggen-prod-backend`, `cae-imggen-prod-celery-worker`, etc. Either update the workflow or the Terraform module to align.
-2. **Set Terraform variables**: `db_admin_user`, `db_admin_password`, `jwt_secret_key`, API keys (OpenAI, Anthropic, fal.ai)
-3. **Configure GitHub Secrets**: `PROD_BACKEND_URL`, `PROD_SWA_TOKEN`, `PROD_RESOURCE_GROUP` (plus the shared OIDC/ACR secrets already used by DEV)
-4. **Run Terraform**: `cd infra/environments/prod && terraform init && terraform apply`
-5. **Update `frontend/.env.prod`**: Set correct `NEXT_PUBLIC_API_URL` with the actual Container App hostname from Terraform output
-6. **Run initial migration**: `alembic upgrade head` against the new PROD database
-7. **Deploy**: Trigger `deploy-prod.yml` workflow manually from GitHub Actions
+1. **Set Terraform variables**: `db_admin_user`, `db_admin_password`, `jwt_secret_key`, API keys (OpenAI, Anthropic, fal.ai)
+2. **Configure GitHub Secrets**: `PROD_BACKEND_URL`, `PROD_SWA_TOKEN`, `PROD_RESOURCE_GROUP` (plus the shared OIDC/ACR secrets already used by DEV)
+3. **Run Terraform**: `cd infra/environments/prod && terraform init && terraform apply`
+4. **Update `frontend/.env.prod`**: Set correct `NEXT_PUBLIC_API_URL` with the actual Container App hostname from Terraform output
+5. **Run initial migration**: `alembic upgrade head` against the new PROD database
+6. **Deploy**: Trigger `deploy-prod.yml` workflow manually from GitHub Actions
 
 ## Commands (local development, outside Docker)
 
@@ -282,7 +283,7 @@ npm run lint         # ESLint
 - `User` — Authentication and data ownership. Fields: email (unique), hashed_password, display_name, role (admin/user), is_active, is_verified, sync_enabled, timestamps. Seed admin: stuart.leal23@gmail.com
 - `Image` + `ImageMetadata` (1:1) — Core image data with status tracking, tags, description, embedding, hashes, tsvector
 - `Cluster` + `ClusterMembership` — Clustering results with centroid, summary, pin/archive/rename, outlier exclusion
-- `Job` — Async job tracking (types: INGEST, TAG, DESCRIBE, EMBED, CLUSTER, SUMMARIZE_CLUSTER, FULL_PIPELINE, REPROCESS, BATCH_REPROCESS, LORA_TRAIN, GENERATE_IMAGE, BATCH_GENERATE, LORA_EVALUATE)
+- `Job` — Async job tracking (types: INGEST, NORMALIZE, TAG, DESCRIBE, EMBED, CLUSTER, SUMMARIZE_CLUSTER, FULL_PIPELINE, REPROCESS, BATCH_REPROCESS, LORA_TRAIN, GENERATE_IMAGE, BATCH_GENERATE, LORA_EVALUATE)
 - `Folder` + `FolderImage` — User folders for organizing images (many-to-many)
 - `LoraModel` — Trained LoRA adapters linked to folder or cluster source, with training config and status. Supports multiple base models (flux-dev, qwen-2.5)
 - `GeneratedImage` — AI-generated images linked to LoRA models with prompt, params, and output files
@@ -293,8 +294,9 @@ npm run lint         # ESLint
 - `APIKey` — Encrypted API key storage with validation status
 
 **Frontend structure** (`frontend/src/`):
-- Pages: Login (sign-in/sign-up toggle), Home (clusters), Folders, Folder Detail, All Images, Upload, Search, Cluster Detail, Models (with sub-components: TrainModal, FluxTrainForm, QwenTrainForm, SharedTrainFields, ModelSettings, EvaluationDetail), Generate, Jobs, Debug, Settings
+- Pages: Login (sign-in/sign-up toggle), Home (clusters), Folders, Folder Detail, All Images, Upload, Search, Cluster Detail, Models (with sub-components: TrainModal, FluxTrainForm, QwenTrainForm, SharedTrainFields, ModelSettings, EvaluationDetail), Model Evaluate, Evaluation Detail, Generate, Jobs, Debug, Settings
 - Auth: `contexts/AuthContext.tsx` provides `login`, `register`, `logout`, `user`, `isAuthenticated`. `AuthGate` in layout redirects unauthenticated users to `/login`. Axios interceptors attach Bearer token to all requests and handle 401 with automatic token refresh.
+- Theme: `contexts/ThemeContext.tsx` provides light/dark/auto theme switching with timezone-aware auto mode (dark 19:00-07:00). Persisted in localStorage.
 - Components: Header (search+stats), Sidebar (navigation + user menu with logout), ImageCard, ImageDrawer (detail slide-over), ImageGrid (paginated with filters+batch actions), ClusterCard, FolderCard, GeneratedImageCard, AddToFolderDialog, PipelineProgress
 - API client: `lib/api.ts` — Typed Axios functions for all endpoints. `authUrl()` helper appends `?token=` to image/thumbnail URLs for authenticated file serving via `<img src>`. Supports cross-origin API calls via `NEXT_PUBLIC_API_URL` env var (used when frontend runs locally against cloud backend).
 - State: TanStack Query with polling (5s jobs, 3s logs, 10s stats)
@@ -344,10 +346,11 @@ All the above, plus:
 - State stored in Azure Storage: `stimggentfstate` account, `tfstate` container
 
 **CI/CD** (`.github/workflows/`):
-- `ci.yml` — PR validation (lint + build)
-- `deploy-dev.yml` — Push to `dev` branch → build → push to ACR (`:dev` tag) → deploy frontend to SWA → update 4 Container Apps → run migrations
-- `deploy-prod.yml` — Manual dispatch → re-tag `:dev` as `:prod` in ACR → deploy frontend to PROD SWA → update PROD Container Apps → run migrations. **Note:** Workflow uses `ca-*-prod` Container App names which don't match Terraform's `cae-imggen-prod-*` naming — must be aligned before first PROD deploy.
-- `terraform.yml` — Plan on PR, apply on merge for `infra/**` changes
+- `ci.yml` — PR validation: backend lint (ruff) + frontend lint & build. Guard job blocks PRs targeting `master`.
+- `deploy-dev.yml` — Push to `dev` branch → build → push to ACR (`:dev` tag) → deploy frontend to SWA → update 4 Container Apps. Migrations are manual.
+- `deploy-prod.yml` — Manual dispatch → re-tag `:dev` as `:prod` in ACR → deploy frontend to PROD SWA → update PROD Container Apps. Migrations are manual.
+- `promote-to-prod.yml` — Manual dispatch → fast-forwards `master` to match `dev` (verifies ancestor relationship first).
+- `terraform.yml` — Plan on PR, apply on merge for `infra/**` changes. **Known issue:** Workflow targets `main` branch (not `master`) and uses `infra/$env` paths instead of `infra/environments/$env` — currently non-functional. Terraform is run manually from local machine.
 
 **Migration script** (`scripts/migrate_storage.py`): Migrates local filesystem images to Azure Blob Storage with concurrent uploads and incremental skip support.
 
