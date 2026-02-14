@@ -315,10 +315,14 @@ async def reset_prompt_settings(
 
 
 @router.post("/prompts/suggest", response_model=PromptSuggestResponse)
-async def suggest_prompt(request: PromptSuggestRequest, current_user: User = Depends(get_current_user)):
+async def suggest_prompt(request: PromptSuggestRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Use AI to suggest edits to a prompt based on a change request."""
     try:
-        client = AsyncOpenAI(api_key=app_settings.openai_api_key)
+        key_service = get_api_key_service(db, current_user.id)
+        openai_key = key_service.resolve_key(APIProvider.OPENAI)
+        if not openai_key:
+            raise HTTPException(status_code=400, detail="OpenAI API key not set. Configure it in Settings > API Keys.")
+        client = AsyncOpenAI(api_key=openai_key)
 
         system_prompt = (
             f"You are helping edit an AI prompt for image {request.prompt_type} generation. "
@@ -371,30 +375,11 @@ async def list_api_keys(db: Session = Depends(get_db), current_user: User = Depe
 
     # Build response including providers with no stored key
     stored = {k.provider: k for k in keys}
-    is_admin = current_user.role.value == "admin" if hasattr(current_user.role, 'value') else current_user.role == "admin"
     result = []
     for provider in APIProvider:
         if provider.value in stored:
             result.append(_api_key_to_response(stored[provider.value]))
         else:
-            # Only show env var keys for admin users (they're server-level keys)
-            if is_admin:
-                settings = get_settings()
-                env_keys = {
-                    "openai": settings.openai_api_key,
-                    "anthropic": settings.anthropic_api_key,
-                    "fal": settings.fal_api_key,
-                }
-                env_key = env_keys.get(provider.value, "")
-                if env_key:
-                    result.append(APIKeyResponse(
-                        provider=provider.value,
-                        key_suffix=env_key[-4:] if len(env_key) >= 4 else None,
-                        status="active",
-                        last_validated_at=None,
-                        last_error=None,
-                    ))
-                    continue
             result.append(APIKeyResponse(
                 provider=provider.value,
                 key_suffix=None,
@@ -483,7 +468,7 @@ async def reset_provider_config(db: Session = Depends(get_db), current_user: Use
 async def get_provider_models(provider: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get available models for a provider."""
     if provider == "openai":
-        return await _get_openai_models(db)
+        return await _get_openai_models(db, current_user.id)
     elif provider == "anthropic":
         return _get_anthropic_models()
     elif provider == "fal":
@@ -507,11 +492,11 @@ FALLBACK_EMBEDDING_MODELS = [
 ]
 
 
-async def _get_openai_models(db: Session) -> list[ProviderModelInfo]:
+async def _get_openai_models(db: Session, user_id: int) -> list[ProviderModelInfo]:
     """Return curated vision models + dynamically discovered embedding models."""
     from app.services.api_key_service import get_api_key_service as get_aks
 
-    key_service = get_aks(db)
+    key_service = get_aks(db, user_id)
     api_key = key_service.resolve_key(APIProvider.OPENAI)
     if not api_key:
         return CURATED_OPENAI_VISION_MODELS + FALLBACK_EMBEDDING_MODELS

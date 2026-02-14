@@ -414,7 +414,7 @@ async def recover_lora_training(lora_id: int, db: Session = Depends(get_db), cur
 
     # Check fal.ai status
     from app.providers import get_trainer
-    trainer = get_trainer(lora.training_provider, db=db, base_model=lora.base_model)
+    trainer = get_trainer(lora.training_provider, db=db, base_model=lora.base_model, user_id=current_user.id)
 
     try:
         status_info = await trainer.check_training_status(request_id)

@@ -1,0 +1,620 @@
+#!/usr/bin/env bash
+# Cura.ai — unified development launcher.
+# Usage: cura [command] [args]
+#
+# Run cura help for full usage, or cura with no args for interactive menu.
+set -euo pipefail
+
+# ============================================================================
+# Section 1: Constants
+# ============================================================================
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+# Resolve symlinks to find the real project root
+while [ -L "$SCRIPT_PATH" ]; do
+    SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+done
+PROJECT_ROOT="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+STATE_FILE="$PROJECT_ROOT/.cura-mode"
+SCRIPTS_DIR="$PROJECT_ROOT/scripts"
+
+# Docker container prefixes
+LOCAL_PREFIX="design-pipeline-"
+CLOUD_PREFIX="cloud-dev-"
+
+# Ports — each mode gets its own pair, incrementing by 1
+#   Local:        3000 / 8000
+#   Cloud Native: 3001 / 8001
+#   Cloud Docker: 3002 / 8002
+PORT_LOCAL_FRONTEND=3000
+PORT_LOCAL_BACKEND=8000
+PORT_CLOUD_NATIVE_FRONTEND=3001
+PORT_CLOUD_NATIVE_BACKEND=8001
+PORT_CLOUD_DOCKER_FRONTEND=3002
+PORT_CLOUD_DOCKER_BACKEND=8002
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BLUE='\033[0;34m'
+MAGENTA='\033[0;35m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+# ============================================================================
+# Section 2: Utilities
+# ============================================================================
+
+check_port() {
+    lsof -i ":$1" -sTCP:LISTEN &>/dev/null
+}
+
+count_docker_containers() {
+    local prefix="$1"
+    local count
+    count=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c "^${prefix}" 2>/dev/null || true)
+    echo "${count:-0}"
+}
+
+get_state() {
+    if [ -f "$STATE_FILE" ]; then
+        cat "$STATE_FILE"
+    else
+        echo ""
+    fi
+}
+
+set_state() {
+    echo "$1" > "$STATE_FILE"
+}
+
+clear_state() {
+    rm -f "$STATE_FILE"
+}
+
+open_browser() {
+    local url="$1"
+    local port="$2"
+    # Wait for the port to be listening, then open Chrome
+    while ! lsof -i ":${port}" -sTCP:LISTEN >/dev/null 2>&1; do
+        sleep 1
+    done
+    sleep 2
+    open -a "Google Chrome" "$url"
+}
+
+require_env_cloud() {
+    if [ ! -f "$PROJECT_ROOT/.env.cloud" ]; then
+        echo -e "${YELLOW}.env.cloud not found.${NC}"
+        echo ""
+        read -rp "Run azure setup to generate it? [Y/n] " answer
+        if [[ "$answer" =~ ^[Nn] ]]; then
+            echo -e "${RED}Cannot proceed without .env.cloud${NC}"
+            exit 1
+        fi
+        azure_setup
+        if [ ! -f "$PROJECT_ROOT/.env.cloud" ]; then
+            echo -e "${RED}Setup did not create .env.cloud. Cannot proceed.${NC}"
+            exit 1
+        fi
+    fi
+}
+
+# ============================================================================
+# Section 3: Detect running mode
+# ============================================================================
+
+detect_running_mode() {
+    local state
+    state=$(get_state)
+
+    # Check if state file matches reality
+    case "$state" in
+        local)
+            if [ "$(count_docker_containers "$LOCAL_PREFIX")" -gt 0 ]; then
+                echo "local"
+                return
+            fi
+            ;;
+        cloud-native)
+            if check_port "$PORT_CLOUD_NATIVE_BACKEND" && [ "$(count_docker_containers "$CLOUD_PREFIX")" -eq 0 ]; then
+                echo "cloud-native"
+                return
+            fi
+            ;;
+        cloud-docker)
+            if [ "$(count_docker_containers "$CLOUD_PREFIX")" -gt 0 ]; then
+                echo "cloud-docker"
+                return
+            fi
+            ;;
+    esac
+
+    # State file is stale or missing — try heuristic detection
+    if [ "$(count_docker_containers "$CLOUD_PREFIX")" -gt 0 ]; then
+        echo "cloud-docker"
+    elif [ "$(count_docker_containers "$LOCAL_PREFIX")" -gt 0 ]; then
+        echo "local"
+    elif check_port "$PORT_CLOUD_NATIVE_BACKEND" && ! check_port "$PORT_LOCAL_BACKEND"; then
+        echo "cloud-native"
+    else
+        echo ""
+    fi
+}
+
+mode_label() {
+    case "$1" in
+        local)         echo "Local" ;;
+        cloud-native)  echo "Cloud Native" ;;
+        cloud-docker)  echo "Cloud Docker" ;;
+        *)             echo "None" ;;
+    esac
+}
+
+mode_description() {
+    case "$1" in
+        local)         echo "All services in Docker containers, local data" ;;
+        cloud-native)  echo "Frontend + backend native on host, cloud data" ;;
+        cloud-docker)  echo "Frontend + backend in Docker, cloud data" ;;
+    esac
+}
+
+# ============================================================================
+# Section 4: Start functions
+# ============================================================================
+
+confirm_stop_existing() {
+    local current
+    current=$(detect_running_mode)
+    if [ -n "$current" ]; then
+        echo -e "${YELLOW}$(mode_label "$current") is currently running.${NC}"
+        read -rp "Stop it before starting the new mode? [Y/n] " answer
+        if [[ "$answer" =~ ^[Nn] ]]; then
+            echo -e "${RED}Aborting. Stop the current mode first with: cura stop${NC}"
+            exit 1
+        fi
+        stop_mode "$current"
+        echo ""
+    fi
+}
+
+start_local() {
+    confirm_stop_existing
+    echo -e "${BLUE}${BOLD}Starting Local...${NC}"
+    echo -e "${DIM}All services in Docker containers, local DB + Redis${NC}"
+    echo -e "${DIM}Frontend: http://localhost:${PORT_LOCAL_FRONTEND}${NC}"
+    echo -e "${DIM}Backend:  http://localhost:${PORT_LOCAL_BACKEND}${NC}"
+    echo -e "${DIM}API Docs: http://localhost:${PORT_LOCAL_BACKEND}/api/docs${NC}"
+    echo ""
+
+    cd "$PROJECT_ROOT"
+    docker compose up -d
+    set_state "local"
+
+    echo ""
+    open_browser "http://localhost:${PORT_LOCAL_FRONTEND}" "$PORT_LOCAL_FRONTEND" &
+
+    echo -e "${GREEN}Local is running.${NC}"
+    echo -e "Use ${CYAN}cura logs${NC} to view logs, ${CYAN}cura stop${NC} to shut down."
+}
+
+start_cloud_native() {
+    confirm_stop_existing
+    require_env_cloud
+    echo -e "${GREEN}${BOLD}Starting Cloud Native...${NC}"
+    echo -e "${DIM}Frontend + backend running natively (hot-reload), cloud DB + Redis + Storage${NC}"
+    echo -e "${DIM}Frontend: http://localhost:${PORT_CLOUD_NATIVE_FRONTEND}${NC}"
+    echo -e "${DIM}Backend:  http://localhost:${PORT_CLOUD_NATIVE_BACKEND}${NC}"
+    echo -e "${DIM}API Docs: http://localhost:${PORT_CLOUD_NATIVE_BACKEND}/api/docs${NC}"
+    echo ""
+
+    set_state "cloud-native"
+
+    # Trap to clear state on exit
+    trap 'clear_state' INT TERM
+
+    # Let dev-cloud.sh handle browser opening
+    export CURA_OPEN_BROWSER=1
+
+    # Delegate to existing script (it has its own traps and cleanup)
+    "$SCRIPTS_DIR/dev-cloud.sh"
+
+    # If script exits normally, clear state
+    clear_state
+}
+
+start_cloud_docker() {
+    confirm_stop_existing
+    require_env_cloud
+    echo -e "${CYAN}${BOLD}Starting Cloud Docker...${NC}"
+    echo -e "${DIM}Frontend + backend in Docker containers, cloud DB + Redis + Storage${NC}"
+    echo -e "${DIM}Frontend: http://localhost:${PORT_CLOUD_DOCKER_FRONTEND}${NC}"
+    echo -e "${DIM}Backend:  http://localhost:${PORT_CLOUD_DOCKER_BACKEND}${NC}"
+    echo -e "${DIM}API Docs: http://localhost:${PORT_CLOUD_DOCKER_BACKEND}/api/docs${NC}"
+    echo ""
+
+    # Run preflight checks
+    "$SCRIPTS_DIR/ensure-cloud-access.sh"
+    echo ""
+
+    cd "$PROJECT_ROOT"
+    docker compose -f docker-compose.cloud.yml up -d --build
+    set_state "cloud-docker"
+
+    echo ""
+    open_browser "http://localhost:${PORT_CLOUD_DOCKER_FRONTEND}" "$PORT_CLOUD_DOCKER_FRONTEND" &
+
+    echo -e "${GREEN}Cloud Docker is running.${NC}"
+    echo -e "Use ${CYAN}cura logs${NC} to view logs, ${CYAN}cura stop${NC} to shut down."
+}
+
+# ============================================================================
+# Section 5: Stop
+# ============================================================================
+
+stop_mode() {
+    local mode="$1"
+    echo -e "${YELLOW}Stopping $(mode_label "$mode")...${NC}"
+
+    case "$mode" in
+        local)
+            cd "$PROJECT_ROOT"
+            docker compose down
+            ;;
+        cloud-native)
+            # Kill processes on the cloud native ports
+            local pids_be pids_fe
+            pids_be=$(lsof -ti ":$PORT_CLOUD_NATIVE_BACKEND" 2>/dev/null || true)
+            pids_fe=$(lsof -ti ":$PORT_CLOUD_NATIVE_FRONTEND" 2>/dev/null || true)
+            for pid in $pids_be $pids_fe; do
+                kill "$pid" 2>/dev/null || true
+            done
+            # Also kill any celery workers started by dev-cloud.sh
+            pkill -f "celery -A app.workers.celery_app worker" 2>/dev/null || true
+            ;;
+        cloud-docker)
+            cd "$PROJECT_ROOT"
+            docker compose -f docker-compose.cloud.yml down
+            ;;
+        *)
+            echo -e "${DIM}Nothing to stop.${NC}"
+            return
+            ;;
+    esac
+
+    clear_state
+    echo -e "${GREEN}Stopped.${NC}"
+}
+
+stop_all() {
+    local mode
+    mode=$(detect_running_mode)
+    if [ -z "$mode" ]; then
+        echo -e "${DIM}No dev environment detected.${NC}"
+        clear_state
+        return
+    fi
+    stop_mode "$mode"
+}
+
+# ============================================================================
+# Section 6: Status, Logs, Build, Migrate
+# ============================================================================
+
+show_status() {
+    local mode
+    mode=$(detect_running_mode)
+
+    echo -e "${BOLD}Dev Environment Status${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    if [ -n "$mode" ]; then
+        echo -e "  Mode: ${GREEN}$(mode_label "$mode")${NC}  ${DIM}— $(mode_description "$mode")${NC}"
+    else
+        echo -e "  Mode: ${DIM}Not running${NC}"
+    fi
+    echo ""
+
+    # Port status
+    echo -e "${BOLD}Ports${NC}"
+    echo -e "  ${DIM}Local${NC}"
+    for port in $PORT_LOCAL_FRONTEND $PORT_LOCAL_BACKEND; do
+        if check_port "$port"; then
+            local proc
+            proc=$(lsof -i ":$port" -sTCP:LISTEN -t 2>/dev/null | head -1)
+            local pname=""
+            if [ -n "$proc" ]; then
+                pname=$(ps -p "$proc" -o comm= 2>/dev/null || echo "?")
+            fi
+            echo -e "    :${port}  ${GREEN}listening${NC}  ${DIM}(${pname})${NC}"
+        else
+            echo -e "    :${port}  ${DIM}free${NC}"
+        fi
+    done
+    echo -e "  ${DIM}Cloud Native${NC}"
+    for port in $PORT_CLOUD_NATIVE_FRONTEND $PORT_CLOUD_NATIVE_BACKEND; do
+        if check_port "$port"; then
+            local proc
+            proc=$(lsof -i ":$port" -sTCP:LISTEN -t 2>/dev/null | head -1)
+            local pname=""
+            if [ -n "$proc" ]; then
+                pname=$(ps -p "$proc" -o comm= 2>/dev/null || echo "?")
+            fi
+            echo -e "    :${port}  ${GREEN}listening${NC}  ${DIM}(${pname})${NC}"
+        else
+            echo -e "    :${port}  ${DIM}free${NC}"
+        fi
+    done
+    echo -e "  ${DIM}Cloud Docker${NC}"
+    for port in $PORT_CLOUD_DOCKER_FRONTEND $PORT_CLOUD_DOCKER_BACKEND; do
+        if check_port "$port"; then
+            local proc
+            proc=$(lsof -i ":$port" -sTCP:LISTEN -t 2>/dev/null | head -1)
+            local pname=""
+            if [ -n "$proc" ]; then
+                pname=$(ps -p "$proc" -o comm= 2>/dev/null || echo "?")
+            fi
+            echo -e "    :${port}  ${GREEN}listening${NC}  ${DIM}(${pname})${NC}"
+        else
+            echo -e "    :${port}  ${DIM}free${NC}"
+        fi
+    done
+    echo ""
+
+    # Docker containers
+    echo -e "${BOLD}Docker Containers${NC}"
+    local containers
+    containers=$(docker ps --format '  {{.Names}}  {{.Status}}  {{.Ports}}' 2>/dev/null | grep -E "(${LOCAL_PREFIX}|${CLOUD_PREFIX})" || true)
+    if [ -n "$containers" ]; then
+        echo "$containers"
+    else
+        echo -e "  ${DIM}No dev containers running${NC}"
+    fi
+}
+
+tail_logs() {
+    local mode
+    mode=$(detect_running_mode)
+    local service="${1:-}"
+
+    case "$mode" in
+        local)
+            if [ -n "$service" ]; then
+                docker compose logs -f "$service"
+            else
+                docker compose logs -f
+            fi
+            ;;
+        cloud-docker)
+            if [ -n "$service" ]; then
+                docker compose -f docker-compose.cloud.yml logs -f "$service"
+            else
+                docker compose -f docker-compose.cloud.yml logs -f
+            fi
+            ;;
+        cloud-native)
+            echo -e "${YELLOW}Logs are in the foreground terminal where the mode was started.${NC}"
+            echo "Use Ctrl+C in that terminal to stop, or cura stop from here."
+            ;;
+        *)
+            echo -e "${DIM}No dev environment running.${NC}"
+            ;;
+    esac
+}
+
+build_images() {
+    local target="${1:-}"
+    cd "$PROJECT_ROOT"
+
+    case "$target" in
+        backend)
+            echo -e "${CYAN}Building backend images...${NC}"
+            docker compose build backend celery-worker celery-worker-clustering celery-worker-generation
+            ;;
+        frontend)
+            echo -e "${CYAN}Building frontend image...${NC}"
+            docker compose build frontend
+            ;;
+        ""|all)
+            echo -e "${CYAN}Building all images...${NC}"
+            docker compose build
+            ;;
+        *)
+            echo -e "${RED}Unknown build target: $target${NC}"
+            echo "Usage: cura build [backend|frontend|all]"
+            exit 1
+            ;;
+    esac
+
+    echo -e "${GREEN}Build complete.${NC}"
+}
+
+run_migrate() {
+    local mode
+    mode=$(detect_running_mode)
+
+    case "$mode" in
+        local)
+            echo -e "${CYAN}Running migrations in local Docker...${NC}"
+            docker compose exec backend alembic upgrade head
+            ;;
+        cloud-docker)
+            echo -e "${CYAN}Running migrations in cloud Docker...${NC}"
+            docker compose -f docker-compose.cloud.yml exec backend alembic upgrade head
+            ;;
+        cloud-native)
+            echo -e "${CYAN}Running migrations against cloud DB...${NC}"
+            cd "$PROJECT_ROOT/backend"
+            set -a
+            source "$PROJECT_ROOT/.env.cloud"
+            set +a
+            alembic upgrade head
+            ;;
+        *)
+            echo -e "${YELLOW}No running environment detected.${NC}"
+            echo "Start an environment first, then run: cura migrate"
+            exit 1
+            ;;
+    esac
+
+    echo -e "${GREEN}Migrations complete.${NC}"
+}
+
+# ============================================================================
+# Section 7: Azure commands
+# ============================================================================
+
+azure_cmd() {
+    local subcmd="${1:-}"
+    case "$subcmd" in
+        start)
+            echo -e "${CYAN}Starting Azure DEV resources...${NC}"
+            "$SCRIPTS_DIR/dev-env-start.sh"
+            ;;
+        stop)
+            echo -e "${YELLOW}Stopping Azure DEV resources...${NC}"
+            "$SCRIPTS_DIR/dev-env-stop.sh"
+            ;;
+        status)
+            "$SCRIPTS_DIR/dev-env-status.sh"
+            ;;
+        setup)
+            azure_setup
+            ;;
+        *)
+            echo "Usage: cura azure [start|stop|status|setup]"
+            exit 1
+            ;;
+    esac
+}
+
+azure_setup() {
+    echo -e "${CYAN}Setting up .env.cloud from Azure secrets...${NC}"
+    "$SCRIPTS_DIR/setup-cloud-env.sh"
+}
+
+# ============================================================================
+# Section 8: Interactive menu
+# ============================================================================
+
+show_menu() {
+    local mode
+    mode=$(detect_running_mode)
+
+    echo ""
+    echo -e "${BOLD}Cura.ai — Dev Launcher${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    if [ -n "$mode" ]; then
+        echo -e "  Active: ${GREEN}$(mode_label "$mode")${NC}  ${DIM}— $(mode_description "$mode")${NC}"
+    else
+        echo -e "  Active: ${DIM}Nothing running${NC}"
+    fi
+    echo ""
+
+    echo -e "${BOLD}Start an environment:${NC}"
+    echo -e "  ${CYAN}1${NC})  Local          ${DIM}All in Docker, local data          (3000/8000)${NC}"
+    echo -e "  ${CYAN}2${NC})  Cloud Native   ${DIM}Native on host, cloud data         (3001/8001)${NC}"
+    echo -e "  ${CYAN}3${NC})  Cloud Docker   ${DIM}All in Docker, cloud data          (3002/8002)${NC}"
+    echo ""
+    echo -e "${BOLD}Manage:${NC}"
+    echo -e "  ${CYAN}4${NC})  Stop current environment"
+    echo -e "  ${CYAN}5${NC})  Show status"
+    echo -e "  ${CYAN}6${NC})  Tail logs"
+    echo -e "  ${CYAN}7${NC})  Build Docker images"
+    echo -e "  ${CYAN}8${NC})  Run migrations"
+    echo ""
+    echo -e "${BOLD}Azure:${NC}"
+    echo -e "  ${CYAN}a${NC})  Azure DEV start"
+    echo -e "  ${CYAN}b${NC})  Azure DEV stop"
+    echo -e "  ${CYAN}c${NC})  Azure DEV status"
+    echo -e "  ${CYAN}d${NC})  Azure setup (.env.cloud)"
+    echo ""
+    echo -e "  ${CYAN}q${NC})  Quit"
+    echo ""
+
+    read -rp "Choose: " choice
+    echo ""
+
+    case "$choice" in
+        1) start_local ;;
+        2) start_cloud_native ;;
+        3) start_cloud_docker ;;
+        4) stop_all ;;
+        5) show_status ;;
+        6) tail_logs ;;
+        7) build_images ;;
+        8) run_migrate ;;
+        a|A) azure_cmd start ;;
+        b|B) azure_cmd stop ;;
+        c|C) azure_cmd status ;;
+        d|D) azure_cmd setup ;;
+        q|Q) exit 0 ;;
+        *) echo -e "${RED}Invalid choice.${NC}" ;;
+    esac
+}
+
+# ============================================================================
+# Section 9: Help
+# ============================================================================
+
+show_help() {
+    echo -e "${BOLD}Cura.ai${NC} — development launcher"
+    echo ""
+    echo -e "${BOLD}Usage:${NC} cura [command] [args]"
+    echo ""
+    echo -e "${BOLD}Environments:${NC}"
+    echo "  local              All in Docker, local data               (3000/8000)"
+    echo "  cloud-native       Native on host, cloud data, hot-reload  (3001/8001)"
+    echo "  cloud-docker       All in Docker, cloud data               (3002/8002)"
+    echo ""
+    echo -e "${BOLD}Commands:${NC}"
+    echo "  (no args)          Interactive menu"
+    echo "  local              Start Local environment"
+    echo "  cloud-native       Start Cloud Native environment"
+    echo "  cloud-docker       Start Cloud Docker environment"
+    echo "  stop               Stop whatever is currently running"
+    echo "  status             Show running services, ports, and containers"
+    echo "  logs [service]     Tail logs (optional service filter)"
+    echo "  build [target]     Build Docker images (backend/frontend/all)"
+    echo "  migrate            Run alembic upgrade head"
+    echo "  azure start        Start Azure DEV resources"
+    echo "  azure stop         Stop Azure DEV resources"
+    echo "  azure status       Check Azure resource status"
+    echo "  azure setup        Generate .env.cloud from Azure secrets"
+    echo "  help               Show this help"
+}
+
+# ============================================================================
+# Section 10: Main dispatcher
+# ============================================================================
+
+main() {
+    local cmd="${1:-}"
+
+    case "$cmd" in
+        "")            show_menu ;;
+        local)         start_local ;;
+        cloud-native)  start_cloud_native ;;
+        cloud)         start_cloud_native ;;
+        cloud-docker)  start_cloud_docker ;;
+        stop)          stop_all ;;
+        status)        show_status ;;
+        logs)          tail_logs "${2:-}" ;;
+        build)         build_images "${2:-}" ;;
+        migrate)       run_migrate ;;
+        azure)         azure_cmd "${2:-}" ;;
+        help|--help|-h) show_help ;;
+        *)
+            echo -e "${RED}Unknown command: $cmd${NC}"
+            echo ""
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

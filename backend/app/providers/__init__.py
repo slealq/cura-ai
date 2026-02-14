@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-def _resolve_config(db: Session | None):
+def _resolve_config(db: Session | None, user_id: int | None = None):
     """Resolve API keys and provider config from DB (with env var fallback).
 
     Returns (key_map, provider_config) where key_map is {provider_name: key_value}
@@ -54,15 +54,19 @@ def _resolve_config(db: Session | None):
         from app.services.api_key_service import get_api_key_service
         from app.services.settings_service import get_settings_service
 
-        key_service = get_api_key_service(db)
-        keys = {
-            "openai": key_service.resolve_key(APIProvider.OPENAI),
-            "anthropic": key_service.resolve_key(APIProvider.ANTHROPIC),
-            "fal": key_service.resolve_key(APIProvider.FAL),
-        }
+        key_service = get_api_key_service(db, user_id) if user_id else None
+        if key_service:
+            keys = {
+                "openai": key_service.resolve_key(APIProvider.OPENAI),
+                "anthropic": key_service.resolve_key(APIProvider.ANTHROPIC),
+                "fal": key_service.resolve_key(APIProvider.FAL),
+            }
+        else:
+            # No user context — no keys available
+            keys = {}
 
-        settings_service = get_settings_service(db)
-        provider_config = settings_service.get_provider_config()
+        settings_service = get_settings_service(db, user_id) if user_id else None
+        provider_config = settings_service.get_provider_config() if settings_service else {}
 
         return keys, provider_config
     except Exception as e:
@@ -82,9 +86,10 @@ def _token_config(config: dict) -> dict:
 def get_tagger(
     provider: Literal["openai", "anthropic"] | None = None,
     db: Session | None = None,
+    user_id: int | None = None,
 ) -> BaseTagger:
     """Get tagger instance for the specified provider."""
-    keys, config = _resolve_config(db)
+    keys, config = _resolve_config(db, user_id)
     max_tokens = _token_config(config)
     provider = provider or config.get("vision_provider") or settings.default_vision_provider
     if provider == "openai":
@@ -106,9 +111,10 @@ def get_tagger(
 def get_describer(
     provider: Literal["openai", "anthropic"] | None = None,
     db: Session | None = None,
+    user_id: int | None = None,
 ) -> BaseDescriber:
     """Get describer instance for the specified provider."""
-    keys, config = _resolve_config(db)
+    keys, config = _resolve_config(db, user_id)
     max_tokens = _token_config(config)
     provider = provider or config.get("vision_provider") or settings.default_vision_provider
     if provider == "openai":
@@ -130,9 +136,10 @@ def get_describer(
 def get_embedder(
     provider: Literal["openai", "local"] | None = None,
     db: Session | None = None,
+    user_id: int | None = None,
 ) -> BaseEmbedder:
     """Get embedder instance for the specified provider."""
-    keys, config = _resolve_config(db)
+    keys, config = _resolve_config(db, user_id)
     provider = provider or config.get("embedding_provider") or settings.default_embedding_provider
     if provider == "openai":
         return OpenAIEmbedder(
@@ -146,9 +153,10 @@ def get_embedder(
 def get_cluster_summarizer(
     provider: Literal["openai", "anthropic"] | None = None,
     db: Session | None = None,
+    user_id: int | None = None,
 ) -> BaseClusterSummarizer:
     """Get cluster summarizer instance for the specified provider."""
-    keys, config = _resolve_config(db)
+    keys, config = _resolve_config(db, user_id)
     max_tokens = _token_config(config)
     provider = provider or config.get("vision_provider") or settings.default_vision_provider
     if provider == "openai":
@@ -171,9 +179,10 @@ def get_trainer(
     provider: Literal["fal"] | None = None,
     db: Session | None = None,
     base_model: str = "flux-dev",
+    user_id: int | None = None,
 ) -> BaseTrainer:
     """Get trainer instance for the specified provider."""
-    keys, _ = _resolve_config(db)
+    keys, _ = _resolve_config(db, user_id)
     provider = provider or settings.default_training_provider
     if provider == "fal":
         return FalTrainer(api_key=keys.get("fal"), base_model=base_model)
@@ -185,9 +194,10 @@ def get_generator(
     provider: Literal["fal"] | None = None,
     db: Session | None = None,
     base_model: str = "flux-dev",
+    user_id: int | None = None,
 ) -> BaseGenerator:
     """Get generator instance for the specified provider."""
-    keys, _ = _resolve_config(db)
+    keys, _ = _resolve_config(db, user_id)
     provider = provider or settings.default_generation_provider
     if provider == "fal":
         return FalGenerator(api_key=keys.get("fal"), base_model=base_model)
@@ -198,9 +208,10 @@ def get_generator(
 def get_evaluator(
     provider: Literal["openai", "anthropic"] | None = None,
     db: Session | None = None,
+    user_id: int | None = None,
 ) -> BaseEvaluator:
     """Get evaluator instance for the specified provider."""
-    keys, config = _resolve_config(db)
+    keys, config = _resolve_config(db, user_id)
     provider = provider or config.get("vision_provider") or settings.default_vision_provider
     if provider == "openai":
         return OpenAIEvaluator(

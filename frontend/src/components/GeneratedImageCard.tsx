@@ -1,6 +1,6 @@
 'use client';
 
-import { Loader2, AlertCircle } from 'lucide-react';
+import { Loader2, AlertCircle, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { GeneratedImage } from '@/types';
 import { generationApi } from '@/lib/api';
@@ -25,9 +25,11 @@ const modelLabels: Record<string, string> = {
 export default function GeneratedImageCard({
   image,
   onClick,
+  onDelete,
 }: {
   image: GeneratedImage;
   onClick?: () => void;
+  onDelete?: (id: number) => void;
 }) {
   const thumbnailSrc = image.thumbnail_uri_medium
     ? generationApi.getThumbnailUrl(image.thumbnail_uri_medium.split('/').pop() || '')
@@ -72,6 +74,20 @@ export default function GeneratedImageCard({
               {image.status}
             </span>
           </div>
+        )}
+
+        {/* Delete button for non-completed images */}
+        {image.status !== 'completed' && onDelete && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(image.id);
+            }}
+            className="absolute top-2 left-2 z-10 p-1 rounded-full bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600"
+            title="Delete image"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
         )}
 
         {/* LoRA badge */}

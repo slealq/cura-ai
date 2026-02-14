@@ -21,9 +21,17 @@ const ENV_LABEL = process.env.NEXT_PUBLIC_ENV_LABEL || 'local';
 
 const ENV_BADGE: Record<string, { label: string; color: string } | null> = {
   local: { label: 'Local', color: 'blue' },
-  'dev-backend': { label: 'Local w/DEV Backend', color: 'amber' },
-  dev: { label: 'DEV', color: 'amber' },
+  'cloud-native': { label: 'Cloud Native', color: 'emerald' },
+  'cloud-docker': { label: 'Cloud Docker', color: 'teal' },
+  dev: { label: 'DEV', color: 'purple' },
   prod: null,
+};
+
+const BADGE_COLORS: Record<string, { bg: string; text: string; border: string; dot: string; pulse: boolean }> = {
+  blue: { bg: 'bg-blue-500/15', text: 'text-blue-500', border: 'border-blue-500/25', dot: 'bg-blue-500', pulse: false },
+  emerald: { bg: 'bg-emerald-500/15', text: 'text-emerald-500', border: 'border-emerald-500/25', dot: 'bg-emerald-500', pulse: true },
+  teal: { bg: 'bg-teal-500/15', text: 'text-teal-500', border: 'border-teal-500/25', dot: 'bg-teal-500', pulse: true },
+  purple: { bg: 'bg-purple-500/15', text: 'text-purple-500', border: 'border-purple-500/25', dot: 'bg-purple-500', pulse: true },
 };
 
 const navigation = [
@@ -51,20 +59,21 @@ export default function Sidebar() {
             <p className="text-xs text-muted-foreground">
               Image Intelligence
             </p>
-            {ENV_BADGE[ENV_LABEL] && (
-              <span className={cn(
-                'inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider border',
-                ENV_BADGE[ENV_LABEL]!.color === 'blue'
-                  ? 'bg-blue-500/15 text-blue-500 border-blue-500/25'
-                  : 'bg-amber-500/15 text-amber-500 border-amber-500/25',
-              )}>
+            {ENV_BADGE[ENV_LABEL] && (() => {
+              const colors = BADGE_COLORS[ENV_BADGE[ENV_LABEL]!.color];
+              return (
                 <span className={cn(
-                  'h-1.5 w-1.5 rounded-full',
-                  ENV_BADGE[ENV_LABEL]!.color === 'blue' ? 'bg-blue-500' : 'bg-amber-500 animate-pulse',
-                )} />
-                {ENV_BADGE[ENV_LABEL]!.label}
-              </span>
-            )}
+                  'inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider border',
+                  colors.bg, colors.text, colors.border,
+                )}>
+                  <span className={cn(
+                    'h-1.5 w-1.5 rounded-full',
+                    colors.dot, colors.pulse && 'animate-pulse',
+                  )} />
+                  {ENV_BADGE[ENV_LABEL]!.label}
+                </span>
+              );
+            })()}
           </div>
         </Link>
       </div>

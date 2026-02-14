@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { generationApi, settingsApi } from '@/lib/api';
-import { Loader2, Sparkles, ChevronDown, ChevronUp, X } from 'lucide-react';
+import { Loader2, Sparkles, ChevronDown, ChevronUp, X, KeyRound } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import GeneratedImageCard from '@/components/GeneratedImageCard';
@@ -61,6 +61,14 @@ export default function GeneratePage() {
     }
   }, [baseModelData]);
 
+  // Check if fal.ai API key is configured
+  const { data: apiKeys } = useQuery({
+    queryKey: ['api-keys'],
+    queryFn: settingsApi.getApiKeys,
+  });
+  const falKey = apiKeys?.find((k) => k.provider === 'fal');
+  const hasFalKey = falKey?.status === 'active' || falKey?.status === 'quota_exceeded';
+
   // Fetch completed LoRA models filtered by base model
   const { data: loraList } = useQuery({
     queryKey: ['lora-models', 'completed', baseModel],
@@ -75,6 +83,16 @@ export default function GeneratePage() {
   });
 
   // Generate mutation
+  const deleteMutation = useMutation({
+    mutationFn: generationApi.deleteImage,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['generated-images'] });
+    },
+    onError: (err: Error) => {
+      toast.error(`Delete failed: ${err.message}`);
+    },
+  });
+
   const generateMutation = useMutation({
     mutationFn: generationApi.generate,
     onSuccess: (data) => {
@@ -126,8 +144,28 @@ export default function GeneratePage() {
         </p>
       </div>
 
+      {/* API Key Warning */}
+      {!hasFalKey && apiKeys && (
+        <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl p-6 flex items-start gap-4">
+          <KeyRound className="h-6 w-6 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <div>
+            <h3 className="font-semibold text-amber-900 dark:text-amber-200">fal.ai API key required</h3>
+            <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
+              Image generation requires a fal.ai API key. Set one in{' '}
+              <Link href="/settings" className="underline font-medium hover:text-amber-900 dark:hover:text-amber-100">
+                Settings &rarr; API Keys
+              </Link>{' '}
+              to enable generation.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Generation Form */}
-      <section className="bg-card rounded-xl border border-border p-6 space-y-4">
+      <section className={cn(
+        'bg-card rounded-xl border border-border p-6 space-y-4',
+        !hasFalKey && apiKeys && 'opacity-50 pointer-events-none select-none'
+      )}>
         {/* Prompt */}
         <div>
           <label className="block text-sm font-medium mb-1">Prompt</label>
@@ -349,6 +387,7 @@ export default function GeneratePage() {
                 key={img.id}
                 image={img}
                 onClick={() => setSelectedImageId(img.id)}
+                onDelete={(id) => deleteMutation.mutate(id)}
               />
             ))}
           </div>

@@ -11,7 +11,6 @@ from openai import AuthenticationError as OpenAIAuthError
 from openai import RateLimitError as OpenAIRateLimitError
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
 from app.models.api_key import APIKey, APIKeyStatus, APIProvider
 from app.services.encryption import decrypt_api_key, encrypt_api_key
 
@@ -52,24 +51,11 @@ class APIKeyService:
         return None
 
     def resolve_key(self, provider: APIProvider) -> str | None:
-        """Resolve API key: user's DB key first, then env var fallback.
+        """Resolve API key from the user's stored DB key.
 
         This is the single source of truth for which key to use.
         """
-        # Try user's DB key first
-        db_key = self.get_decrypted_key(provider)
-        if db_key:
-            return db_key
-
-        # Fall back to env var
-        settings = get_settings()
-        env_keys = {
-            APIProvider.OPENAI: settings.openai_api_key,
-            APIProvider.ANTHROPIC: settings.anthropic_api_key,
-            APIProvider.FAL: settings.fal_api_key,
-        }
-        key = env_keys.get(provider, "")
-        return key if key else None
+        return self.get_decrypted_key(provider)
 
     def save_key(
         self,

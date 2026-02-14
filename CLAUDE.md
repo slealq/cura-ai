@@ -8,23 +8,48 @@ Image Model Generator - a multi-user full-stack app for AI-powered image tagging
 
 ## Environments
 
-Four environments exist, each with a UI badge in the sidebar (except PROD):
+Five environments exist, each with a UI badge in the sidebar (except PROD):
 
-| Environment | Frontend | Backend | UI Badge | How to run |
+| Environment | What runs locally | Data source | UI Badge | How to run |
 |---|---|---|---|---|
-| **Local** | Docker (localhost:3000) | Docker (localhost:8000) | Blue "Local" | `docker compose up -d` |
-| **Local w/DEV Backend** | Local dev (localhost:3001) | Azure DEV cloud | Amber "Local w/DEV Backend" | `cd frontend && npm run dev:cloud` |
-| **DEV** | Azure Static Web App | Azure Container Apps | Amber "DEV" | Merge PR to `dev` branch (CI/CD) |
-| **PROD** | Azure Static Web App | Azure Container Apps | None | Manual dispatch (CI/CD) |
+| **Local** | Everything in Docker (frontend, backend, DB, Redis) | Local containers | Blue "Local" | `cura local` |
+| **Cloud Native** | Frontend + backend natively on host (hot-reload) | Azure cloud (DB, Redis, Storage) | Emerald "Cloud Native" | `cura cloud-native` |
+| **Cloud Docker** | Frontend + backend in Docker containers | Azure cloud (DB, Redis, Storage) | Teal "Cloud Docker" | `cura cloud-docker` |
+| **DEV** | Nothing — fully deployed | Azure cloud | Purple "DEV" | Merge PR to `dev` branch (CI/CD) |
+| **PROD** | Nothing — fully deployed | Azure cloud | None | Manual dispatch (CI/CD) |
 
-The badge is controlled by `NEXT_PUBLIC_ENV_LABEL` env var (`local`, `dev-backend`, `dev`, `prod`).
+The badge is controlled by `NEXT_PUBLIC_ENV_LABEL` env var (`local`, `cloud-native`, `cloud-docker`, `dev`, `prod`).
+
+### Cura CLI
+
+All local development is managed through the `cura` launcher script at the project root. It provides a unified CLI and interactive menu for starting/stopping environments, managing Azure resources, viewing logs, building images, and running migrations.
+
+```bash
+cura                   # Interactive menu
+cura local             # Start Local environment
+cura cloud-native      # Start Cloud Native environment
+cura cloud-docker      # Start Cloud Docker environment
+cura stop              # Stop current environment
+cura status            # Show running services and ports
+cura logs [service]    # Tail logs
+cura build [target]    # Build Docker images
+cura migrate           # Run alembic upgrade head
+cura azure start|stop|status|setup   # Manage Azure DEV resources
+cura help              # Show all commands
+```
+
+**System-wide install** (symlinks to `/usr/local/bin/cura`):
+```bash
+./scripts/install.sh
+```
 
 ### Service URLs
 
 | Environment | Frontend | Backend API | API Docs |
 |---|---|---|---|
 | Local | http://localhost:3000 | http://localhost:8000 | http://localhost:8000/api/docs |
-| Local w/DEV Backend | http://localhost:3001 | https://cae-imggen-dev-backend.ambitioussand-1e60af3e.eastus.azurecontainerapps.io | Same + `/api/docs` |
+| Cloud Native | http://localhost:3001 | http://localhost:8001 (→ Azure DEV resources) | http://localhost:8001/api/docs |
+| Cloud Docker | http://localhost:3002 | http://localhost:8002 (→ Azure DEV resources) | http://localhost:8002/api/docs |
 | DEV | https://victorious-mushroom-01a2cc60f.4.azurestaticapps.net | Same as above | Same + `/api/docs` |
 | PROD | Not yet provisioned | Not yet provisioned | — |
 
@@ -44,11 +69,12 @@ The badge is controlled by `NEXT_PUBLIC_ENV_LABEL` env var (`local`, `dev-backen
 5. Promote `dev` → `master` via GitHub Actions: **Actions → "Promote to PROD" → Run workflow**
 
 **Enforcement:**
+- Pre-commit Git hook (`.githooks/pre-commit`) runs `ruff check` on backend and `npm run lint` on frontend before every commit. Commit is blocked if linters fail.
 - Pre-push Git hook (`.githooks/pre-push`) blocks direct pushes to `master` and `dev`. New clones must run `./scripts/setup-hooks.sh` to activate hooks.
 - CI guard job blocks PRs targeting `master` — only the promote workflow can update `master`.
 - Branches are auto-deleted after PR merge.
 
-**When committing changes via Claude Code:** Always commit to the current personal branch. Never push directly to `master` or `dev`.
+**When committing changes via Claude Code:** Always commit to the current personal branch. Never push directly to `master` or `dev`. The pre-commit hook will automatically run linters — if it fails, fix the issues and re-commit.
 
 ---
 
@@ -66,38 +92,24 @@ The badge is controlled by `NEXT_PUBLIC_ENV_LABEL` env var (`local`, `dev-backen
    ```
    Fix any TypeScript errors before proceeding.
 
-2. **Stop all services:**
+2. **Stop, rebuild, and start:**
    ```bash
-   docker compose down
+   cura stop && cura build && cura local
+   ```
+   Use `cura build backend` or `cura build frontend` to rebuild only what changed.
+
+3. **If there are new database migrations**, run them after containers are healthy:
+   ```bash
+   cura migrate
    ```
 
-3. **Rebuild images** (use `--no-cache` only when dependencies changed, otherwise omit it for faster builds):
+4. **Verify services are running:**
    ```bash
-   # Fast rebuild (code changes only)
-   docker compose build
-
-   # Full rebuild (dependency changes in requirements.txt or package.json)
-   docker compose build --no-cache
+   cura status
+   cura logs backend
    ```
 
-4. **Start services:**
-   ```bash
-   docker compose up -d
-   ```
-
-5. **If there are new database migrations**, run them after containers are healthy:
-   ```bash
-   docker compose exec backend alembic upgrade head
-   ```
-
-6. **Verify services are running:**
-   ```bash
-   docker compose ps
-   docker compose logs backend --tail=10
-   docker compose logs celery-worker --tail=5
-   ```
-
-7. **Quick smoke test** (all API endpoints except `/auth/login` and `/auth/register` require a Bearer token):
+5. **Quick smoke test** (all API endpoints except `/auth/login` and `/auth/register` require a Bearer token):
    ```bash
    # Get a token
    TOKEN=$(curl -s http://localhost:8000/api/auth/login -H "Content-Type: application/json" \
@@ -111,21 +123,41 @@ The badge is controlled by `NEXT_PUBLIC_ENV_LABEL` env var (`local`, `dev-backen
 
 | What changed | What to rebuild |
 |---|---|
-| Backend Python code only | `docker compose build backend celery-worker celery-worker-clustering celery-worker-generation` |
-| Frontend code only | `docker compose build frontend` |
-| Both backend + frontend | `docker compose build` |
+| Backend Python code only | `cura build backend` |
+| Frontend code only | `cura build frontend` |
+| Both backend + frontend | `cura build` |
 | `requirements.txt` or `package.json` | `docker compose build --no-cache` |
-| New Alembic migration added | Rebuild backend, then `docker compose exec backend alembic upgrade head` |
+| New Alembic migration added | `cura build backend`, then `cura migrate` |
 
-#### Running Local w/DEV Backend
+#### Cloud-Connected Development (Cloud Native / Cloud Docker)
 
-Run the frontend locally against the Azure DEV backend on port 3001 (can run simultaneously with the Docker frontend on 3000):
+Run frontend and backend locally but connected to Azure DEV resources (PostgreSQL, Redis, Blob Storage). This eliminates the gap between local and cloud — what you test locally is exactly what runs in DEV.
 
+Two modes are available:
+- **Cloud Native** (`cura cloud-native`) — runs frontend + backend + Celery workers natively on your machine with hot-reload. Best for active development.
+- **Cloud Docker** (`cura cloud-docker`) — runs frontend + backend in Docker containers. Best for pre-deploy validation.
+
+**First-time setup:**
 ```bash
-cd frontend && npm run dev:cloud
+cura azure setup     # Fetches Azure secrets, generates .env.cloud
 ```
 
-This injects `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_ENV_LABEL=dev-backend` inline — no `.env.local` changes needed.
+**Daily development:**
+```bash
+cura cloud-native    # Native hot-reload on 3001/8001
+cura cloud-docker    # Docker containers on 3002/8002
+```
+
+**Prerequisites:**
+- Azure CLI logged in (`az login`)
+- DEV environment running (`cura azure start` if stopped)
+- Backend Python deps installed (`cd backend && pip install -e ".[dev]"`) — for Cloud Native only
+- Frontend deps installed (`cd frontend && npm install`) — for Cloud Native only
+
+**When to re-run `cura azure setup`:**
+- After DEV environment stop/start cycle (Redis key changes)
+- After DB password rotation
+- If `cura cloud-native` reports Redis connectivity failures
 
 ### Deploying to DEV (Azure)
 
@@ -170,21 +202,17 @@ docker run --rm -e DATABASE_URL="postgresql://imggenadmin:<password>@psql-imggen
 The DEV environment costs ~$50-80/month when running. Stop it when not in use:
 
 ```bash
-# Check current status of all resources
-./scripts/dev-env-status.sh
-
-# Stop everything (saves ~$50-80/month)
-./scripts/dev-env-stop.sh
-
-# Start everything back up
-./scripts/dev-env-start.sh
+cura azure status    # Check current status of all resources
+cura azure stop      # Stop everything (saves ~$50-80/month)
+cura azure start     # Start everything back up
+cura azure setup     # Generate .env.cloud from Azure secrets
 ```
 
-| Script | What it does |
+| Command | What it does |
 |---|---|
-| `dev-env-status.sh` | Shows state of PostgreSQL, Redis, and all 4 Container Apps (replica counts, min/max) |
-| `dev-env-stop.sh` | Scales Container Apps to 0/0, stops PostgreSQL, deletes Redis (Basic SKU has no stop). Saves Redis key to `.redis-key-dev` |
-| `dev-env-start.sh` | Starts PostgreSQL (~1-2 min), recreates Redis Basic C0 (~5-10 min), updates Container App secrets with new Redis connection, scales apps back (backend 1/3, workers 1/2 or 1/1), polls for backend health, adds DB firewall rule for current IP |
+| `cura azure status` | Shows state of PostgreSQL, Redis, and all 4 Container Apps (replica counts, min/max) |
+| `cura azure stop` | Scales Container Apps to 0/0, stops PostgreSQL, deletes Redis (Basic SKU has no stop). Saves Redis key to `.redis-key-dev` |
+| `cura azure start` | Starts PostgreSQL (~1-2 min), recreates Redis Basic C0 (~5-10 min), updates Container App secrets with new Redis connection, scales apps back (backend 1/3, workers 1/2 or 1/1), polls for backend health, adds DB firewall rule for current IP |
 
 ### Deploying to PROD (Azure)
 

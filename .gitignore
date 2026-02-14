@@ -38,6 +38,7 @@ env/
 .env
 .env.local
 .env.*.local
+.env.cloud
 
 # Storage
 storage/
@@ -60,6 +61,9 @@ Thumbs.db
 
 # Docker
 *.log
+
+# Cura launcher state
+.cura-mode
 
 # Database
 *.db

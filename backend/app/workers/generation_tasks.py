@@ -87,6 +87,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
         message=f"Task train_lora started for lora_model {lora_model_id}",
         task_name="train_lora",
         job_id=job_id,
+        user_id=user_id,
     )
     task_start = time.monotonic()
     db = _get_db()
@@ -106,7 +107,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
         if existing_request_id:
             logger.info(f"Resuming training poll for LoRA {lora_model_id}, request_id={existing_request_id}")
             request_id = existing_request_id
-            trainer = get_trainer(lora.training_provider, db=db, base_model=lora.base_model)
+            trainer = get_trainer(lora.training_provider, db=db, base_model=lora.base_model, user_id=user_id)
         else:
             # Update status to training
             gen_service.update_lora_status(lora_model_id, LoraModelStatus.TRAINING)
@@ -151,7 +152,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
 
             # Instantiate trainer early so _ensure_fal_key() sets FAL_KEY
             # before any fal_client calls (e.g. upload)
-            trainer = get_trainer(lora.training_provider, db=db, base_model=lora.base_model)
+            trainer = get_trainer(lora.training_provider, db=db, base_model=lora.base_model, user_id=user_id)
 
             trainer_kwargs = {}
 
@@ -304,6 +305,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
             task_name="train_lora",
             job_id=job_id,
             duration_ms=round(elapsed, 1),
+            user_id=user_id,
         )
         return {"status": "success", "lora_model_id": lora_model_id, "lora_url": result.lora_url}
 
@@ -319,6 +321,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
             job_id=job_id,
             duration_ms=round(elapsed, 1),
             extra={"error": err_msg},
+            user_id=user_id,
         )
         gen_service = get_generation_service(db, user_id)
         gen_service.update_lora_status(lora_model_id, LoraModelStatus.FAILED, err_msg)
@@ -328,7 +331,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
         db.close()
 
 
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=30)
+@celery_app.task(bind=True)
 def generate_image(self, generated_image_id: int, job_id: int | None = None, user_id: int | None = None) -> dict:
     """
     Generate a single image via fal.ai.
@@ -338,6 +341,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
         message=f"Task generate_image started for generated_image {generated_image_id}",
         task_name="generate_image",
         job_id=job_id,
+        user_id=user_id,
     )
     task_start = time.monotonic()
     db = _get_db()
@@ -365,7 +369,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
         params = gen.generation_params or {}
 
         # Generate
-        generator = get_generator(gen.generation_provider, db=db, base_model=gen.base_model)
+        generator = get_generator(gen.generation_provider, db=db, base_model=gen.base_model, user_id=user_id)
         result = _run_async(
             generator.generate(
                 prompt=gen.prompt,
@@ -401,6 +405,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
             task_name="generate_image",
             job_id=job_id,
             duration_ms=round(elapsed, 1),
+            user_id=user_id,
         )
         return {"status": "success", "generated_image_id": generated_image_id}
 
@@ -416,6 +421,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
             job_id=job_id,
             duration_ms=round(elapsed, 1),
             extra={"error": err_msg},
+            user_id=user_id,
         )
         # Mark as failed
         gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
@@ -424,9 +430,24 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
             gen.error_message = err_msg
             db.commit()
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
-        raise self.retry(exc=e)
+        raise
     finally:
         db.close()
+
+
+def _mark_generated_images_cancelled(db: Session, generated_image_ids: list[int]) -> None:
+    """Mark pending/generating images as failed due to cancellation."""
+    db.query(GeneratedImage).filter(
+        GeneratedImage.id.in_(generated_image_ids),
+        GeneratedImage.status.in_([GenerationStatus.PENDING, GenerationStatus.GENERATING]),
+    ).update(
+        {
+            GeneratedImage.status: GenerationStatus.FAILED,
+            GeneratedImage.error_message: "Cancelled by user",
+        },
+        synchronize_session="fetch",
+    )
+    db.commit()
 
 
 @celery_app.task(bind=True)
@@ -439,6 +460,7 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
         message=f"Task batch_generate started ({len(generated_image_ids)} images)",
         task_name="batch_generate",
         job_id=job_id,
+        user_id=user_id,
     )
     task_start = time.monotonic()
     db = _get_db()
@@ -446,6 +468,7 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
         job = db.query(Job).filter(Job.id == job_id).first() if job_id else None
 
         if job and job.status == JobStatus.CANCELLED:
+            _mark_generated_images_cancelled(db, generated_image_ids)
             return {"status": "cancelled", "total": len(generated_image_ids)}
 
         if job:
@@ -465,6 +488,7 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
             if job_id:
                 job = db.query(Job).filter(Job.id == job_id).first()
                 if job and job.status == JobStatus.CANCELLED:
+                    _mark_generated_images_cancelled(db, generated_image_ids)
                     return {"status": "cancelled", "total": len(generated_image_ids)}
 
             done_count = (
@@ -513,6 +537,7 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
             task_name="batch_generate",
             job_id=job_id,
             duration_ms=round(elapsed, 1),
+            user_id=user_id,
         )
         return {"status": "success", "total": len(generated_image_ids), "succeeded": succeeded, "failed": failed_count}
 
@@ -528,6 +553,7 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
             job_id=job_id,
             duration_ms=round(elapsed, 1),
             extra={"error": err_msg},
+            user_id=user_id,
         )
         if job_id:
             job = db.query(Job).filter(Job.id == job_id).first()
@@ -582,6 +608,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
         message=f"Task evaluate_lora started for evaluation {evaluation_id}",
         task_name="evaluate_lora",
         job_id=job_id,
+        user_id=user_id,
     )
     task_start = time.monotonic()
     db = _get_db()
@@ -654,19 +681,19 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                 db.commit()
 
         # Get generator
-        generator = get_generator(db=db, base_model=lora.base_model)
+        generator = get_generator(db=db, base_model=lora.base_model, user_id=user_id)
 
         # Get evaluator (used for both vision_eval and creative eval)
         evaluator = None
         if "vision_eval" in metrics_enabled or creative_count > 0:
-            evaluator = get_evaluator(provider=vision_eval_provider, db=db)
+            evaluator = get_evaluator(provider=vision_eval_provider, db=db, user_id=user_id)
 
         # Get embedder + describer for embedding similarity
         embedder = None
         describer = None
         if "embedding_similarity" in metrics_enabled:
-            embedder = get_embedder(db=db)
-            describer = get_describer(db=db)
+            embedder = get_embedder(db=db, user_id=user_id)
+            describer = get_describer(db=db, user_id=user_id)
 
         progress_idx = 0
 
@@ -1026,6 +1053,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
             task_name="evaluate_lora",
             job_id=job_id,
             duration_ms=round(elapsed, 1),
+            user_id=user_id,
         )
         return {
             "status": "success",
@@ -1047,6 +1075,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
             job_id=job_id,
             duration_ms=round(elapsed, 1),
             extra={"error": err_msg},
+            user_id=user_id,
         )
         eval_service = get_evaluation_service(db, user_id)
         eval_service.update_evaluation_status(evaluation_id, EvaluationStatus.FAILED, error_message=err_msg)

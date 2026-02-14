@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { generationApi } from '@/lib/api';
+import { generationApi, settingsApi } from '@/lib/api';
 import {
   Loader2,
   Plus,
@@ -15,6 +15,7 @@ import {
   XCircle,
   Archive,
   FlaskConical,
+  KeyRound,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
@@ -203,6 +204,14 @@ export default function ModelsPage() {
   const [showTrainModal, setShowTrainModal] = useState(false);
   const [selectedModel, setSelectedModel] = useState<LoraModel | null>(null);
 
+  // Check if fal.ai API key is configured
+  const { data: apiKeys } = useQuery({
+    queryKey: ['api-keys'],
+    queryFn: settingsApi.getApiKeys,
+  });
+  const falKey = apiKeys?.find((k) => k.provider === 'fal');
+  const hasFalKey = falKey?.status === 'active' || falKey?.status === 'quota_exceeded';
+
   // Fetch LoRA models
   const { data: loraData, isLoading } = useQuery({
     queryKey: ['lora-models'],
@@ -224,6 +233,23 @@ export default function ModelsPage() {
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
+      {/* API Key Warning */}
+      {!hasFalKey && apiKeys && (
+        <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl p-6 flex items-start gap-4">
+          <KeyRound className="h-6 w-6 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <div>
+            <h3 className="font-semibold text-amber-900 dark:text-amber-200">fal.ai API key required</h3>
+            <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
+              LoRA training requires a fal.ai API key. Set one in{' '}
+              <Link href="/settings" className="underline font-medium hover:text-amber-900 dark:hover:text-amber-100">
+                Settings &rarr; API Keys
+              </Link>{' '}
+              to enable training.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">LoRA Models</h1>
@@ -233,7 +259,8 @@ export default function ModelsPage() {
         </div>
         <button
           onClick={() => setShowTrainModal(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors font-medium text-sm"
+          disabled={!hasFalKey}
+          className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors font-medium text-sm disabled:opacity-50 disabled:pointer-events-none"
         >
           <Plus className="h-4 w-4" />
           Train New LoRA

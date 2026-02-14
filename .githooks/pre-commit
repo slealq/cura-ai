@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+#
+# Pre-commit hook: runs linters on staged files before committing.
+#
+# Checks:
+#   - ruff check on staged Python files in backend/
+#   - next lint on staged frontend files in frontend/src/
+#
+# Install: git config core.hooksPath .githooks
+#          (or run: ./scripts/setup-hooks.sh)
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+FAILED=0
+
+# --- Backend: ruff check on staged .py files ---
+STAGED_PY=$(git diff --cached --name-only --diff-filter=ACM -- 'backend/*.py' | head -200)
+
+if [[ -n "$STAGED_PY" ]]; then
+    echo "Running ruff check on staged Python files..."
+    if command -v ruff &>/dev/null; then
+        # Run ruff on the full backend (matches CI behavior)
+        if ! ruff check "$REPO_ROOT/backend/"; then
+            echo ""
+            echo "  ruff check failed. Fix errors above or run: cd backend && ruff check --fix ."
+            echo ""
+            FAILED=1
+        fi
+    else
+        # Try via docker if ruff not installed locally
+        if docker compose exec -T backend ruff check /app/ 2>/dev/null; then
+            :
+        else
+            echo "  Warning: ruff not found locally and docker check failed. Skipping Python lint."
+        fi
+    fi
+fi
+
+# --- Frontend: eslint on staged .ts/.tsx files ---
+STAGED_TS=$(git diff --cached --name-only --diff-filter=ACM -- 'frontend/src/*.ts' 'frontend/src/*.tsx' | head -200)
+
+if [[ -n "$STAGED_TS" ]]; then
+    echo "Running eslint on staged frontend files..."
+    if [[ -f "$REPO_ROOT/frontend/node_modules/.bin/next" ]]; then
+        if ! (cd "$REPO_ROOT/frontend" && npm run lint --silent 2>&1); then
+            echo ""
+            echo "  Frontend lint failed. Fix errors above or run: cd frontend && npm run lint"
+            echo ""
+            FAILED=1
+        fi
+    else
+        echo "  Warning: frontend node_modules not installed. Skipping frontend lint."
+    fi
+fi
+
+if [[ $FAILED -ne 0 ]]; then
+    echo "Pre-commit checks failed. Commit aborted."
+    exit 1
+fi
+
+exit 0

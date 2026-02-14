@@ -435,6 +435,11 @@ export const jobsApi = {
     const { data } = await api.get(`/jobs/${jobId}/images`);
     return data;
   },
+
+  retry: async (jobId: number): Promise<{ status: string; job_id: number }> => {
+    const { data } = await api.post(`/jobs/${jobId}/retry`);
+    return data;
+  },
 };
 
 // Settings API

@@ -9,10 +9,12 @@ import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
 import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { useJobNotifications } from '@/hooks/useJobNotifications';
 import { useEffect } from 'react';
 
 function AppShell({ children }: { children: React.ReactNode }) {
   const { resolvedTheme } = useTheme();
+  useJobNotifications();
 
   return (
     <>
