@@ -442,34 +442,72 @@ build_images() {
 }
 
 run_migrate() {
+    local target="${1:-}"
+
+    # Explicit target: cura migrate cloud | cura migrate local
+    if [ "$target" = "cloud" ]; then
+        run_migrate_cloud
+        return
+    elif [ "$target" = "local" ]; then
+        run_migrate_local
+        return
+    elif [ -n "$target" ]; then
+        echo -e "${RED}Unknown migrate target: $target${NC}"
+        echo "Usage: cura migrate [cloud|local]"
+        exit 1
+    fi
+
+    # No target — infer from running mode
     local mode
     mode=$(detect_running_mode)
 
     case "$mode" in
         local)
-            echo -e "${CYAN}Running migrations in local Docker...${NC}"
-            docker compose exec backend alembic upgrade head
+            run_migrate_local
             ;;
         cloud-docker)
             echo -e "${CYAN}Running migrations in cloud Docker...${NC}"
             docker compose -f docker-compose.cloud.yml exec backend alembic upgrade head
+            echo -e "${GREEN}Migrations complete.${NC}"
             ;;
         cloud-native)
-            echo -e "${CYAN}Running migrations against cloud DB...${NC}"
-            cd "$PROJECT_ROOT/backend"
-            set -a
-            source "$PROJECT_ROOT/.env.cloud"
-            set +a
-            alembic upgrade head
+            run_migrate_cloud
             ;;
         *)
             echo -e "${YELLOW}No running environment detected.${NC}"
-            echo "Start an environment first, then run: cura migrate"
+            echo "Specify a target explicitly: cura migrate cloud  or  cura migrate local"
             exit 1
             ;;
     esac
+}
 
+run_migrate_local() {
+    local mode
+    mode=$(detect_running_mode)
+    if [ "$mode" = "local" ]; then
+        echo -e "${CYAN}Running migrations in local Docker...${NC}"
+        docker compose exec backend alembic upgrade head
+    else
+        echo -e "${YELLOW}Local containers not running. Starting postgres temporarily...${NC}"
+        cd "$PROJECT_ROOT"
+        docker compose up -d postgres
+        sleep 3
+        docker compose run --rm backend alembic upgrade head
+    fi
     echo -e "${GREEN}Migrations complete.${NC}"
+}
+
+run_migrate_cloud() {
+    require_env_cloud
+    echo -e "${CYAN}Running migrations against Azure DEV database...${NC}"
+    cd "$PROJECT_ROOT/backend"
+    (
+        set -a
+        source "$PROJECT_ROOT/.env.cloud"
+        set +a
+        alembic upgrade head
+    )
+    echo -e "${GREEN}Migrations complete (cloud).${NC}"
 }
 
 # ============================================================================
@@ -593,7 +631,9 @@ show_help() {
     echo "  status             Show running services, ports, and containers"
     echo "  logs [service]     Tail logs (optional service filter)"
     echo "  build [target]     Build Docker images (backend/frontend/all)"
-    echo "  migrate            Run alembic upgrade head"
+    echo "  migrate            Run alembic upgrade head (auto-detects environment)"
+    echo "  migrate cloud      Run migrations against Azure DEV database"
+    echo "  migrate local      Run migrations against local Docker database"
     echo "  azure start        Start Azure DEV resources"
     echo "  azure stop         Stop Azure DEV resources"
     echo "  azure status       Check Azure resource status"
@@ -619,7 +659,7 @@ main() {
         status)        show_status ;;
         logs)          tail_logs "${2:-}" ;;
         build)         build_images "${2:-}" ;;
-        migrate)       run_migrate ;;
+        migrate)       run_migrate "${2:-}" ;;
         azure)         azure_cmd "${2:-}" ;;
         help|--help|-h) show_help ;;
         *)

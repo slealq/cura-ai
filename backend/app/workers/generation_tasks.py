@@ -72,6 +72,69 @@ def _unwrap_error(e: Exception) -> str:
     return str(e)
 
 
+def _download_lora_weights(db: Session, lora_model_id: int, lora_url: str, user_id: int) -> None:
+    """Download LoRA safetensors file from provider CDN and store locally."""
+    import hashlib
+
+    import httpx
+
+    from app.services.storage import get_storage_service
+
+    logger.info(f"Downloading LoRA weights for model {lora_model_id} from {lora_url[:80]}...")
+
+    response = httpx.get(lora_url, timeout=300, follow_redirects=True)
+    response.raise_for_status()
+    file_data = response.content
+
+    object_key = f"{uuid.uuid4().hex}.safetensors"
+    file_size = len(file_data)
+    file_hash = hashlib.sha256(file_data).hexdigest()
+
+    storage = get_storage_service()
+    storage_uri = _run_async(storage.save_lora_weights(file_data, object_key))
+
+    gen_service = get_generation_service(db, user_id)
+    gen_service.update_lora_weights(
+        lora_id=lora_model_id,
+        weights_object_key=object_key,
+        lora_local_path=storage_uri,
+        file_size=file_size,
+        file_hash=file_hash,
+    )
+
+    logger.info(
+        f"LoRA weights stored for model {lora_model_id}: "
+        f"{file_size} bytes, hash={file_hash[:12]}..."
+    )
+
+
+@celery_app.task(bind=True)
+def download_lora_weights(self, lora_model_id: int, user_id: int | None = None) -> dict:
+    """Download and store LoRA weights for an existing completed model."""
+    db = _get_db()
+    try:
+        gen_service = get_generation_service(db, user_id)
+        lora = gen_service.get_lora_model(lora_model_id)
+        if not lora:
+            return {"status": "error", "message": "LoRA model not found"}
+
+        if lora.weights_object_key:
+            return {"status": "skipped", "message": "Weights already downloaded"}
+
+        if not lora.lora_url:
+            return {"status": "error", "message": "No lora_url available for download"}
+
+        _download_lora_weights(db, lora_model_id, lora.lora_url, user_id)
+        return {"status": "success", "lora_model_id": lora_model_id}
+
+    except Exception as e:
+        err_msg = _unwrap_error(e)
+        logger.error(f"Failed to download LoRA weights for model {lora_model_id}: {err_msg}")
+        return {"status": "error", "message": err_msg}
+    finally:
+        db.close()
+
+
 @celery_app.task(bind=True)
 def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int | None = None) -> dict:
     """
@@ -297,6 +360,12 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
             progress=1,
             result={"lora_url": result.lora_url, "request_id": request_id},
         )
+
+        # Best-effort download of weights — training already succeeded
+        try:
+            _download_lora_weights(db, lora_model_id, result.lora_url, user_id)
+        except Exception as dl_err:
+            logger.warning(f"Failed to download LoRA weights after training (model {lora_model_id}): {dl_err}")
 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(

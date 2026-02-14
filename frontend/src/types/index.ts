@@ -254,6 +254,11 @@ export interface LoraModel {
   job_id: number | null;
   source_preview_images: LoraPreviewImage[];
   latest_evaluation: LatestEvaluationSummary | null;
+  weights_object_key: string | null;
+  file_size: number | null;
+  file_hash: string | null;
+  weights_downloaded_at: string | null;
+  has_local_weights: boolean;
   created_at: string;
   training_started_at: string | null;
   training_completed_at: string | null;

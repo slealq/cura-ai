@@ -187,7 +187,7 @@ TABLE_SYNC_ORDER = [
         "natural_key": ["user_id", "name"],
         "exclude_cols": ["id"],
         "fk_remaps": {"user_id": "users", "folder_id": "folders", "cluster_id": "clusters", "job_id": "jobs"},
-        "thumbnail_cols": [],
+        "thumbnail_cols": ["lora_local_path"],
         "filter_by_user": True,
     },
     {
@@ -570,6 +570,14 @@ def collect_object_keys(conn, user_ids: list[int]) -> list[str]:
         if row[0]:
             keys.add(row[0])
 
+    # LoRA weights
+    result = conn.execute(text(
+        f"SELECT weights_object_key FROM lora_models WHERE user_id IN ({placeholders})"
+    ), {f"uid_{i}": uid for i, uid in enumerate(user_ids)})
+    for row in result:
+        if row[0]:
+            keys.add(row[0])
+
     return sorted(keys)
 
 
@@ -588,7 +596,12 @@ def get_file_paths_for_object_key(object_key: str) -> list[str]:
         filename = object_key
         directory = "images"
 
-    name, ext = os.path.splitext(filename)
+    # LoRA weights — no thumbnails
+    _name, ext = os.path.splitext(filename)
+    if ext == ".safetensors":
+        return [f"lora_weights/{filename}"]
+
+    name = _name
     paths = [f"{directory}/{filename}"]
 
     # Determine thumbnail directory and sizes

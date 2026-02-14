@@ -687,6 +687,16 @@ export const generationApi = {
     return data;
   },
 
+  downloadLoraWeights: async (loraId: number): Promise<{ status: string }> => {
+    const { data } = await api.post(`/generation/lora/${loraId}/download-weights`);
+    return data;
+  },
+
+  downloadAllLoraWeights: async (): Promise<{ status: string; count: number }> => {
+    const { data } = await api.post('/generation/lora/download-all-weights');
+    return data;
+  },
+
   // Generation
   generate: async (params: {
     prompt: string;

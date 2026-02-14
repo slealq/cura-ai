@@ -34,6 +34,7 @@ class StorageService:
         (self.local_path / "thumbnails").mkdir(parents=True, exist_ok=True)
         (self.local_path / "generated").mkdir(parents=True, exist_ok=True)
         (self.local_path / "generated_thumbnails").mkdir(parents=True, exist_ok=True)
+        (self.local_path / "lora_weights").mkdir(parents=True, exist_ok=True)
 
     def _init_azure(self):
         """Initialize Azure Blob Storage client."""
@@ -98,6 +99,19 @@ class StorageService:
             return await self._save_s3(file_data, f"generated/{object_key}", mime_type)
         elif self.storage_backend == "azure":
             return await self._save_azure(file_data, f"generated/{object_key}", mime_type)
+        else:
+            raise ValueError(f"Unsupported storage backend: {self.storage_backend}")
+
+    async def save_lora_weights(
+        self, file_data: bytes, object_key: str, mime_type: str = "application/octet-stream"
+    ) -> str:
+        """Save LoRA weights file to storage."""
+        if self.storage_backend == "local":
+            return await self._save_local(file_data, object_key, "lora_weights")
+        elif self.storage_backend == "s3":
+            return await self._save_s3(file_data, f"lora_weights/{object_key}", mime_type)
+        elif self.storage_backend == "azure":
+            return await self._save_azure(file_data, f"lora_weights/{object_key}", mime_type)
         else:
             raise ValueError(f"Unsupported storage backend: {self.storage_backend}")
 
@@ -166,6 +180,24 @@ class StorageService:
             return response["Body"].read()
         elif self.storage_backend == "azure":
             return await self._get_azure(f"generated/{object_key}")
+        else:
+            raise ValueError(f"Unsupported storage backend: {self.storage_backend}")
+
+    async def get_lora_weights(self, object_key: str) -> bytes:
+        """Retrieve LoRA weights data from storage."""
+        if self.storage_backend == "local":
+            file_path = self.local_path / "lora_weights" / object_key
+            return file_path.read_bytes()
+        elif self.storage_backend == "s3":
+            import boto3
+            s3 = boto3.client("s3", region_name=settings.s3_region)
+            response = s3.get_object(
+                Bucket=settings.s3_bucket,
+                Key=f"lora_weights/{object_key}"
+            )
+            return response["Body"].read()
+        elif self.storage_backend == "azure":
+            return await self._get_azure(f"lora_weights/{object_key}")
         else:
             raise ValueError(f"Unsupported storage backend: {self.storage_backend}")
 

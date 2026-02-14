@@ -56,6 +56,12 @@ class LoraModel(Base):
     lora_local_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     training_images_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
+    # Weights storage
+    weights_object_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    file_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    weights_downloaded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     # Provider metadata
     provider_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 

@@ -120,6 +120,27 @@ class GenerationService:
         self.db.refresh(lora)
         return lora
 
+    def update_lora_weights(
+        self,
+        lora_id: int,
+        weights_object_key: str,
+        lora_local_path: str,
+        file_size: int,
+        file_hash: str,
+    ) -> LoraModel | None:
+        """Update LoRA model with downloaded weights info."""
+        lora = self.db.query(LoraModel).filter(LoraModel.id == lora_id, LoraModel.user_id == self.user_id).first()
+        if not lora:
+            return None
+        lora.weights_object_key = weights_object_key
+        lora.lora_local_path = lora_local_path
+        lora.file_size = file_size
+        lora.file_hash = file_hash
+        lora.weights_downloaded_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(lora)
+        return lora
+
     def delete_lora_model(self, lora_id: int) -> bool:
         """Delete a LoRA model."""
         lora = self.db.query(LoraModel).filter(LoraModel.id == lora_id, LoraModel.user_id == self.user_id).first()
