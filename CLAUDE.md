@@ -69,11 +69,12 @@ cura help              # Show all commands
 5. Promote `dev` → `master` via GitHub Actions: **Actions → "Promote to PROD" → Run workflow**
 
 **Enforcement:**
+- Pre-commit Git hook (`.githooks/pre-commit`) runs `ruff check` on backend and `npm run lint` on frontend before every commit. Commit is blocked if linters fail.
 - Pre-push Git hook (`.githooks/pre-push`) blocks direct pushes to `master` and `dev`. New clones must run `./scripts/setup-hooks.sh` to activate hooks.
 - CI guard job blocks PRs targeting `master` — only the promote workflow can update `master`.
 - Branches are auto-deleted after PR merge.
 
-**When committing changes via Claude Code:** Always commit to the current personal branch. Never push directly to `master` or `dev`.
+**When committing changes via Claude Code:** Always commit to the current personal branch. Never push directly to `master` or `dev`. The pre-commit hook will automatically run linters — if it fails, fix the issues and re-commit.
 
 ---
 

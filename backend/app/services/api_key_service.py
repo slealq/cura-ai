@@ -11,7 +11,6 @@ from openai import AuthenticationError as OpenAIAuthError
 from openai import RateLimitError as OpenAIRateLimitError
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
 from app.models.api_key import APIKey, APIKeyStatus, APIProvider
 from app.services.encryption import decrypt_api_key, encrypt_api_key
 
