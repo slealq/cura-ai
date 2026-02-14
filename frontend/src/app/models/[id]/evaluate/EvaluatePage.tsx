@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, usePathname } from 'next/navigation';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { generationApi } from '@/lib/api';
 import {
@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
-import { cn, formatDate } from '@/lib/utils';
+import { cn, formatDate, useRouteParam } from '@/lib/utils';
 
 const statusBadge: Record<string, { color: string; label: string }> = {
   pending: { color: 'text-gray-500 bg-gray-100 dark:bg-gray-900/50', label: 'Pending' },
@@ -34,7 +34,8 @@ function scoreColor(score: number | null): string {
 export default function EvaluatePage() {
   const params = useParams();
   const router = useRouter();
-  const loraId = Number(params.id);
+  const pathname = usePathname();
+  const loraId = useRouteParam(params.id as string, 1, pathname);
 
   const [sampleCount, setSampleCount] = useState(5);
   const [creativeCount, setCreativeCount] = useState(0);

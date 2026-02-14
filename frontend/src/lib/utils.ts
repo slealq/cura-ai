@@ -101,3 +101,14 @@ export function truncate(str: string, length: number): string {
   if (str.length <= length) return str;
   return str.slice(0, length) + '...';
 }
+
+/**
+ * Extract a numeric route parameter from the URL pathname.
+ * Needed for static export where useParams() may return the fallback '_'
+ * value from pre-rendered flight data instead of the actual URL param.
+ */
+export function useRouteParam(paramValue: string, segmentIndex: number, pathname: string): number {
+  if (paramValue && paramValue !== '_') return Number(paramValue);
+  const segments = pathname.split('/').filter(Boolean);
+  return Number(segments[segmentIndex] || NaN);
+}

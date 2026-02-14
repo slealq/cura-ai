@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, usePathname } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { generationApi, imagesApi } from '@/lib/api';
 import {
@@ -19,7 +19,7 @@ import {
 import { toast } from 'sonner';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { cn, formatDate } from '@/lib/utils';
+import { cn, formatDate, useRouteParam } from '@/lib/utils';
 import type { EvaluationPair } from '@/types';
 
 function scoreColor(score: number | null): string {
@@ -247,9 +247,10 @@ function PairCard({
 export default function EvaluationResultsPage() {
   const params = useParams();
   const router = useRouter();
+  const pathname = usePathname();
   const queryClient = useQueryClient();
-  const loraId = Number(params.id);
-  const evalId = Number(params.evalId);
+  const loraId = useRouteParam(params.id as string, 1, pathname);
+  const evalId = useRouteParam(params.evalId as string, 3, pathname);
   const [showTrainingConfig, setShowTrainingConfig] = useState(false);
   const [showGenerationConfig, setShowGenerationConfig] = useState(false);
 
