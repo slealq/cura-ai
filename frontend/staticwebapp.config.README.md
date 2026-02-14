@@ -1,21 +1,31 @@
-# staticwebapp.config.json — Route Ordering
+# staticwebapp.config.json — Azure SWA Routing Constraints
 
-Azure Static Web Apps allows **at most one `*` wildcard per route**, and routes
-are matched **top-to-bottom (first match wins)**.
+Azure Static Web Apps has strict wildcard rules for routes. All three must hold:
 
-The `/models` routes are ordered carefully to work around this limitation:
+1. **Max one `*` per route** — `/a/*/b/*` is rejected
+2. **`*` must be at the END of the path** — `/a/*/b` is rejected (mid-path wildcard)
+3. **If anything follows `*`, it must be `.ext` only** — `*.txt` is OK, `*/page.txt` is rejected
 
-```
-/models/*/evaluate.txt   →  matches /models/123/evaluate.txt
-/models/*/evaluate       →  matches /models/123/evaluate
-/models/*.txt            →  catch-all for /models/123/evaluations/456.txt
-/models/*                →  catch-all for /models/123/evaluations/456
-```
+Source: SWA CLI validation in `glob.ts` — the text after `*` is checked against
+`/\.(\w+|\{\w+(,\w+)*\})$/` (a dot followed by a file extension or brace group).
 
-The evaluate routes (single path segment after the wildcard) come **before** the
-broad catch-alls. Since `*` matches across path segments (including `/`), the
-catch-alls at the bottom handle the two-segment evaluations paths without needing
-a second wildcard.
+## Consequences for `/models` routes
 
-If you add new nested routes under `/models/`, place more-specific patterns
-**above** the catch-alls to avoid them being swallowed.
+The frontend has two nested dynamic routes under `/models`:
+- `/models/[id]/evaluate` → `out/models/_/evaluate.html`
+- `/models/[id]/evaluations/[evalId]` → `out/models/_/evaluations/_.html`
+
+We **cannot** route these individually because `/models/*/evaluate` puts the
+wildcard mid-path (violates rule 2). Instead, `/models/*` is a single catch-all
+that rewrites everything to the evaluations page HTML.
+
+This means `/models/123/evaluate` gets the evaluations pre-rendered HTML, not
+the evaluate HTML. This is fine because both are `'use client'` pages — they
+render a loading spinner in the pre-rendered HTML and fetch all data client-side.
+Next.js hydration corrects the page component almost immediately.
+
+## Adding new routes
+
+Routes with a single trailing wildcard work (`/section/*`). If you need a
+new nested dynamic route like `/section/[a]/subsection/[b]`, you'll hit the
+same constraint — use a `/section/*` catch-all and rely on client-side routing.

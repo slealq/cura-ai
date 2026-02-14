@@ -4,8 +4,6 @@
     { "route": "/clusters/*", "rewrite": "/clusters/_.html" },
     { "route": "/images/folder/*.txt", "rewrite": "/images/folder/_.txt" },
     { "route": "/images/folder/*", "rewrite": "/images/folder/_.html" },
-    { "route": "/models/*/evaluate.txt", "rewrite": "/models/_/evaluate.txt" },
-    { "route": "/models/*/evaluate", "rewrite": "/models/_/evaluate.html" },
     { "route": "/models/*.txt", "rewrite": "/models/_/evaluations/_.txt" },
     { "route": "/models/*", "rewrite": "/models/_/evaluations/_.html" }
   ],
