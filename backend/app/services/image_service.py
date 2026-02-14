@@ -28,6 +28,7 @@ class ImageService:
         filename: str,
         source: ImageSource,
         original_uri: str | None = None,
+        job_id: int | None = None,
     ) -> Image:
         """
         Ingest a new image into the system.
@@ -57,6 +58,8 @@ class ImageService:
                 category=LogCategory.PIPELINE,
                 message=f"Duplicate skipped: {filename}",
                 image_id=existing.id,
+                job_id=job_id,
+                user_id=self.user_id,
                 operation="ingest",
                 duration_ms=round((time.monotonic() - start) * 1000, 1),
                 success=True,
@@ -109,6 +112,8 @@ class ImageService:
                 category=LogCategory.PIPELINE,
                 message=f"Ingested: {filename} ({width}x{height}, {len(file_data)} bytes)",
                 image_id=image.id,
+                job_id=job_id,
+                user_id=self.user_id,
                 operation="ingest",
                 duration_ms=elapsed,
                 success=True,
@@ -122,6 +127,8 @@ class ImageService:
                 category=LogCategory.PIPELINE,
                 message=f"Ingest failed: {filename} — {e}",
                 level=LogLevel.ERROR,
+                job_id=job_id,
+                user_id=self.user_id,
                 operation="ingest",
                 duration_ms=elapsed,
                 success=False,

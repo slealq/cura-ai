@@ -168,6 +168,48 @@ export const imagesApi = {
     return data;
   },
 
+  uploadChunked: async (
+    files: File[],
+    folderId?: number,
+    onProgress?: (uploaded: number, total: number) => void,
+  ): Promise<BatchUploadResponse> => {
+    const CHUNK_SIZE = 20;
+    const allUploaded: BatchUploadResponse['uploaded'] = [];
+    const allFailed: BatchUploadResponse['failed'] = [];
+    let jobId: number | null = null;
+    let folderError: string | null = null;
+
+    for (let i = 0; i < files.length; i += CHUNK_SIZE) {
+      const chunk = files.slice(i, i + CHUNK_SIZE);
+      const formData = new FormData();
+      chunk.forEach((file) => formData.append('files', file));
+
+      const params: Record<string, number> = {};
+      if (folderId) params.folder_id = folderId;
+      if (jobId !== null) {
+        params.job_id = jobId;
+      } else {
+        params.total_items = files.length;
+      }
+
+      const { data } = await api.post<BatchUploadResponse>('/images/upload/batch', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        params,
+      });
+
+      if (data.job_id && jobId === null) {
+        jobId = data.job_id;
+      }
+      allUploaded.push(...data.uploaded);
+      allFailed.push(...data.failed);
+      if (data.folder_error) folderError = data.folder_error;
+
+      onProgress?.(i + chunk.length, files.length);
+    }
+
+    return { uploaded: allUploaded, failed: allFailed, job_id: jobId, folder_error: folderError };
+  },
+
   delete: async (id: number): Promise<void> => {
     await api.delete(`/images/${id}`);
   },

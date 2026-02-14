@@ -20,6 +20,7 @@ export default function UploadPage() {
   const [selectedFolderId, setSelectedFolderId] = useState<number | undefined>();
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
+  const [uploadProgress, setUploadProgress] = useState<{ uploaded: number; total: number } | null>(null);
 
   const { data: folders } = useQuery({
     queryKey: ['folders'],
@@ -36,9 +37,13 @@ export default function UploadPage() {
         folderId = folder.id;
       }
 
-      return imagesApi.upload(filesToUpload, folderId);
+      setUploadProgress({ uploaded: 0, total: filesToUpload.length });
+      return imagesApi.uploadChunked(filesToUpload, folderId, (uploaded, total) => {
+        setUploadProgress({ uploaded, total });
+      });
     },
     onSuccess: (data) => {
+      setUploadProgress(null);
       const count = data.uploaded.length;
       const failCount = data.failed.length;
       if (count > 0) {
@@ -55,11 +60,13 @@ export default function UploadPage() {
       queryClient.invalidateQueries({ queryKey: ['images'] });
       queryClient.invalidateQueries({ queryKey: ['folders'] });
       queryClient.invalidateQueries({ queryKey: ['stats'] });
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
       setFiles([]);
       setNewFolderName('');
       setShowNewFolder(false);
     },
     onError: () => {
+      setUploadProgress(null);
       toast.error('Upload failed');
     },
   });
@@ -244,6 +251,26 @@ export default function UploadPage() {
               `Upload ${files.length} ${files.length === 1 ? 'Image' : 'Images'}`
             )}
           </button>
+
+          {/* Progress bar */}
+          {uploadProgress && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">
+                  Uploading {uploadProgress.uploaded} / {uploadProgress.total} images...
+                </span>
+                <span className="font-medium">
+                  {Math.round((uploadProgress.uploaded / uploadProgress.total) * 100)}%
+                </span>
+              </div>
+              <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-primary rounded-full transition-all duration-300"
+                  style={{ width: `${(uploadProgress.uploaded / uploadProgress.total) * 100}%` }}
+                />
+              </div>
+            </div>
+          )}
         </div>
       )}
 

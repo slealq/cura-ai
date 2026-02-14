@@ -1,5 +1,6 @@
 """Image API endpoints."""
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
@@ -72,11 +73,31 @@ async def upload_image(
 async def upload_images_batch(
     files: list[UploadFile] = File(...),
     folder_id: int | None = Query(None),
+    job_id: int | None = Query(None),
+    total_items: int | None = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Upload multiple images for processing."""
     image_service = get_image_service(db, current_user.id)
+
+    # Create or load the INGEST job for tracking
+    if job_id is not None:
+        job = db.query(Job).filter(Job.id == job_id, Job.user_id == current_user.id).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+    else:
+        job = Job(
+            job_type=JobType.INGEST,
+            status=JobStatus.RUNNING,
+            total_items=total_items or len(files),
+            progress=0,
+            user_id=current_user.id,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
     uploaded = []
     failed = []
     uploaded_image_ids = []
@@ -92,6 +113,7 @@ async def upload_images_batch(
                 file_data=file_data,
                 filename=file.filename or "upload.jpg",
                 source=ImageSource.UPLOAD,
+                job_id=job.id,
             )
 
             uploaded.append(
@@ -107,6 +129,16 @@ async def upload_images_batch(
             logger.error(f"Failed to upload {file.filename}: {e}")
             failed.append({"filename": file.filename, "error": str(e)})
 
+        # Update job progress after each file (success or fail)
+        job.progress = (job.progress or 0) + 1
+        db.commit()
+
+    # Mark job completed if all items have been processed
+    if job.progress >= job.total_items:
+        job.status = JobStatus.COMPLETED
+        job.completed_at = datetime.utcnow()
+        db.commit()
+
     folder_error = None
     if folder_id and uploaded_image_ids:
         try:
@@ -119,6 +151,7 @@ async def upload_images_batch(
     return BatchUploadResponse(
         uploaded=uploaded,
         failed=failed,
+        job_id=job.id,
         folder_error=folder_error,
     )
 
