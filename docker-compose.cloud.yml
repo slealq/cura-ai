@@ -1,0 +1,95 @@
+# Docker Compose for cloud-connected development.
+# Runs the same Docker images as cloud deployment, but connects to Azure DEV
+# resources (PostgreSQL, Redis, Blob Storage) instead of local services.
+#
+# Usage:
+#   1. Run ./scripts/setup-cloud-env.sh to generate .env.cloud
+#   2. Run ./scripts/ensure-cloud-access.sh to verify connectivity
+#   3. docker compose -f docker-compose.cloud.yml up --build
+#
+# Ports: frontend=3002, backend=8002 (avoids conflict with local Docker on 3000/8000)
+# This is a STANDALONE file (not an override). It does NOT start postgres/redis.
+
+services:
+  # FastAPI backend (connected to Azure DEV resources)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cloud-dev-backend
+    env_file:
+      - .env.cloud
+    environment:
+      LOCAL_STORAGE_PATH: /app/storage
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      FAL_API_KEY: ${FAL_API_KEY}
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./storage:/app/storage
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  # Celery worker (default queue)
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cloud-dev-celery-worker
+    env_file:
+      - .env.cloud
+    environment:
+      LOCAL_STORAGE_PATH: /app/storage
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      FAL_API_KEY: ${FAL_API_KEY}
+    volumes:
+      - ./storage:/app/storage
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=1
+
+  # Celery worker (clustering queue)
+  celery-worker-clustering:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cloud-dev-celery-clustering
+    env_file:
+      - .env.cloud
+    environment:
+      LOCAL_STORAGE_PATH: /app/storage
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      FAL_API_KEY: ${FAL_API_KEY}
+    volumes:
+      - ./storage:/app/storage
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2 -Q clustering
+
+  # Celery worker (generation queue)
+  celery-worker-generation:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cloud-dev-celery-generation
+    env_file:
+      - .env.cloud
+    environment:
+      LOCAL_STORAGE_PATH: /app/storage
+      FAL_API_KEY: ${FAL_API_KEY}
+    volumes:
+      - ./storage:/app/storage
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2 -Q generation
+
+  # Next.js frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_ENV_LABEL: cloud-docker
+    container_name: cloud-dev-frontend
+    environment:
+      INTERNAL_API_URL: http://backend:8000
+    ports:
+      - "3002:3000"
+    depends_on:
+      - backend

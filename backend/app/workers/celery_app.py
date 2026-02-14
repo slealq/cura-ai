@@ -1,5 +1,6 @@
 """Celery application configuration."""
 import logging
+import ssl
 
 from celery import Celery
 from celery.signals import worker_ready
@@ -9,6 +10,10 @@ from app.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+
+# Azure Redis requires TLS (rediss:// URLs) — configure SSL for Celery broker/backend
+_broker_ssl = {"ssl_cert_reqs": ssl.CERT_REQUIRED} if settings.celery_broker_url.startswith("rediss://") else None
+_backend_ssl = {"ssl_cert_reqs": ssl.CERT_REQUIRED} if settings.celery_result_backend.startswith("rediss://") else None
 
 celery_app = Celery(
     "design_pipeline",
@@ -56,6 +61,10 @@ celery_app.conf.update(
         "app.workers.generation_tasks.batch_generate": {"queue": "generation"},
         "app.workers.generation_tasks.evaluate_lora": {"queue": "generation"},
     },
+
+    # SSL for Azure Redis TLS (no-op when using local redis://)
+    broker_use_ssl=_broker_ssl,
+    redis_backend_use_ssl=_backend_ssl,
 
     # Beat schedule
     beat_schedule={
