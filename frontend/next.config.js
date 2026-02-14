@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 
-const isCloudBuild = !!process.env.NEXT_PUBLIC_API_URL;
+const isCloudBuild = !!process.env.NEXT_PUBLIC_API_URL && process.env.NODE_ENV === 'production';
 
 const nextConfig = {
   output: isCloudBuild ? 'export' : 'standalone',
