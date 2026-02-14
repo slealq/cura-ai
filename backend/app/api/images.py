@@ -98,46 +98,70 @@ async def upload_images_batch(
         db.commit()
         db.refresh(job)
 
+    filenames = [f.filename or "upload.jpg" for f in files]
+    logger.info(
+        f"Batch upload chunk: {len(files)} files, job_id={job.id}, "
+        f"progress_before={job.progress}/{job.total_items}, "
+        f"files={filenames}"
+    )
+
     uploaded = []
     failed = []
     uploaded_image_ids = []
 
-    for file in files:
-        if not file.content_type or not file.content_type.startswith("image/"):
-            failed.append({"filename": file.filename, "error": "Not an image file"})
-            continue
+    try:
+        for file in files:
+            if not file.content_type or not file.content_type.startswith("image/"):
+                failed.append({"filename": file.filename, "error": "Not an image file"})
+                job.progress = (job.progress or 0) + 1
+                db.commit()
+                continue
 
-        try:
-            file_data = await file.read()
-            image = await image_service.ingest_image(
-                file_data=file_data,
-                filename=file.filename or "upload.jpg",
-                source=ImageSource.UPLOAD,
-                job_id=job.id,
-            )
-
-            uploaded.append(
-                UploadResponse(
-                    image_id=image.id,
+            try:
+                file_data = await file.read()
+                image = await image_service.ingest_image(
+                    file_data=file_data,
                     filename=file.filename or "upload.jpg",
-                    status="ingested",
-                    message="Image uploaded successfully",
+                    source=ImageSource.UPLOAD,
+                    job_id=job.id,
                 )
-            )
-            uploaded_image_ids.append(image.id)
-        except Exception as e:
-            logger.error(f"Failed to upload {file.filename}: {e}")
-            failed.append({"filename": file.filename, "error": str(e)})
 
-        # Update job progress after each file (success or fail)
-        job.progress = (job.progress or 0) + 1
+                uploaded.append(
+                    UploadResponse(
+                        image_id=image.id,
+                        filename=file.filename or "upload.jpg",
+                        status="ingested",
+                        message="Image uploaded successfully",
+                    )
+                )
+                uploaded_image_ids.append(image.id)
+            except Exception as e:
+                logger.error(f"Failed to upload {file.filename}: {e}")
+                failed.append({"filename": file.filename, "error": str(e)})
+
+            # Update job progress after each file (success or fail)
+            job.progress = (job.progress or 0) + 1
+            db.commit()
+    except Exception as e:
+        # Unhandled error (DB failure, request abort, etc.) — mark job FAILED
+        logger.error(f"Batch upload chunk failed for job {job.id}: {e}")
+        job.status = JobStatus.FAILED
+        job.error_message = f"Chunk failed at progress {job.progress}/{job.total_items}: {e}"
+        job.completed_at = datetime.utcnow()
         db.commit()
+        raise
 
     # Mark job completed if all items have been processed
     if job.progress >= job.total_items:
         job.status = JobStatus.COMPLETED
         job.completed_at = datetime.utcnow()
         db.commit()
+
+    logger.info(
+        f"Batch upload chunk done: job_id={job.id}, "
+        f"uploaded={len(uploaded)}, failed={len(failed)}, "
+        f"progress={job.progress}/{job.total_items}"
+    )
 
     folder_error = None
     if folder_id and uploaded_image_ids:

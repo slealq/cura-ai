@@ -178,33 +178,63 @@ export const imagesApi = {
     const allFailed: BatchUploadResponse['failed'] = [];
     let jobId: number | null = null;
     let folderError: string | null = null;
+    let chunkError: string | null = null;
 
     for (let i = 0; i < files.length; i += CHUNK_SIZE) {
       const chunk = files.slice(i, i + CHUNK_SIZE);
       const formData = new FormData();
       chunk.forEach((file) => formData.append('files', file));
 
+      // Don't pass folder_id per chunk — defer folder assignment until all chunks complete
       const params: Record<string, number> = {};
-      if (folderId) params.folder_id = folderId;
       if (jobId !== null) {
         params.job_id = jobId;
       } else {
         params.total_items = files.length;
       }
 
-      const { data } = await api.post<BatchUploadResponse>('/images/upload/batch', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        params,
-      });
+      try {
+        const { data } = await api.post<BatchUploadResponse>('/images/upload/batch', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+          params,
+        });
 
-      if (data.job_id && jobId === null) {
-        jobId = data.job_id;
+        if (data.job_id && jobId === null) {
+          jobId = data.job_id;
+        }
+        allUploaded.push(...data.uploaded);
+        allFailed.push(...data.failed);
+
+        onProgress?.(i + chunk.length, files.length);
+      } catch (err) {
+        const chunkStart = i + 1;
+        const chunkEnd = Math.min(i + CHUNK_SIZE, files.length);
+        chunkError = `Chunk ${chunkStart}-${chunkEnd} failed: ${err instanceof Error ? err.message : String(err)}`;
+        console.error(chunkError);
+        // Mark remaining files as failed
+        for (let j = i; j < files.length; j++) {
+          allFailed.push({ filename: files[j].name, error: 'Upload aborted — previous chunk failed' });
+        }
+        onProgress?.(files.length, files.length);
+        break;
       }
-      allUploaded.push(...data.uploaded);
-      allFailed.push(...data.failed);
-      if (data.folder_error) folderError = data.folder_error;
+    }
 
-      onProgress?.(i + chunk.length, files.length);
+    // Add to folder only after all chunks completed successfully
+    if (folderId && allUploaded.length > 0) {
+      try {
+        const imageIds = allUploaded.map((u) => u.image_id);
+        await foldersApi.addImages(folderId, imageIds);
+      } catch (err) {
+        folderError = err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    // If a chunk failed, throw so the mutation's onError fires — but include partial results
+    if (chunkError) {
+      const err = new Error(chunkError) as Error & { partialResult: BatchUploadResponse };
+      err.partialResult = { uploaded: allUploaded, failed: allFailed, job_id: jobId, folder_error: folderError };
+      throw err;
     }
 
     return { uploaded: allUploaded, failed: allFailed, job_id: jobId, folder_error: folderError };

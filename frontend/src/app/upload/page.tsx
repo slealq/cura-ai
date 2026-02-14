@@ -8,6 +8,7 @@ import { Upload, X, Check, AlertCircle, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { imagesApi, foldersApi } from '@/lib/api';
 import { cn, formatFileSize } from '@/lib/utils';
+import type { BatchUploadResponse } from '@/types';
 
 interface FileWithPreview extends File {
   preview?: string;
@@ -65,9 +66,20 @@ export default function UploadPage() {
       setNewFolderName('');
       setShowNewFolder(false);
     },
-    onError: () => {
+    onError: (error: Error & { partialResult?: BatchUploadResponse }) => {
       setUploadProgress(null);
-      toast.error('Upload failed');
+      if (error.partialResult) {
+        const { uploaded, failed } = error.partialResult;
+        toast.error(
+          `Upload interrupted: ${uploaded.length} succeeded, ${failed.length} failed. ${error.message}`,
+        );
+        queryClient.invalidateQueries({ queryKey: ['images'] });
+        queryClient.invalidateQueries({ queryKey: ['jobs'] });
+        queryClient.invalidateQueries({ queryKey: ['stats'] });
+      } else {
+        toast.error(`Upload failed: ${error.message}`);
+      }
+      setFiles([]);
     },
   });
 
