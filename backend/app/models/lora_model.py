@@ -65,6 +65,9 @@ class LoraModel(Base):
     # Provider metadata
     provider_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # Example prompts (collected after training from source image descriptions)
+    example_prompts: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
     # Job tracking
     job_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True

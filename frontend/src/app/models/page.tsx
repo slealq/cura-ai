@@ -18,6 +18,8 @@ import {
   KeyRound,
   Download,
   HardDrive,
+  Copy,
+  ExternalLink,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
@@ -179,6 +181,17 @@ function LoraModelCard({
           <div className="flex items-center gap-1">
             {model.status === 'completed' && (
               <>
+                {model.has_local_weights && (
+                  <a
+                    href={generationApi.getLoraWeightsUrl(model.id)}
+                    download
+                    onClick={(e) => e.stopPropagation()}
+                    className="p-1.5 hover:bg-muted rounded-lg transition-colors text-emerald-600"
+                    title="Download .safetensors"
+                  >
+                    <Download className="h-4 w-4" />
+                  </a>
+                )}
                 <Link
                   href={`/models/${model.id}/evaluate`}
                   onClick={(e) => e.stopPropagation()}
@@ -357,7 +370,7 @@ export default function ModelsPage() {
           />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div
-              className="bg-card rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4"
+              className="bg-card rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between">
@@ -448,11 +461,21 @@ export default function ModelsPage() {
                   <div>
                     <span className="text-muted-foreground">Weights Storage</span>
                     {selectedModel.has_local_weights ? (
-                      <div className="mt-1 flex items-center gap-2 p-2 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg">
-                        <HardDrive className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                        <span className="text-sm text-emerald-700 dark:text-emerald-300">
-                          Stored locally{selectedModel.file_size ? ` (${formatFileSize(selectedModel.file_size)})` : ''}
-                        </span>
+                      <div className="mt-1 flex items-center justify-between p-2 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg">
+                        <div className="flex items-center gap-2">
+                          <HardDrive className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                          <span className="text-sm text-emerald-700 dark:text-emerald-300">
+                            Backed up{selectedModel.file_size ? ` (${formatFileSize(selectedModel.file_size)})` : ''}
+                          </span>
+                        </div>
+                        <a
+                          href={generationApi.getLoraWeightsUrl(selectedModel.id)}
+                          download
+                          className="flex items-center gap-1 px-2 py-1 text-xs bg-emerald-600 text-white rounded hover:bg-emerald-700 transition-colors"
+                        >
+                          <Download className="h-3 w-3" />
+                          Download
+                        </a>
                       </div>
                     ) : selectedModel.lora_url ? (
                       <div className="mt-1 flex items-center gap-2">
@@ -476,6 +499,43 @@ export default function ModelsPage() {
                   </div>
                 )}
 
+                {/* Example Prompts */}
+                {selectedModel.example_prompts && selectedModel.example_prompts.length > 0 && (
+                  <div>
+                    <span className="text-muted-foreground">Example Prompts</span>
+                    <div className="mt-1.5 max-h-48 overflow-y-auto space-y-1.5">
+                      {selectedModel.example_prompts.map((prompt, idx) => (
+                        <div
+                          key={idx}
+                          className="flex items-start gap-2 p-2 bg-muted/50 rounded-lg group text-xs"
+                        >
+                          <p className="flex-1 line-clamp-2 text-foreground/80">{prompt}</p>
+                          <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(prompt);
+                                toast.success('Prompt copied');
+                              }}
+                              className="p-1 hover:bg-muted rounded transition-colors"
+                              title="Copy prompt"
+                            >
+                              <Copy className="h-3 w-3" />
+                            </button>
+                            <Link
+                              href={`/generate?lora=${selectedModel.id}&prompt=${encodeURIComponent(prompt)}`}
+                              className="p-1 hover:bg-muted rounded transition-colors text-purple-600"
+                              title="Try this prompt"
+                              onClick={() => setSelectedModel(null)}
+                            >
+                              <ExternalLink className="h-3 w-3" />
+                            </Link>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {selectedModel.error_message && (
                   <div className="p-3 bg-red-50 rounded-lg">
                     <span className="text-red-700 font-medium">Error:</span>
@@ -496,6 +556,16 @@ export default function ModelsPage() {
 
               {selectedModel.status === 'completed' && (
                 <div className="flex gap-2 pt-2">
+                  {selectedModel.has_local_weights && (
+                    <a
+                      href={generationApi.getLoraWeightsUrl(selectedModel.id)}
+                      download
+                      className="flex items-center gap-2 px-4 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
+                    >
+                      <Download className="h-4 w-4" />
+                      Download
+                    </a>
+                  )}
                   <Link
                     href={`/models/${selectedModel.id}/evaluate`}
                     className="flex items-center gap-2 px-4 py-2 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors"

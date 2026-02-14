@@ -774,6 +774,10 @@ export const generationApi = {
     await api.delete(`/generation/evaluations/${evalId}`);
   },
 
+  getLoraWeightsUrl: (loraId: number): string => {
+    return authUrl(`/api/generation/lora/${loraId}/weights`);
+  },
+
   getEvalGeneratedImageUrl: (evalId: number, pairId: number): string => {
     return authUrl(`/api/generation/evaluations/${evalId}/pairs/${pairId}/generated-file`);
   },

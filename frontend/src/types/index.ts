@@ -259,6 +259,7 @@ export interface LoraModel {
   file_hash: string | null;
   weights_downloaded_at: string | null;
   has_local_weights: boolean;
+  example_prompts: string[] | null;
   created_at: string;
   training_started_at: string | null;
   training_completed_at: string | null;

@@ -108,6 +108,65 @@ def _download_lora_weights(db: Session, lora_model_id: int, lora_url: str, user_
     )
 
 
+def _collect_example_prompts(db: Session, lora_model_id: int, user_id: int) -> None:
+    """Collect example prompts from source images and save to LoRA model."""
+    from app.models.lora_model import LoraModel
+
+    lora = db.query(LoraModel).filter(LoraModel.id == lora_model_id).first()
+    if not lora:
+        return
+
+    # Get source image IDs
+    source_image_ids: list[int] = []
+    if lora.folder_id:
+        from app.models.folder import FolderImage
+        source_image_ids = [
+            fi.image_id
+            for fi in db.query(FolderImage).filter(FolderImage.folder_id == lora.folder_id).all()
+        ]
+    elif lora.cluster_id:
+        from app.models.cluster import ClusterMembership
+        source_image_ids = [
+            cm.image_id
+            for cm in db.query(ClusterMembership).filter(
+                ClusterMembership.cluster_id == lora.cluster_id,
+                ClusterMembership.is_excluded.is_(False),
+            ).all()
+        ]
+
+    if not source_image_ids:
+        return
+
+    # Filter to images with descriptions
+    image_service = get_image_service(db, user_id)
+    candidates = []
+    for img_id in source_image_ids:
+        image = image_service.get_image(img_id)
+        if image and image.image_metadata and image.image_metadata.description_long:
+            candidates.append(image)
+
+    if not candidates:
+        return
+
+    # Sample ~10% (min 3, max 10)
+    sample_size = max(3, min(10, len(candidates) // 10 or 3))
+    sample_size = min(sample_size, len(candidates))
+    sampled = random.sample(candidates, sample_size)
+
+    # Build prompts
+    prompts = []
+    for image in sampled:
+        desc = image.image_metadata.description_long
+        # Truncate long descriptions to keep prompts reasonable
+        if len(desc) > 300:
+            desc = desc[:297] + "..."
+        prompts.append(f"{lora.trigger_word}, {desc}")
+
+    lora.example_prompts = prompts
+    db.commit()
+    logger.info(f"Collected {len(prompts)} example prompts for LoRA model {lora_model_id}")
+
+
 @celery_app.task(bind=True)
 def download_lora_weights(self, lora_model_id: int, user_id: int | None = None) -> dict:
     """Download and store LoRA weights for an existing completed model."""
@@ -366,6 +425,12 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
             _download_lora_weights(db, lora_model_id, result.lora_url, user_id)
         except Exception as dl_err:
             logger.warning(f"Failed to download LoRA weights after training (model {lora_model_id}): {dl_err}")
+
+        # Best-effort collection of example prompts from source images
+        try:
+            _collect_example_prompts(db, lora_model_id, user_id)
+        except Exception as ep_err:
+            logger.warning(f"Failed to collect example prompts for model {lora_model_id}: {ep_err}")
 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(

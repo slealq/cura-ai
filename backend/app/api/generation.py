@@ -104,6 +104,7 @@ class LoraModelResponse(BaseModel):
     file_hash: str | None = None
     weights_downloaded_at: str | None = None
     has_local_weights: bool = False
+    example_prompts: list[str] | None = None
     created_at: str
     training_started_at: str | None
     training_completed_at: str | None
@@ -231,6 +232,7 @@ def _lora_to_response(lora, db: Session) -> LoraModelResponse:
         file_hash=lora.file_hash,
         weights_downloaded_at=lora.weights_downloaded_at.isoformat() if lora.weights_downloaded_at else None,
         has_local_weights=lora.weights_object_key is not None,
+        example_prompts=lora.example_prompts,
         created_at=lora.created_at.isoformat(),
         training_started_at=lora.training_started_at.isoformat() if lora.training_started_at else None,
         training_completed_at=lora.training_completed_at.isoformat() if lora.training_completed_at else None,
@@ -580,7 +582,7 @@ async def download_all_lora_weights(db: Session = Depends(get_db), current_user:
 
 
 @router.get("/lora/{lora_id}/weights")
-async def serve_lora_weights(lora_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+async def serve_lora_weights(lora_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_token_param)):
     """Serve LoRA weights file for download."""
     from app.services.storage import get_storage_service
 
