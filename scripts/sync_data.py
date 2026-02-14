@@ -17,6 +17,7 @@ Usage:
 """
 
 import argparse
+import json
 import logging
 import os
 import re
@@ -158,7 +159,7 @@ TABLE_SYNC_ORDER = [
     },
     {
         "table": "clusters",
-        "natural_key": ["user_id", "run_id"],
+        "natural_key": ["user_id", "run_id", "created_at"],
         "exclude_cols": ["id"],
         "fk_remaps": {"user_id": "users"},
         "thumbnail_cols": [],
@@ -201,7 +202,7 @@ TABLE_SYNC_ORDER = [
     },
     {
         "table": "lora_evaluations",
-        "natural_key": ["lora_model_id", "created_at"],
+        "natural_key": ["user_id", "created_at"],
         "exclude_cols": ["id"],
         "fk_remaps": {"user_id": "users", "lora_model_id": "lora_models", "job_id": "jobs"},
         "thumbnail_cols": [],
@@ -209,7 +210,7 @@ TABLE_SYNC_ORDER = [
     },
     {
         "table": "evaluation_pairs",
-        "natural_key": ["evaluation_id", "original_image_id", "pair_type"],
+        "natural_key": ["generated_object_key"],
         "exclude_cols": ["id"],
         "fk_remaps": {"evaluation_id": "lora_evaluations", "original_image_id": "images"},
         "thumbnail_cols": ["generated_thumbnail_small", "generated_thumbnail_medium"],
@@ -246,6 +247,28 @@ def get_table_columns(conn, table_name: str) -> list[str]:
         "WHERE table_name = :table ORDER BY ordinal_position"
     ), {"table": table_name})
     return [row[0] for row in result]
+
+
+def get_json_columns(conn, table_name: str) -> set[str]:
+    """Get column names that are json or jsonb type."""
+    result = conn.execute(text(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = :table AND data_type IN ('json', 'jsonb') "
+        "ORDER BY ordinal_position"
+    ), {"table": table_name})
+    return {row[0] for row in result}
+
+
+def serialize_json_values(row: dict, json_cols: set[str]) -> dict:
+    """Convert Python objects in JSON columns to JSON strings for insertion."""
+    if not json_cols:
+        return row
+    result = dict(row)
+    for col in json_cols:
+        val = result.get(col)
+        if val is not None and not isinstance(val, str):
+            result[col] = json.dumps(val)
+    return result
 
 
 def fetch_sync_enabled_user_ids(conn) -> list[int]:
@@ -402,8 +425,9 @@ def sync_table(src_conn, dst_conn, table_def: dict, user_ids_src: list[int],
 
     logger.info("Syncing table: %s", table_name)
 
-    # Get columns
+    # Get columns and detect JSON columns in destination
     all_columns = get_table_columns(src_conn, table_name)
+    json_cols = get_json_columns(dst_conn, table_name)
     sync_columns = [c for c in all_columns if c not in exclude_cols]
 
     # For users table, we need to include some extra columns but exclude hashed_password
@@ -462,6 +486,10 @@ def sync_table(src_conn, dst_conn, table_def: dict, user_ids_src: list[int],
         # Remap natural key FK values for lookup
         nk_for_lookup = list(natural_key)
 
+        # Serialize JSON column values (Python lists/dicts -> JSON strings)
+        if json_cols:
+            sync_row = serialize_json_values(sync_row, json_cols)
+
         if dry_run:
             nk_vals = {k: sync_row.get(k) for k in natural_key}
             logger.info("  [DRY RUN] Would upsert %s: %s", table_name, nk_vals)
@@ -469,11 +497,15 @@ def sync_table(src_conn, dst_conn, table_def: dict, user_ids_src: list[int],
             continue
 
         try:
+            # Use savepoint so a single row failure doesn't abort the transaction
+            dst_conn.execute(text("SAVEPOINT row_sp"))
             action = upsert_row(dst_conn, table_name, sync_row, natural_key,
                                 [c for c in all_columns if c not in exclude_cols])
+            dst_conn.execute(text("RELEASE SAVEPOINT row_sp"))
             stats.inc(action)
             logger.debug("  %s: %s", action, {k: sync_row.get(k) for k in natural_key})
         except Exception:
+            dst_conn.execute(text("ROLLBACK TO SAVEPOINT row_sp"))
             logger.exception("  Failed to upsert row in %s", table_name)
             stats.inc("failed")
 
@@ -543,20 +575,21 @@ def collect_object_keys(conn, user_ids: list[int]) -> list[str]:
 
 def get_file_paths_for_object_key(object_key: str) -> list[str]:
     """
-    Given an object_key like 'images/abc123.jpg', return all related file paths
-    (original + thumbnails).
+    Given an object_key (e.g., 'abc123.jpg' or 'images/abc123.jpg'),
+    return all related file paths (original + thumbnails).
     """
-    paths = [object_key]
-
-    # Extract base name and extension
-    # object_key format: images/abc123.jpg or generated/abc123.jpg
+    # Extract directory and filename
+    # object_key may be: 'abc123.jpg' (bare), 'images/abc123.jpg', or 'generated/abc123.jpg'
     parts = object_key.rsplit("/", 1)
     if len(parts) == 2:
         directory, filename = parts
     else:
-        return paths
+        # Bare filename — assume 'images' directory
+        filename = object_key
+        directory = "images"
 
     name, ext = os.path.splitext(filename)
+    paths = [f"{directory}/{filename}"]
 
     # Determine thumbnail directory and sizes
     if directory == "images":
