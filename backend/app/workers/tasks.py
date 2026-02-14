@@ -11,7 +11,6 @@ from app.db.base import SessionLocal
 from app.models import Image, ImageStatus, Job, JobStatus
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers import get_cluster_summarizer, get_describer, get_embedder, get_tagger
-from app.providers.base import AIContentError
 from app.services.cluster_service import get_cluster_service
 from app.services.clustering import get_clustering_service
 from app.services.image_service import get_image_service
@@ -72,7 +71,7 @@ def _update_job_status(db: Session, job_id: int | None, status: JobStatus, **kwa
     db.commit()
 
 
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
+@celery_app.task(bind=True)
 def tag_image(self, image_id: int, user_id: int, tag_prompt: str | None = None, job_id: int | None = None) -> dict:
     """
     Tag an image with categorization tags.
@@ -140,14 +139,12 @@ def tag_image(self, image_id: int, user_id: int, tag_prompt: str | None = None, 
                   duration_ms=round(elapsed, 1), extra={"error": err_msg}, user_id=user_id)
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
         image_service.update_status(image_id, ImageStatus.FAILED, err_msg)
-        if isinstance(e, AIContentError):
-            raise  # Don't retry content refusals
-        raise self.retry(exc=e)
+        raise
     finally:
         db.close()
 
 
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
+@celery_app.task(bind=True)
 def describe_image(self, image_id: int, user_id: int, description_prompt: str | None = None, job_id: int | None = None) -> dict:
     """
     Generate a detailed description for an image.
@@ -213,14 +210,12 @@ def describe_image(self, image_id: int, user_id: int, description_prompt: str | 
                   duration_ms=round(elapsed, 1), extra={"error": err_msg}, user_id=user_id)
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
         image_service.update_status(image_id, ImageStatus.FAILED, err_msg)
-        if isinstance(e, AIContentError):
-            raise  # Don't retry content refusals
-        raise self.retry(exc=e)
+        raise
     finally:
         db.close()
 
 
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
+@celery_app.task(bind=True)
 def embed_image(self, image_id: int, user_id: int, job_id: int | None = None) -> dict:
     """
     Generate embedding for an image based on its tags and description.
@@ -282,7 +277,7 @@ def embed_image(self, image_id: int, user_id: int, job_id: int | None = None) ->
                   duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)}, user_id=user_id)
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=_unwrap_error(e))
         image_service.update_status(image_id, ImageStatus.FAILED, _unwrap_error(e))
-        raise self.retry(exc=e)
+        raise
     finally:
         db.close()
 

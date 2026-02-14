@@ -11,8 +11,10 @@ from app.models.generated_image import GeneratedImage, GenerationStatus
 from app.models.user import User
 from app.schemas import BatchJobImageInfo, BatchReprocessRequest, JobListResponse, JobResponse
 from app.workers.tasks import (
+    cluster_all_images,
     describe_image,
     embed_image,
+    process_image_pipeline,
     run_batch_reprocess,
     run_full_pipeline,
     tag_image,
@@ -349,6 +351,110 @@ async def get_job_images(job_id: int, db: Session = Depends(get_db), current_use
         ))
 
     return result
+
+
+@router.post("/{job_id}/retry")
+async def retry_job(job_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Retry a failed job by creating a new job and dispatching the appropriate task."""
+    job = db.query(Job).filter(Job.id == job_id, Job.user_id == current_user.id).first()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != JobStatus.FAILED:
+        raise HTTPException(status_code=400, detail="Only failed jobs can be retried")
+
+    # Create new job record
+    new_job = Job(
+        job_type=job.job_type,
+        status=JobStatus.PENDING,
+        image_id=job.image_id,
+        total_items=job.total_items,
+        parameters=job.parameters or {},
+        user_id=current_user.id,
+    )
+    db.add(new_job)
+    db.commit()
+    db.refresh(new_job)
+
+    user_id = current_user.id
+
+    # Dispatch the appropriate Celery task
+    if job.job_type == JobType.TAG and job.image_id:
+        task = tag_image.delay(job.image_id, user_id, job_id=new_job.id)
+    elif job.job_type == JobType.DESCRIBE and job.image_id:
+        task = describe_image.delay(job.image_id, user_id, job_id=new_job.id)
+    elif job.job_type == JobType.EMBED and job.image_id:
+        task = embed_image.delay(job.image_id, user_id, job_id=new_job.id)
+    elif job.job_type == JobType.FULL_PIPELINE and job.image_id:
+        task = process_image_pipeline.delay(job.image_id, user_id, job_id=new_job.id)
+    elif job.job_type == JobType.CLUSTER:
+        task = cluster_all_images.delay(user_id, job_id=new_job.id)
+    elif job.job_type == JobType.BATCH_REPROCESS:
+        image_ids = (job.result or {}).get("image_ids", [])
+        if not image_ids:
+            db.delete(new_job)
+            db.commit()
+            raise HTTPException(status_code=400, detail="No image IDs found in original job to retry")
+        task = run_batch_reprocess.delay(new_job.id, image_ids, user_id)
+    elif job.job_type == JobType.GENERATE_IMAGE:
+        from app.workers.generation_tasks import generate_image
+        params = job.parameters or {}
+        generated_image_id = params.get("generated_image_id")
+        if not generated_image_id:
+            db.delete(new_job)
+            db.commit()
+            raise HTTPException(status_code=400, detail="No generated_image_id in original job parameters")
+        # Reset generated image status
+        gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
+        if gen:
+            gen.status = GenerationStatus.PENDING
+            gen.error_message = None
+            db.commit()
+        task = generate_image.delay(generated_image_id, job_id=new_job.id, user_id=user_id)
+    elif job.job_type == JobType.BATCH_GENERATE:
+        from app.workers.generation_tasks import batch_generate
+        params = job.parameters or {}
+        generated_image_ids = params.get("generated_image_ids", [])
+        if not generated_image_ids:
+            # Try result field
+            generated_image_ids = (job.result or {}).get("generated_image_ids", [])
+        if not generated_image_ids:
+            db.delete(new_job)
+            db.commit()
+            raise HTTPException(status_code=400, detail="No generated_image_ids found to retry")
+        # Reset generated images
+        db.query(GeneratedImage).filter(
+            GeneratedImage.id.in_(generated_image_ids),
+        ).update(
+            {GeneratedImage.status: GenerationStatus.PENDING, GeneratedImage.error_message: None},
+            synchronize_session="fetch",
+        )
+        db.commit()
+        task = batch_generate.delay(generated_image_ids, job_id=new_job.id, user_id=user_id)
+    elif job.job_type == JobType.LORA_EVALUATE:
+        from app.workers.generation_tasks import evaluate_lora
+        params = job.parameters or {}
+        evaluation_id = params.get("evaluation_id")
+        if not evaluation_id:
+            db.delete(new_job)
+            db.commit()
+            raise HTTPException(status_code=400, detail="No evaluation_id in original job parameters")
+        task = evaluate_lora.delay(evaluation_id, job_id=new_job.id, user_id=user_id)
+    elif job.job_type == JobType.LORA_TRAIN:
+        # LoRA training has its own retry via /generation/lora/{id}/retry
+        db.delete(new_job)
+        db.commit()
+        raise HTTPException(status_code=400, detail="Use the LoRA-specific retry endpoint for training jobs")
+    else:
+        db.delete(new_job)
+        db.commit()
+        raise HTTPException(status_code=400, detail=f"Retry not supported for job type: {job.job_type.value}")
+
+    new_job.celery_task_id = task.id
+    db.commit()
+
+    return {"status": "queued", "job_id": new_job.id}
 
 
 @router.delete("/{job_id}")

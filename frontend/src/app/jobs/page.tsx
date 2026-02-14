@@ -113,6 +113,15 @@ export default function JobsPage() {
     onError: () => toast.error('Failed to cancel job'),
   });
 
+  const retryJobMutation = useMutation({
+    mutationFn: (jobId: number) => jobsApi.retry(jobId),
+    onSuccess: (data) => {
+      toast.success('Job retry started', { description: `New Job #${data.job_id}` });
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
+    onError: (err: Error) => toast.error('Retry failed', { description: err.message }),
+  });
+
   const recoverMutation = useMutation({
     mutationFn: (loraId: number) => generationApi.recoverLoraTraining(loraId),
     onSuccess: (data) => {
@@ -387,6 +396,21 @@ export default function JobsPage() {
                           title="Cancel job"
                         >
                           <XCircle className="h-4 w-4" />
+                        </button>
+                      )}
+                      {job.status === 'failed' && job.job_type !== 'lora_train' && (
+                        <button
+                          onClick={() => retryJobMutation.mutate(job.id)}
+                          disabled={retryJobMutation.isPending}
+                          className={cn(
+                            'flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors',
+                            'border border-border text-foreground hover:bg-muted',
+                            'disabled:opacity-50 disabled:cursor-not-allowed'
+                          )}
+                          title="Retry this job"
+                        >
+                          <RotateCcw className="h-3 w-3" />
+                          Retry
                         </button>
                       )}
                       <LoraJobActions

@@ -331,7 +331,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
         db.close()
 
 
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=30)
+@celery_app.task(bind=True)
 def generate_image(self, generated_image_id: int, job_id: int | None = None, user_id: int | None = None) -> dict:
     """
     Generate a single image via fal.ai.
@@ -430,7 +430,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
             gen.error_message = err_msg
             db.commit()
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
-        raise self.retry(exc=e)
+        raise
     finally:
         db.close()
 
