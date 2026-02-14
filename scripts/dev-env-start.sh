@@ -75,7 +75,7 @@ REDIS_URL="rediss://:${REDIS_KEY}@${REDIS_HOST}:${REDIS_PORT}/0"
 for APP in "${APPS[@]}"; do
     echo "  Updating $APP..."
     az containerapp secret set --resource-group "$RG" --name "$APP" \
-        --secrets "redis-url=${REDIS_URL}" -o none 2>/dev/null || true
+        --secrets "redis-url=${REDIS_URL}" "celery-result-backend=${REDIS_URL}" -o none 2>/dev/null || true
 done
 echo "  Secrets updated."
 

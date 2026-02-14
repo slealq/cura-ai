@@ -22,6 +22,9 @@ SCRIPTS_DIR="$PROJECT_ROOT/scripts"
 LOCAL_PREFIX="design-pipeline-"
 CLOUD_PREFIX="cloud-dev-"
 
+# DEV environment URL (Azure Static Web App)
+DEV_URL="https://victorious-mushroom-01a2cc60f.4.azurestaticapps.net"
+
 # Ports — each mode gets its own pair, incrementing by 1
 #   Local:        3000 / 8000
 #   Cloud Native: 3001 / 8001
@@ -249,6 +252,12 @@ start_cloud_docker() {
 
     echo -e "${GREEN}Cloud Docker is running.${NC}"
     echo -e "Use ${CYAN}cura logs${NC} to view logs, ${CYAN}cura stop${NC} to shut down."
+}
+
+open_dev() {
+    echo -e "${MAGENTA}${BOLD}Opening DEV environment...${NC}"
+    echo -e "${DIM}${DEV_URL}${NC}"
+    open -a "Google Chrome" "$DEV_URL"
 }
 
 # ============================================================================
@@ -519,6 +528,7 @@ show_menu() {
     echo -e "  ${CYAN}1${NC})  Local          ${DIM}All in Docker, local data          (3000/8000)${NC}"
     echo -e "  ${CYAN}2${NC})  Cloud Native   ${DIM}Native on host, cloud data         (3001/8001)${NC}"
     echo -e "  ${CYAN}3${NC})  Cloud Docker   ${DIM}All in Docker, cloud data          (3002/8002)${NC}"
+    echo -e "  ${CYAN}9${NC})  Open DEV       ${DIM}Open deployed DEV environment in browser${NC}"
     echo ""
     echo -e "${BOLD}Manage:${NC}"
     echo -e "  ${CYAN}4${NC})  Stop current environment"
@@ -543,6 +553,7 @@ show_menu() {
         1) start_local ;;
         2) start_cloud_native ;;
         3) start_cloud_docker ;;
+        9) open_dev ;;
         4) stop_all ;;
         5) show_status ;;
         6) tail_logs ;;
@@ -570,12 +581,14 @@ show_help() {
     echo "  local              All in Docker, local data               (3000/8000)"
     echo "  cloud-native       Native on host, cloud data, hot-reload  (3001/8001)"
     echo "  cloud-docker       All in Docker, cloud data               (3002/8002)"
+    echo "  dev                Open deployed DEV environment in browser"
     echo ""
     echo -e "${BOLD}Commands:${NC}"
     echo "  (no args)          Interactive menu"
     echo "  local              Start Local environment"
     echo "  cloud-native       Start Cloud Native environment"
     echo "  cloud-docker       Start Cloud Docker environment"
+    echo "  dev                Open deployed DEV environment in browser"
     echo "  stop               Stop whatever is currently running"
     echo "  status             Show running services, ports, and containers"
     echo "  logs [service]     Tail logs (optional service filter)"
@@ -601,6 +614,7 @@ main() {
         cloud-native)  start_cloud_native ;;
         cloud)         start_cloud_native ;;
         cloud-docker)  start_cloud_docker ;;
+        dev)           open_dev ;;
         stop)          stop_all ;;
         status)        show_status ;;
         logs)          tail_logs "${2:-}" ;;

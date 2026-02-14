@@ -153,6 +153,7 @@ module "container_apps" {
     DATABASE_URL             = module.database.connection_string
     REDIS_URL                = module.redis.connection_string
     CELERY_BROKER_URL        = module.redis.connection_string
+    CELERY_RESULT_BACKEND    = module.redis.connection_string
     AZURE_STORAGE_CONNECTION = module.storage.connection_string
     DEFAULT_VISION_PROVIDER  = "openai"
     ENVIRONMENT              = "prod"
