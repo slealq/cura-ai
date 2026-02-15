@@ -1,5 +1,6 @@
 """Image service for managing image operations."""
 import logging
+import mimetypes
 import time
 from datetime import datetime
 
@@ -135,6 +136,63 @@ class ImageService:
                 extra={"filename": filename, "error": str(e)},
             )
             raise
+
+    async def fast_ingest(
+        self,
+        file_data: bytes,
+        filename: str,
+        source: ImageSource,
+        original_uri: str | None = None,
+    ) -> Image | None:
+        """
+        Fast ingest: minimal processing for batch uploads.
+
+        Only computes SHA-256 hash, checks duplicates, saves the raw file,
+        and creates a PENDING Image record. No PIL, no thumbnails, no
+        perceptual hash. Uses db.flush() so the caller can batch commits.
+
+        Returns the Image if new, or None if duplicate.
+        """
+        # Compute SHA-256 hash (fast, ~5ms for 5MB)
+        file_hash = self.storage.compute_file_hash(file_data)
+
+        # Check for duplicate (scoped to this user)
+        existing = self.db.query(Image).filter(
+            Image.file_hash == file_hash,
+            Image.user_id == self.user_id,
+        ).first()
+        if existing:
+            logger.info(f"Duplicate image detected: {filename} (hash: {file_hash[:16]}...)")
+            return None
+
+        # Generate unique object key
+        object_key = self.storage.generate_object_key(filename)
+
+        # Infer MIME type from file extension (no PIL needed)
+        mime_type, _ = mimetypes.guess_type(filename)
+        if not mime_type or not mime_type.startswith("image/"):
+            mime_type = "image/jpeg"
+
+        # Save raw original to storage (1 write)
+        await self.storage.save_image(file_data, object_key, mime_type)
+
+        # Create Image record with minimal fields
+        image = Image(
+            user_id=self.user_id,
+            source=source,
+            original_uri=original_uri,
+            object_key=object_key,
+            original_filename=filename,
+            file_hash=file_hash,
+            file_size=len(file_data),
+            mime_type=mime_type,
+            status=ImageStatus.PENDING,
+        )
+
+        self.db.add(image)
+        self.db.flush()  # Get the ID without committing — caller batches the commit
+
+        return image
 
     def get_image(self, image_id: int) -> Image | None:
         """Get image by ID."""

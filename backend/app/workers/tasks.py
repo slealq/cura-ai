@@ -72,6 +72,119 @@ def _update_job_status(db: Session, job_id: int | None, status: JobStatus, **kwa
 
 
 @celery_app.task(bind=True)
+def process_ingest(self, image_id: int, user_id: int, job_id: int | None = None) -> dict:
+    """
+    Complete the heavy processing for a fast-ingested image.
+
+    Reads the raw file back from storage, detects MIME type, gets dimensions,
+    generates 3 thumbnails, computes perceptual hash, and updates the Image
+    record to INGESTED status. Atomically increments Job progress.
+    """
+    write_log(category=LogCategory.TASK, message=f"Task process_ingest started for image {image_id}",
+              task_name="process_ingest", image_id=image_id, job_id=job_id, user_id=user_id)
+    task_start = time.monotonic()
+    db = get_db()
+    try:
+        image_service = get_image_service(db, user_id)
+        storage = image_service.storage
+        image = image_service.get_image(image_id)
+
+        if not image:
+            logger.error(f"Image {image_id} not found")
+            return {"status": "error", "message": "Image not found"}
+
+        # Read file back from storage
+        file_data = run_async(storage.get_image(image.object_key))
+
+        # Detect MIME type via PIL
+        mime_type = storage.get_mime_type(file_data)
+
+        # Get dimensions via PIL
+        width, height = storage.get_image_dimensions(file_data)
+
+        # Generate 3 thumbnails and save to storage
+        thumbnails = run_async(storage.generate_thumbnails(file_data, image.object_key))
+
+        # Compute perceptual hash
+        perceptual_hash = storage.compute_perceptual_hash(file_data)
+
+        # Update Image record
+        image.mime_type = mime_type
+        image.width = width
+        image.height = height
+        image.perceptual_hash = perceptual_hash
+        image.thumbnail_uri_small = thumbnails.get("200")
+        image.thumbnail_uri_medium = thumbnails.get("400")
+        image.thumbnail_uri_large = thumbnails.get("800")
+        image.status = ImageStatus.INGESTED
+        image.ingested_at = datetime.utcnow()
+        image.error_message = None
+        db.commit()
+
+        # Atomically increment Job progress
+        if job_id:
+            db.execute(
+                Job.__table__.update()
+                .where(Job.id == job_id)
+                .values(progress=Job.progress + 1)
+            )
+            db.commit()
+
+            # Check if all items are done — mark job completed
+            job = db.query(Job).filter(Job.id == job_id).first()
+            if job and job.total_items and job.progress >= job.total_items:
+                job.status = JobStatus.COMPLETED
+                job.completed_at = datetime.utcnow()
+                db.commit()
+
+        elapsed = (time.monotonic() - task_start) * 1000
+        write_log(category=LogCategory.TASK,
+                  message=f"Task process_ingest completed for image {image_id} in {elapsed:.0f}ms ({width}x{height})",
+                  task_name="process_ingest", image_id=image_id, job_id=job_id,
+                  duration_ms=round(elapsed, 1), user_id=user_id)
+        return {"status": "success", "image_id": image_id, "width": width, "height": height}
+
+    except Exception as e:
+        elapsed = (time.monotonic() - task_start) * 1000
+        err_msg = _unwrap_error(e)
+        logger.error(f"Failed to process ingest for image {image_id}: {err_msg}")
+        write_log(category=LogCategory.TASK,
+                  message=f"Task process_ingest failed for image {image_id}: {err_msg}",
+                  level=LogLevel.ERROR, task_name="process_ingest", image_id=image_id,
+                  job_id=job_id, duration_ms=round(elapsed, 1),
+                  extra={"error": err_msg}, user_id=user_id)
+        # Mark image as FAILED
+        try:
+            image = db.query(Image).filter(Image.id == image_id).first()
+            if image:
+                image.status = ImageStatus.FAILED
+                image.error_message = err_msg
+                image.retry_count += 1
+                db.commit()
+        except Exception:
+            pass
+        # Still increment job progress on failure so the job can complete
+        if job_id:
+            try:
+                db.execute(
+                    Job.__table__.update()
+                    .where(Job.id == job_id)
+                    .values(progress=Job.progress + 1)
+                )
+                db.commit()
+                job = db.query(Job).filter(Job.id == job_id).first()
+                if job and job.total_items and job.progress >= job.total_items:
+                    job.status = JobStatus.COMPLETED
+                    job.completed_at = datetime.utcnow()
+                    db.commit()
+            except Exception:
+                pass
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True)
 def tag_image(self, image_id: int, user_id: int, tag_prompt: str | None = None, job_id: int | None = None) -> dict:
     """
     Tag an image with categorization tags.

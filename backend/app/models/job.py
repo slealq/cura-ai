@@ -47,7 +47,10 @@ class Job(Base):
 
     # Job identification
     celery_task_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
-    job_type: Mapped[JobType] = mapped_column(Enum(JobType), nullable=False)
+    job_type: Mapped[JobType] = mapped_column(
+        Enum(JobType, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+    )
     image_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("images.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -57,7 +60,9 @@ class Job(Base):
 
     # Status tracking
     status: Mapped[JobStatus] = mapped_column(
-        Enum(JobStatus), default=JobStatus.PENDING, nullable=False
+        Enum(JobStatus, values_callable=lambda x: [e.value for e in x]),
+        default=JobStatus.PENDING,
+        nullable=False,
     )
     progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     total_items: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

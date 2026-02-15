@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.security import get_current_user, get_current_user_from_token_param
 from app.db.base import get_db
-from app.models import ImageSource, ImageStatus, Job, JobStatus, JobType
+from app.models import Image, ImageSource, ImageStatus, Job, JobStatus, JobType
 from app.models.user import User
 from app.schemas import (
     BatchUploadResponse,
@@ -25,6 +25,7 @@ from app.workers.tasks import (
     describe_image,
     embed_image,
     process_image_pipeline,
+    process_ingest,
     tag_image,
 )
 
@@ -78,7 +79,12 @@ async def upload_images_batch(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Upload multiple images for processing."""
+    """Upload multiple images for processing.
+
+    Fast ingest: saves raw files and creates PENDING records, then dispatches
+    Celery tasks for heavy processing (thumbnails, dimensions, perceptual hash).
+    Returns immediately so the frontend isn't blocked.
+    """
     image_service = get_image_service(db, current_user.id)
 
     # Create or load the INGEST job for tracking
@@ -107,69 +113,94 @@ async def upload_images_batch(
 
     uploaded = []
     failed = []
-    uploaded_image_ids = []
+    new_image_ids = []  # Non-duplicate images that need Celery processing
 
     try:
         for file in files:
             if not file.content_type or not file.content_type.startswith("image/"):
                 failed.append({"filename": file.filename, "error": "Not an image file"})
-                job.progress = (job.progress or 0) + 1
-                db.commit()
                 continue
 
             try:
                 file_data = await file.read()
-                image = await image_service.ingest_image(
+                image = await image_service.fast_ingest(
                     file_data=file_data,
                     filename=file.filename or "upload.jpg",
                     source=ImageSource.UPLOAD,
-                    job_id=job.id,
                 )
 
-                uploaded.append(
-                    UploadResponse(
-                        image_id=image.id,
-                        filename=file.filename or "upload.jpg",
-                        status="ingested",
-                        message="Image uploaded successfully",
+                if image is None:
+                    # Duplicate — still count as "uploaded" (existing image)
+                    existing = db.query(Image).filter(
+                        Image.file_hash == image_service.storage.compute_file_hash(file_data),
+                        Image.user_id == current_user.id,
+                    ).first()
+                    uploaded.append(
+                        UploadResponse(
+                            image_id=existing.id if existing else 0,
+                            filename=file.filename or "upload.jpg",
+                            status="duplicate",
+                            message="Duplicate image skipped",
+                        )
                     )
-                )
-                uploaded_image_ids.append(image.id)
+                else:
+                    uploaded.append(
+                        UploadResponse(
+                            image_id=image.id,
+                            filename=file.filename or "upload.jpg",
+                            status="pending",
+                            message="Image accepted, processing queued",
+                        )
+                    )
+                    new_image_ids.append(image.id)
             except Exception as e:
                 logger.error(f"Failed to upload {file.filename}: {e}")
                 failed.append({"filename": file.filename, "error": str(e)})
 
-            # Update job progress after each file (success or fail)
-            job.progress = (job.progress or 0) + 1
-            db.commit()
+        # Single commit for all images in this chunk
+        db.commit()
+
     except Exception as e:
         # Unhandled error (DB failure, request abort, etc.) — mark job FAILED
         logger.error(f"Batch upload chunk failed for job {job.id}: {e}")
-        job.status = JobStatus.FAILED
-        job.error_message = f"Chunk failed at progress {job.progress}/{job.total_items}: {e}"
-        job.completed_at = datetime.utcnow()
-        db.commit()
+        db.rollback()
+        job = db.query(Job).filter(Job.id == job.id).first()
+        if job:
+            job.status = JobStatus.FAILED
+            job.error_message = f"Chunk failed: {e}"
+            job.completed_at = datetime.utcnow()
+            db.commit()
         raise
 
-    # Mark job completed if all items have been processed
-    if job.progress >= job.total_items:
-        job.status = JobStatus.COMPLETED
-        job.completed_at = datetime.utcnow()
+    # Dispatch Celery tasks for each new (non-duplicate) image
+    for image_id in new_image_ids:
+        process_ingest.delay(image_id, current_user.id, job.id)
+
+    # If there are no new images to process in this chunk (all duplicates/failures),
+    # check if the overall job is done
+    if not new_image_ids and job.total_items:
+        # Count how many non-PENDING images exist for this job
+        # (duplicates don't create PENDING records, so we advance the job)
+        job.progress = (job.progress or 0) + len(uploaded) + len(failed)
+        if job.progress >= job.total_items:
+            job.status = JobStatus.COMPLETED
+            job.completed_at = datetime.utcnow()
         db.commit()
 
     logger.info(
         f"Batch upload chunk done: job_id={job.id}, "
         f"uploaded={len(uploaded)}, failed={len(failed)}, "
-        f"progress={job.progress}/{job.total_items}"
+        f"new_images={len(new_image_ids)} dispatched to Celery"
     )
 
     folder_error = None
-    if folder_id and uploaded_image_ids:
+    all_image_ids = [u.image_id for u in uploaded if u.image_id > 0]
+    if folder_id and all_image_ids:
         try:
             folder_service = get_folder_service(db, current_user.id)
-            folder_service.add_images_to_folder(folder_id, uploaded_image_ids)
+            folder_service.add_images_to_folder(folder_id, all_image_ids)
         except Exception as e:
-            logger.error(f"Failed to add {len(uploaded_image_ids)} images to folder {folder_id}: {e}")
+            logger.error(f"Failed to add {len(all_image_ids)} images to folder {folder_id}: {e}")
             folder_error = str(e)
 
     return BatchUploadResponse(

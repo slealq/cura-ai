@@ -4,7 +4,7 @@ import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useDropzone } from 'react-dropzone';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Upload, X, Check, AlertCircle, Loader2 } from 'lucide-react';
+import { Upload, X, Check, AlertCircle, Loader2, ArrowRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { imagesApi, foldersApi } from '@/lib/api';
 import { cn, formatFileSize } from '@/lib/utils';
@@ -48,8 +48,8 @@ export default function UploadPage() {
       const count = data.uploaded.length;
       const failCount = data.failed.length;
       if (count > 0) {
-        toast.success(`${count} image${count !== 1 ? 's' : ''} uploaded${failCount > 0 ? ` (${failCount} failed)` : ''}`, {
-          action: { label: 'View Images', onClick: () => router.push('/images') },
+        toast.success(`${count} image${count !== 1 ? 's' : ''} sent — processing in background${failCount > 0 ? ` (${failCount} failed)` : ''}`, {
+          action: { label: 'View Jobs', onClick: () => router.push('/jobs') },
         });
       }
       if (failCount > 0 && count === 0) {
@@ -269,7 +269,7 @@ export default function UploadPage() {
             <div className="space-y-2">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">
-                  Uploading {uploadProgress.uploaded} / {uploadProgress.total} images...
+                  Sending {uploadProgress.uploaded} / {uploadProgress.total} files...
                 </span>
                 <span className="font-medium">
                   {Math.round((uploadProgress.uploaded / uploadProgress.total) * 100)}%
@@ -291,17 +291,31 @@ export default function UploadPage() {
         <div className="bg-green-50 border border-green-200 dark:bg-green-900/30 dark:border-green-800 rounded-lg p-4">
           <div className="flex items-start gap-3">
             <Check className="h-5 w-5 text-green-600 dark:text-green-400 mt-0.5" />
-            <div>
-              <h3 className="font-medium text-green-800 dark:text-green-300">Upload Complete</h3>
+            <div className="flex-1">
+              <h3 className="font-medium text-green-800 dark:text-green-300">Files Sent</h3>
               <p className="text-sm text-green-700 dark:text-green-400 mt-1">
-                {uploadMutation.data.uploaded.length} images uploaded and queued
-                for processing.
+                {uploadMutation.data.uploaded.length} images accepted. Thumbnails and metadata
+                are being generated in the background.
               </p>
               {uploadMutation.data.failed.length > 0 && (
                 <p className="text-sm text-red-600 dark:text-red-400 mt-1">
                   {uploadMutation.data.failed.length} images failed to upload.
                 </p>
               )}
+              <div className="flex gap-3 mt-3">
+                <button
+                  onClick={() => router.push('/images')}
+                  className="inline-flex items-center gap-1 text-sm font-medium text-green-700 dark:text-green-300 hover:underline"
+                >
+                  View Images <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  onClick={() => router.push('/jobs')}
+                  className="inline-flex items-center gap-1 text-sm font-medium text-green-700 dark:text-green-300 hover:underline"
+                >
+                  Monitor Progress <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
             </div>
           </div>
         </div>

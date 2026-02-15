@@ -173,50 +173,101 @@ export const imagesApi = {
     folderId?: number,
     onProgress?: (uploaded: number, total: number) => void,
   ): Promise<BatchUploadResponse> => {
-    const CHUNK_SIZE = 20;
+    const CHUNK_SIZE = 50;
+    const PARALLEL_CHUNKS = 3;
     const allUploaded: BatchUploadResponse['uploaded'] = [];
     const allFailed: BatchUploadResponse['failed'] = [];
     let jobId: number | null = null;
     let folderError: string | null = null;
     let chunkError: string | null = null;
+    let sentCount = 0;
 
+    // Build all chunks upfront
+    const chunks: File[][] = [];
     for (let i = 0; i < files.length; i += CHUNK_SIZE) {
-      const chunk = files.slice(i, i + CHUNK_SIZE);
-      const formData = new FormData();
-      chunk.forEach((file) => formData.append('files', file));
+      chunks.push(files.slice(i, i + CHUNK_SIZE));
+    }
 
-      // Don't pass folder_id per chunk — defer folder assignment until all chunks complete
-      const params: Record<string, number> = {};
-      if (jobId !== null) {
-        params.job_id = jobId;
-      } else {
-        params.total_items = files.length;
-      }
+    // Send first chunk sequentially to get the job_id
+    if (chunks.length > 0) {
+      const firstChunk = chunks[0];
+      const formData = new FormData();
+      firstChunk.forEach((file) => formData.append('files', file));
 
       try {
         const { data } = await api.post<BatchUploadResponse>('/images/upload/batch', formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
-          params,
+          params: { total_items: files.length },
         });
 
-        if (data.job_id && jobId === null) {
-          jobId = data.job_id;
-        }
+        jobId = data.job_id;
         allUploaded.push(...data.uploaded);
         allFailed.push(...data.failed);
-
-        onProgress?.(i + chunk.length, files.length);
+        sentCount += firstChunk.length;
+        onProgress?.(sentCount, files.length);
       } catch (err) {
-        const chunkStart = i + 1;
-        const chunkEnd = Math.min(i + CHUNK_SIZE, files.length);
-        chunkError = `Chunk ${chunkStart}-${chunkEnd} failed: ${err instanceof Error ? err.message : String(err)}`;
+        chunkError = `Chunk 1-${firstChunk.length} failed: ${err instanceof Error ? err.message : String(err)}`;
         console.error(chunkError);
-        // Mark remaining files as failed
-        for (let j = i; j < files.length; j++) {
-          allFailed.push({ filename: files[j].name, error: 'Upload aborted — previous chunk failed' });
+        for (const file of files) {
+          allFailed.push({ filename: file.name, error: 'Upload aborted — first chunk failed' });
         }
         onProgress?.(files.length, files.length);
-        break;
+      }
+    }
+
+    // Send remaining chunks in parallel batches
+    if (!chunkError && chunks.length > 1 && jobId !== null) {
+      const remainingChunks = chunks.slice(1);
+
+      for (let b = 0; b < remainingChunks.length; b += PARALLEL_CHUNKS) {
+        const batch = remainingChunks.slice(b, b + PARALLEL_CHUNKS);
+
+        const promises = batch.map((chunk) => {
+          const formData = new FormData();
+          chunk.forEach((file) => formData.append('files', file));
+
+          return api.post<BatchUploadResponse>('/images/upload/batch', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+            params: { job_id: jobId },
+          });
+        });
+
+        const results = await Promise.allSettled(promises);
+
+        let batchFailed = false;
+        for (let r = 0; r < results.length; r++) {
+          const result = results[r];
+          const chunk = batch[r];
+
+          if (result.status === 'fulfilled') {
+            allUploaded.push(...result.value.data.uploaded);
+            allFailed.push(...result.value.data.failed);
+            sentCount += chunk.length;
+          } else {
+            batchFailed = true;
+            const errMsg = result.reason instanceof Error ? result.reason.message : String(result.reason);
+            chunkError = `Chunk failed: ${errMsg}`;
+            console.error(chunkError);
+            for (const file of chunk) {
+              allFailed.push({ filename: file.name, error: 'Upload chunk failed' });
+            }
+            sentCount += chunk.length;
+          }
+        }
+
+        onProgress?.(sentCount, files.length);
+
+        if (batchFailed) {
+          // Mark all remaining unsent files as failed
+          const nextStart = b + PARALLEL_CHUNKS;
+          for (let r = nextStart; r < remainingChunks.length; r++) {
+            for (const file of remainingChunks[r]) {
+              allFailed.push({ filename: file.name, error: 'Upload aborted — previous chunk failed' });
+            }
+          }
+          onProgress?.(files.length, files.length);
+          break;
+        }
       }
     }
 
