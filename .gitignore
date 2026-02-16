@@ -10,8 +10,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -40,8 +40,8 @@ env/
 .env.*.local
 .env.cloud
 
-# Storage
-storage/
+# Storage (local image files, not infra/modules/storage)
+/storage/
 watch_folder/*
 !watch_folder/.gitkeep
 
