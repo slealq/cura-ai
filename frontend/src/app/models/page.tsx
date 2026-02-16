@@ -16,6 +16,10 @@ import {
   Archive,
   FlaskConical,
   KeyRound,
+  Download,
+  HardDrive,
+  Copy,
+  ExternalLink,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
@@ -41,6 +45,13 @@ const statusConfig: Record<string, { icon: typeof Clock; color: string; label: s
   failed: { icon: XCircle, color: 'text-red-600 bg-red-100 dark:bg-red-900/50 dark:text-red-300', label: 'Failed' },
   archived: { icon: Archive, color: 'text-gray-500 bg-gray-100 dark:bg-gray-900/50 dark:text-gray-400', label: 'Archived' },
 };
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
 
 function getSourceInfo(model: LoraModel): { label: string; href: string } | null {
   if (model.folder_id && model.folder_name) {
@@ -110,6 +121,12 @@ function LoraModelCard({
           <span className={cn('px-1.5 py-0.5 rounded-full text-[10px] font-semibold', baseModelBadge[model.base_model] || 'bg-gray-100 text-gray-700 dark:bg-gray-900/50 dark:text-gray-300')}>
             {BASE_MODELS.find((m) => m.value === model.base_model)?.label || model.base_model}
           </span>
+          {model.has_local_weights && model.file_size && (
+            <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+              <HardDrive className="h-3 w-3" />
+              {formatFileSize(model.file_size)}
+            </span>
+          )}
           {sourceInfo && (
             <Link
               href={sourceInfo.href}
@@ -164,6 +181,17 @@ function LoraModelCard({
           <div className="flex items-center gap-1">
             {model.status === 'completed' && (
               <>
+                {model.has_local_weights && (
+                  <a
+                    href={generationApi.getLoraWeightsUrl(model.id)}
+                    download
+                    onClick={(e) => e.stopPropagation()}
+                    className="p-1.5 hover:bg-muted rounded-lg transition-colors text-emerald-600"
+                    title="Download .safetensors"
+                  >
+                    <Download className="h-4 w-4" />
+                  </a>
+                )}
                 <Link
                   href={`/models/${model.id}/evaluate`}
                   onClick={(e) => e.stopPropagation()}
@@ -229,7 +257,27 @@ export default function ModelsPage() {
     onError: () => toast.error('Failed to delete model'),
   });
 
+  // Download weights mutations
+  const downloadWeightsMutation = useMutation({
+    mutationFn: generationApi.downloadLoraWeights,
+    onSuccess: () => {
+      toast.success('Weights download started');
+      queryClient.invalidateQueries({ queryKey: ['lora-models'] });
+    },
+    onError: () => toast.error('Failed to start weights download'),
+  });
+
+  const downloadAllWeightsMutation = useMutation({
+    mutationFn: generationApi.downloadAllLoraWeights,
+    onSuccess: (data) => {
+      toast.success(`Queued ${data.count} weight download(s)`);
+      queryClient.invalidateQueries({ queryKey: ['lora-models'] });
+    },
+    onError: () => toast.error('Failed to start bulk weights download'),
+  });
+
   const models = loraData?.items || [];
+  const modelsWithoutWeights = models.filter((m) => m.status === 'completed' && m.lora_url && !m.has_local_weights);
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
@@ -257,14 +305,30 @@ export default function ModelsPage() {
             Train and manage LoRA adapters for image generation
           </p>
         </div>
-        <button
-          onClick={() => setShowTrainModal(true)}
-          disabled={!hasFalKey}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors font-medium text-sm disabled:opacity-50 disabled:pointer-events-none"
-        >
-          <Plus className="h-4 w-4" />
-          Train New LoRA
-        </button>
+        <div className="flex items-center gap-2">
+          {modelsWithoutWeights.length > 0 && (
+            <button
+              onClick={() => downloadAllWeightsMutation.mutate()}
+              disabled={downloadAllWeightsMutation.isPending}
+              className="flex items-center gap-2 px-4 py-2 border border-border text-foreground rounded-lg hover:bg-muted transition-colors font-medium text-sm disabled:opacity-50"
+            >
+              {downloadAllWeightsMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              Download All Weights ({modelsWithoutWeights.length})
+            </button>
+          )}
+          <button
+            onClick={() => setShowTrainModal(true)}
+            disabled={!hasFalKey}
+            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors font-medium text-sm disabled:opacity-50 disabled:pointer-events-none"
+          >
+            <Plus className="h-4 w-4" />
+            Train New LoRA
+          </button>
+        </div>
       </div>
 
       {/* Models Grid */}
@@ -306,7 +370,7 @@ export default function ModelsPage() {
           />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div
-              className="bg-card rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4"
+              className="bg-card rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between">
@@ -392,6 +456,86 @@ export default function ModelsPage() {
                   </div>
                 )}
 
+                {/* Weights storage status */}
+                {selectedModel.status === 'completed' && (
+                  <div>
+                    <span className="text-muted-foreground">Weights Storage</span>
+                    {selectedModel.has_local_weights ? (
+                      <div className="mt-1 flex items-center justify-between p-2 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg">
+                        <div className="flex items-center gap-2">
+                          <HardDrive className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                          <span className="text-sm text-emerald-700 dark:text-emerald-300">
+                            Backed up{selectedModel.file_size ? ` (${formatFileSize(selectedModel.file_size)})` : ''}
+                          </span>
+                        </div>
+                        <a
+                          href={generationApi.getLoraWeightsUrl(selectedModel.id)}
+                          download
+                          className="flex items-center gap-1 px-2 py-1 text-xs bg-emerald-600 text-white rounded hover:bg-emerald-700 transition-colors"
+                        >
+                          <Download className="h-3 w-3" />
+                          Download
+                        </a>
+                      </div>
+                    ) : selectedModel.lora_url ? (
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className="text-sm text-amber-600 dark:text-amber-400">CDN only</span>
+                        <button
+                          onClick={() => downloadWeightsMutation.mutate(selectedModel.id)}
+                          disabled={downloadWeightsMutation.isPending}
+                          className="flex items-center gap-1 px-2 py-1 text-xs bg-primary text-primary-foreground rounded hover:bg-primary/90 transition-colors disabled:opacity-50"
+                        >
+                          {downloadWeightsMutation.isPending ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Download className="h-3 w-3" />
+                          )}
+                          Download Weights
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="mt-1 text-sm text-muted-foreground">No weights available</p>
+                    )}
+                  </div>
+                )}
+
+                {/* Example Prompts */}
+                {selectedModel.example_prompts && selectedModel.example_prompts.length > 0 && (
+                  <div>
+                    <span className="text-muted-foreground">Example Prompts</span>
+                    <div className="mt-1.5 max-h-48 overflow-y-auto space-y-1.5">
+                      {selectedModel.example_prompts.map((prompt, idx) => (
+                        <div
+                          key={idx}
+                          className="flex items-start gap-2 p-2 bg-muted/50 rounded-lg group text-xs"
+                        >
+                          <p className="flex-1 line-clamp-2 text-foreground/80">{prompt}</p>
+                          <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(prompt);
+                                toast.success('Prompt copied');
+                              }}
+                              className="p-1 hover:bg-muted rounded transition-colors"
+                              title="Copy prompt"
+                            >
+                              <Copy className="h-3 w-3" />
+                            </button>
+                            <Link
+                              href={`/generate?lora=${selectedModel.id}&prompt=${encodeURIComponent(prompt)}`}
+                              className="p-1 hover:bg-muted rounded transition-colors text-purple-600"
+                              title="Try this prompt"
+                              onClick={() => setSelectedModel(null)}
+                            >
+                              <ExternalLink className="h-3 w-3" />
+                            </Link>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {selectedModel.error_message && (
                   <div className="p-3 bg-red-50 rounded-lg">
                     <span className="text-red-700 font-medium">Error:</span>
@@ -412,6 +556,16 @@ export default function ModelsPage() {
 
               {selectedModel.status === 'completed' && (
                 <div className="flex gap-2 pt-2">
+                  {selectedModel.has_local_weights && (
+                    <a
+                      href={generationApi.getLoraWeightsUrl(selectedModel.id)}
+                      download
+                      className="flex items-center gap-2 px-4 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
+                    >
+                      <Download className="h-4 w-4" />
+                      Download
+                    </a>
+                  )}
                   <Link
                     href={`/models/${selectedModel.id}/evaluate`}
                     className="flex items-center gap-2 px-4 py-2 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors"

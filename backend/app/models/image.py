@@ -67,7 +67,10 @@ class Image(Base):
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
 
     # Source information
-    source: Mapped[ImageSource] = mapped_column(Enum(ImageSource), nullable=False)
+    source: Mapped[ImageSource] = mapped_column(
+        Enum(ImageSource, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+    )
     original_uri: Mapped[str] = mapped_column(String(1024), nullable=True)
     object_key: Mapped[str] = mapped_column(String(512), unique=True, nullable=False)
     original_filename: Mapped[str] = mapped_column(String(512), nullable=True)
@@ -89,7 +92,9 @@ class Image(Base):
 
     # Processing status
     status: Mapped[ImageStatus] = mapped_column(
-        Enum(ImageStatus), default=ImageStatus.PENDING, nullable=False
+        Enum(ImageStatus, values_callable=lambda x: [e.value for e in x]),
+        default=ImageStatus.PENDING,
+        nullable=False,
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

@@ -98,6 +98,13 @@ class LoraModelResponse(BaseModel):
     job_id: int | None
     source_preview_images: list[LoraPreviewImage] = Field(default_factory=list)
     latest_evaluation: LatestEvaluationSummary | None = None
+    # Weights storage
+    weights_object_key: str | None = None
+    file_size: int | None = None
+    file_hash: str | None = None
+    weights_downloaded_at: str | None = None
+    has_local_weights: bool = False
+    example_prompts: list[str] | None = None
     created_at: str
     training_started_at: str | None
     training_completed_at: str | None
@@ -220,6 +227,12 @@ def _lora_to_response(lora, db: Session) -> LoraModelResponse:
         job_id=lora.job_id,
         source_preview_images=_get_source_preview_images(lora, db),
         latest_evaluation=_get_latest_evaluation(lora, db),
+        weights_object_key=lora.weights_object_key,
+        file_size=lora.file_size,
+        file_hash=lora.file_hash,
+        weights_downloaded_at=lora.weights_downloaded_at.isoformat() if lora.weights_downloaded_at else None,
+        has_local_weights=lora.weights_object_key is not None,
+        example_prompts=lora.example_prompts,
         created_at=lora.created_at.isoformat(),
         training_started_at=lora.training_started_at.isoformat() if lora.training_started_at else None,
         training_completed_at=lora.training_completed_at.isoformat() if lora.training_completed_at else None,
@@ -443,6 +456,9 @@ async def recover_lora_training(lora_id: int, db: Session = Depends(get_db), cur
                     job.progress = 1
                     job.result = {"lora_url": result.lora_url, "request_id": request_id, "recovered": True}
                     db.commit()
+            # Dispatch best-effort weights download
+            from app.workers.generation_tasks import download_lora_weights as dl_task
+            dl_task.delay(lora_id, current_user.id)
             return {"status": "recovered", "lora_url": result.lora_url, "request_id": request_id}
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Training completed but failed to fetch result: {e}")
@@ -521,6 +537,72 @@ async def delete_lora_model(lora_id: int, db: Session = Depends(get_db), current
     gen_service = get_generation_service(db, current_user.id)
     if not gen_service.delete_lora_model(lora_id):
         raise HTTPException(status_code=404, detail="LoRA model not found")
+
+
+@router.post("/lora/{lora_id}/download-weights")
+async def download_lora_weights_endpoint(lora_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Download and store LoRA weights from provider CDN."""
+    gen_service = get_generation_service(db, current_user.id)
+    lora = gen_service.get_lora_model(lora_id)
+    if not lora:
+        raise HTTPException(status_code=404, detail="LoRA model not found")
+    if lora.status != LoraModelStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="LoRA model is not completed")
+    if not lora.lora_url:
+        raise HTTPException(status_code=400, detail="No lora_url available")
+    if lora.weights_object_key:
+        raise HTTPException(status_code=400, detail="Weights already downloaded")
+
+    from app.workers.generation_tasks import download_lora_weights as dl_task
+    dl_task.delay(lora_id, current_user.id)
+    return {"status": "download_started"}
+
+
+@router.post("/lora/download-all-weights")
+async def download_all_lora_weights(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Download weights for all completed LoRA models that don't have local weights."""
+    from app.models.lora_model import LoraModel
+
+    models = (
+        db.query(LoraModel)
+        .filter(
+            LoraModel.user_id == current_user.id,
+            LoraModel.status == LoraModelStatus.COMPLETED,
+            LoraModel.lora_url.isnot(None),
+            LoraModel.weights_object_key.is_(None),
+        )
+        .all()
+    )
+
+    from app.workers.generation_tasks import download_lora_weights as dl_task
+    for model in models:
+        dl_task.delay(model.id, current_user.id)
+
+    return {"status": "downloads_queued", "count": len(models)}
+
+
+@router.get("/lora/{lora_id}/weights")
+async def serve_lora_weights(lora_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_token_param)):
+    """Serve LoRA weights file for download."""
+    from app.services.storage import get_storage_service
+
+    gen_service = get_generation_service(db, current_user.id)
+    lora = gen_service.get_lora_model(lora_id)
+    if not lora or not lora.weights_object_key:
+        raise HTTPException(status_code=404, detail="LoRA weights not found")
+
+    # Build a friendly download filename
+    safe_name = lora.name.replace(" ", "_").replace("/", "_")
+    download_filename = f"{safe_name}_{lora.base_model}.safetensors"
+
+    storage = get_storage_service()
+    response = storage.get_file_response_with_filename(
+        "lora_weights", lora.weights_object_key, "application/octet-stream",
+        download_filename=download_filename,
+    )
+    if response is None:
+        raise HTTPException(status_code=404, detail="Weights file not found in storage")
+    return response
 
 
 # --- Generation Routes ---

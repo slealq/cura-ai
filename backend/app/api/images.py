@@ -1,5 +1,6 @@
 """Image API endpoints."""
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.security import get_current_user, get_current_user_from_token_param
 from app.db.base import get_db
-from app.models import ImageSource, ImageStatus, Job, JobStatus, JobType
+from app.models import Image, ImageSource, ImageStatus, Job, JobStatus, JobType
 from app.models.user import User
 from app.schemas import (
     BatchUploadResponse,
@@ -24,6 +25,7 @@ from app.workers.tasks import (
     describe_image,
     embed_image,
     process_image_pipeline,
+    process_ingest_batch,
     tag_image,
 )
 
@@ -72,14 +74,60 @@ async def upload_image(
 async def upload_images_batch(
     files: list[UploadFile] = File(...),
     folder_id: int | None = Query(None),
+    new_folder_name: str | None = Query(None),
+    job_id: int | None = Query(None),
+    total_items: int | None = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Upload multiple images for processing."""
+    """Upload multiple images for processing.
+
+    Fast ingest: saves raw files and creates PENDING records, then dispatches
+    Celery tasks for heavy processing (thumbnails, dimensions, perceptual hash).
+    Returns immediately so the frontend isn't blocked.
+
+    Folder assignment is deferred: if folder_id or new_folder_name is provided
+    on the first chunk, the folder is created/assigned only after all images
+    finish ingesting (in _finish_ingest_job_item). This prevents empty folders
+    from appearing in the UI before thumbnails are ready.
+    """
     image_service = get_image_service(db, current_user.id)
+
+    # Create or load the INGEST job for tracking
+    if job_id is not None:
+        job = db.query(Job).filter(Job.id == job_id, Job.user_id == current_user.id).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+    else:
+        # Store folder info in job parameters for deferred assignment
+        params = {}
+        if folder_id is not None:
+            params["folder_id"] = folder_id
+        if new_folder_name:
+            params["new_folder_name"] = new_folder_name.strip()
+
+        job = Job(
+            job_type=JobType.INGEST,
+            status=JobStatus.RUNNING,
+            total_items=total_items or len(files),
+            progress=0,
+            user_id=current_user.id,
+            parameters=params,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
+    filenames = [f.filename or "upload.jpg" for f in files]
+    logger.info(
+        f"Batch upload chunk: {len(files)} files, job_id={job.id}, "
+        f"progress_before={job.progress}/{job.total_items}, "
+        f"files={filenames}"
+    )
+
     uploaded = []
     failed = []
-    uploaded_image_ids = []
+    new_image_ids = []  # Non-duplicate images that need Celery processing
 
     for file in files:
         if not file.content_type or not file.content_type.startswith("image/"):
@@ -88,38 +136,97 @@ async def upload_images_batch(
 
         try:
             file_data = await file.read()
-            image = await image_service.ingest_image(
+            image = await image_service.fast_ingest(
                 file_data=file_data,
                 filename=file.filename or "upload.jpg",
                 source=ImageSource.UPLOAD,
             )
 
-            uploaded.append(
-                UploadResponse(
-                    image_id=image.id,
-                    filename=file.filename or "upload.jpg",
-                    status="ingested",
-                    message="Image uploaded successfully",
+            if image is None:
+                # Duplicate — still count as "uploaded" (existing image)
+                existing = db.query(Image).filter(
+                    Image.file_hash == image_service.storage.compute_file_hash(file_data),
+                    Image.user_id == current_user.id,
+                ).first()
+                uploaded.append(
+                    UploadResponse(
+                        image_id=existing.id if existing else 0,
+                        filename=file.filename or "upload.jpg",
+                        status="duplicate",
+                        message="Duplicate image skipped",
+                    )
                 )
-            )
-            uploaded_image_ids.append(image.id)
+            else:
+                uploaded.append(
+                    UploadResponse(
+                        image_id=image.id,
+                        filename=file.filename or "upload.jpg",
+                        status="pending",
+                        message="Image accepted, processing queued",
+                    )
+                )
+                new_image_ids.append(image.id)
+            # Commit each image individually to avoid long-running transactions
+            # (Azure blob uploads block for seconds per file)
+            db.commit()
         except Exception as e:
             logger.error(f"Failed to upload {file.filename}: {e}")
+            db.rollback()
             failed.append({"filename": file.filename, "error": str(e)})
 
-    folder_error = None
-    if folder_id and uploaded_image_ids:
-        try:
-            folder_service = get_folder_service(db, current_user.id)
-            folder_service.add_images_to_folder(folder_id, uploaded_image_ids)
-        except Exception as e:
-            logger.error(f"Failed to add {len(uploaded_image_ids)} images to folder {folder_id}: {e}")
-            folder_error = str(e)
+    # Re-fetch job in case a rollback detached it
+    job = db.query(Job).filter(Job.id == job.id).first()
 
+    # Track image IDs on the job so workers can count failures at completion
+    # image_ids: new (non-duplicate) images that need Celery processing
+    # all_upload_ids: all uploaded image IDs (including duplicates) for folder assignment
+    all_chunk_ids = [u.image_id for u in uploaded if u.image_id > 0]
+    existing_ids = (job.result or {}).get("image_ids", [])
+    existing_all = (job.result or {}).get("all_upload_ids", [])
+    job.result = {
+        **(job.result or {}),
+        "image_ids": existing_ids + new_image_ids,
+        "all_upload_ids": existing_all + all_chunk_ids,
+    }
+    db.commit()
+
+    # Dispatch a single batch Celery task for all new images in this chunk
+    if new_image_ids:
+        process_ingest_batch.delay(new_image_ids, current_user.id, job.id)
+
+    # Immediately count items that won't go through Celery (duplicates + failures).
+    # Only new images are counted by _finish_ingest_job_item in the Celery task.
+    n_immediate = (len(uploaded) - len(new_image_ids)) + len(failed)
+    if n_immediate > 0 and job.total_items:
+        db.execute(
+            Job.__table__.update()
+            .where(Job.id == job.id)
+            .values(progress=Job.progress + n_immediate)
+        )
+        db.commit()
+        # Re-fetch to see updated progress
+        job = db.query(Job).filter(Job.id == job.id).first()
+
+        # Check if job is done (e.g. all items in this chunk were duplicates/failures
+        # and no Celery tasks remain from earlier chunks)
+        if job.progress >= job.total_items:
+            job.status = JobStatus.COMPLETED
+            job.completed_at = datetime.utcnow()
+            db.commit()
+            from app.workers.tasks import _assign_folder_on_completion
+            _assign_folder_on_completion(db, job)
+
+    logger.info(
+        f"Batch upload chunk done: job_id={job.id}, "
+        f"uploaded={len(uploaded)}, failed={len(failed)}, "
+        f"new_images={len(new_image_ids)} dispatched to Celery"
+    )
+
+    # Folder assignment is deferred to job completion (_finish_ingest_job_item)
     return BatchUploadResponse(
         uploaded=uploaded,
         failed=failed,
-        folder_error=folder_error,
+        job_id=job.id,
     )
 
 

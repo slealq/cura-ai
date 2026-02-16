@@ -56,6 +56,12 @@ class Cluster(Base):
     # Representative images (IDs of images closest to centroid)
     representative_image_ids: Mapped[list[int]] = mapped_column(JSON, default=list, nullable=False)
 
+    # Cover image for list views
+    cover_image_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("images.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    cover_thumbnail_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
     # User curation
     display_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
     is_pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -72,6 +78,7 @@ class Cluster(Base):
     )
 
     # Relationships
+    cover_image: Mapped["Image | None"] = relationship("Image", foreign_keys=[cover_image_id])
     memberships: Mapped[list["ClusterMembership"]] = relationship(
         "ClusterMembership", back_populates="cluster", cascade="all, delete-orphan"
     )

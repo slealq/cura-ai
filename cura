@@ -22,6 +22,9 @@ SCRIPTS_DIR="$PROJECT_ROOT/scripts"
 LOCAL_PREFIX="design-pipeline-"
 CLOUD_PREFIX="cloud-dev-"
 
+# DEV environment URL (Azure Static Web App)
+DEV_URL="https://victorious-mushroom-01a2cc60f.4.azurestaticapps.net"
+
 # Ports — each mode gets its own pair, incrementing by 1
 #   Local:        3000 / 8000
 #   Cloud Native: 3001 / 8001
@@ -251,6 +254,12 @@ start_cloud_docker() {
     echo -e "Use ${CYAN}cura logs${NC} to view logs, ${CYAN}cura stop${NC} to shut down."
 }
 
+open_dev() {
+    echo -e "${MAGENTA}${BOLD}Opening DEV environment...${NC}"
+    echo -e "${DIM}${DEV_URL}${NC}"
+    open -a "Google Chrome" "$DEV_URL"
+}
+
 # ============================================================================
 # Section 5: Stop
 # ============================================================================
@@ -433,34 +442,72 @@ build_images() {
 }
 
 run_migrate() {
+    local target="${1:-}"
+
+    # Explicit target: cura migrate cloud | cura migrate local
+    if [ "$target" = "cloud" ]; then
+        run_migrate_cloud
+        return
+    elif [ "$target" = "local" ]; then
+        run_migrate_local
+        return
+    elif [ -n "$target" ]; then
+        echo -e "${RED}Unknown migrate target: $target${NC}"
+        echo "Usage: cura migrate [cloud|local]"
+        exit 1
+    fi
+
+    # No target — infer from running mode
     local mode
     mode=$(detect_running_mode)
 
     case "$mode" in
         local)
-            echo -e "${CYAN}Running migrations in local Docker...${NC}"
-            docker compose exec backend alembic upgrade head
+            run_migrate_local
             ;;
         cloud-docker)
             echo -e "${CYAN}Running migrations in cloud Docker...${NC}"
             docker compose -f docker-compose.cloud.yml exec backend alembic upgrade head
+            echo -e "${GREEN}Migrations complete.${NC}"
             ;;
         cloud-native)
-            echo -e "${CYAN}Running migrations against cloud DB...${NC}"
-            cd "$PROJECT_ROOT/backend"
-            set -a
-            source "$PROJECT_ROOT/.env.cloud"
-            set +a
-            alembic upgrade head
+            run_migrate_cloud
             ;;
         *)
             echo -e "${YELLOW}No running environment detected.${NC}"
-            echo "Start an environment first, then run: cura migrate"
+            echo "Specify a target explicitly: cura migrate cloud  or  cura migrate local"
             exit 1
             ;;
     esac
+}
 
+run_migrate_local() {
+    local mode
+    mode=$(detect_running_mode)
+    if [ "$mode" = "local" ]; then
+        echo -e "${CYAN}Running migrations in local Docker...${NC}"
+        docker compose exec backend alembic upgrade head
+    else
+        echo -e "${YELLOW}Local containers not running. Starting postgres temporarily...${NC}"
+        cd "$PROJECT_ROOT"
+        docker compose up -d postgres
+        sleep 3
+        docker compose run --rm backend alembic upgrade head
+    fi
     echo -e "${GREEN}Migrations complete.${NC}"
+}
+
+run_migrate_cloud() {
+    require_env_cloud
+    echo -e "${CYAN}Running migrations against Azure DEV database...${NC}"
+    cd "$PROJECT_ROOT/backend"
+    (
+        set -a
+        source "$PROJECT_ROOT/.env.cloud"
+        set +a
+        alembic upgrade head
+    )
+    echo -e "${GREEN}Migrations complete (cloud).${NC}"
 }
 
 # ============================================================================
@@ -519,6 +566,7 @@ show_menu() {
     echo -e "  ${CYAN}1${NC})  Local          ${DIM}All in Docker, local data          (3000/8000)${NC}"
     echo -e "  ${CYAN}2${NC})  Cloud Native   ${DIM}Native on host, cloud data         (3001/8001)${NC}"
     echo -e "  ${CYAN}3${NC})  Cloud Docker   ${DIM}All in Docker, cloud data          (3002/8002)${NC}"
+    echo -e "  ${CYAN}9${NC})  Open DEV       ${DIM}Open deployed DEV environment in browser${NC}"
     echo ""
     echo -e "${BOLD}Manage:${NC}"
     echo -e "  ${CYAN}4${NC})  Stop current environment"
@@ -543,6 +591,7 @@ show_menu() {
         1) start_local ;;
         2) start_cloud_native ;;
         3) start_cloud_docker ;;
+        9) open_dev ;;
         4) stop_all ;;
         5) show_status ;;
         6) tail_logs ;;
@@ -570,17 +619,21 @@ show_help() {
     echo "  local              All in Docker, local data               (3000/8000)"
     echo "  cloud-native       Native on host, cloud data, hot-reload  (3001/8001)"
     echo "  cloud-docker       All in Docker, cloud data               (3002/8002)"
+    echo "  dev                Open deployed DEV environment in browser"
     echo ""
     echo -e "${BOLD}Commands:${NC}"
     echo "  (no args)          Interactive menu"
     echo "  local              Start Local environment"
     echo "  cloud-native       Start Cloud Native environment"
     echo "  cloud-docker       Start Cloud Docker environment"
+    echo "  dev                Open deployed DEV environment in browser"
     echo "  stop               Stop whatever is currently running"
     echo "  status             Show running services, ports, and containers"
     echo "  logs [service]     Tail logs (optional service filter)"
     echo "  build [target]     Build Docker images (backend/frontend/all)"
-    echo "  migrate            Run alembic upgrade head"
+    echo "  migrate            Run alembic upgrade head (auto-detects environment)"
+    echo "  migrate cloud      Run migrations against Azure DEV database"
+    echo "  migrate local      Run migrations against local Docker database"
     echo "  azure start        Start Azure DEV resources"
     echo "  azure stop         Stop Azure DEV resources"
     echo "  azure status       Check Azure resource status"
@@ -601,11 +654,12 @@ main() {
         cloud-native)  start_cloud_native ;;
         cloud)         start_cloud_native ;;
         cloud-docker)  start_cloud_docker ;;
+        dev)           open_dev ;;
         stop)          stop_all ;;
         status)        show_status ;;
         logs)          tail_logs "${2:-}" ;;
         build)         build_images "${2:-}" ;;
-        migrate)       run_migrate ;;
+        migrate)       run_migrate "${2:-}" ;;
         azure)         azure_cmd "${2:-}" ;;
         help|--help|-h) show_help ;;
         *)

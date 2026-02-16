@@ -77,6 +77,7 @@ class ClusterResponse(BaseModel):
     display_name: str | None
     is_pinned: bool
     is_archived: bool
+    cover_thumbnail_url: str | None = None
     created_at: datetime
     updated_at: datetime
 

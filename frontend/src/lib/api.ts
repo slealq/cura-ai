@@ -129,7 +129,7 @@ api.interceptors.response.use(
 );
 
 // Helper to append auth token to static file URLs (img src, etc.)
-function authUrl(url: string): string {
+export function authUrl(url: string): string {
   const token = localStorage.getItem('access_token');
   if (!token) return url;
   const base = process.env.NEXT_PUBLIC_API_URL || '';
@@ -166,6 +166,128 @@ export const imagesApi = {
       params,
     });
     return data;
+  },
+
+  uploadChunked: async (
+    files: File[],
+    folderId?: number,
+    onProgress?: (uploaded: number, total: number) => void,
+    newFolderName?: string,
+  ): Promise<BatchUploadResponse> => {
+    const CHUNK_SIZE = 15;
+    const PARALLEL_CHUNKS = 3;
+    const allUploaded: BatchUploadResponse['uploaded'] = [];
+    const allFailed: BatchUploadResponse['failed'] = [];
+    let jobId: number | null = null;
+    let chunkError: string | null = null;
+    let sentCount = 0;
+
+    // Build all chunks upfront
+    const chunks: File[][] = [];
+    for (let i = 0; i < files.length; i += CHUNK_SIZE) {
+      chunks.push(files.slice(i, i + CHUNK_SIZE));
+    }
+
+    // Send first chunk sequentially to get the job_id
+    // Include folder info so the backend can defer folder assignment to job completion
+    if (chunks.length > 0) {
+      const firstChunk = chunks[0];
+      const formData = new FormData();
+      firstChunk.forEach((file) => formData.append('files', file));
+
+      const firstChunkParams: Record<string, string | number> = { total_items: files.length };
+      if (folderId) firstChunkParams.folder_id = folderId;
+      if (newFolderName) firstChunkParams.new_folder_name = newFolderName;
+
+      try {
+        const { data } = await api.post<BatchUploadResponse>('/images/upload/batch', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+          params: firstChunkParams,
+          timeout: 5 * 60 * 1000, // 5 min per chunk
+        });
+
+        jobId = data.job_id;
+        allUploaded.push(...data.uploaded);
+        allFailed.push(...data.failed);
+        sentCount += firstChunk.length;
+        onProgress?.(sentCount, files.length);
+      } catch (err) {
+        chunkError = `Chunk 1-${firstChunk.length} failed: ${err instanceof Error ? err.message : String(err)}`;
+        console.error(chunkError);
+        for (const file of files) {
+          allFailed.push({ filename: file.name, error: 'Upload aborted — first chunk failed' });
+        }
+        onProgress?.(files.length, files.length);
+      }
+    }
+
+    // Send remaining chunks in parallel batches
+    if (!chunkError && chunks.length > 1 && jobId !== null) {
+      const remainingChunks = chunks.slice(1);
+
+      for (let b = 0; b < remainingChunks.length; b += PARALLEL_CHUNKS) {
+        const batch = remainingChunks.slice(b, b + PARALLEL_CHUNKS);
+
+        const promises = batch.map((chunk) => {
+          const formData = new FormData();
+          chunk.forEach((file) => formData.append('files', file));
+
+          return api.post<BatchUploadResponse>('/images/upload/batch', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+            params: { job_id: jobId },
+            timeout: 5 * 60 * 1000, // 5 min per chunk
+          });
+        });
+
+        const results = await Promise.allSettled(promises);
+
+        let batchFailed = false;
+        for (let r = 0; r < results.length; r++) {
+          const result = results[r];
+          const chunk = batch[r];
+
+          if (result.status === 'fulfilled') {
+            allUploaded.push(...result.value.data.uploaded);
+            allFailed.push(...result.value.data.failed);
+            sentCount += chunk.length;
+          } else {
+            batchFailed = true;
+            const errMsg = result.reason instanceof Error ? result.reason.message : String(result.reason);
+            chunkError = `Chunk failed: ${errMsg}`;
+            console.error(chunkError);
+            for (const file of chunk) {
+              allFailed.push({ filename: file.name, error: 'Upload chunk failed' });
+            }
+            sentCount += chunk.length;
+          }
+        }
+
+        onProgress?.(sentCount, files.length);
+
+        if (batchFailed) {
+          // Mark all remaining unsent files as failed
+          const nextStart = b + PARALLEL_CHUNKS;
+          for (let r = nextStart; r < remainingChunks.length; r++) {
+            for (const file of remainingChunks[r]) {
+              allFailed.push({ filename: file.name, error: 'Upload aborted — previous chunk failed' });
+            }
+          }
+          onProgress?.(files.length, files.length);
+          break;
+        }
+      }
+    }
+
+    // Folder assignment is handled by the backend when the ingest job completes
+
+    // If a chunk failed, throw so the caller's error handler fires — but include partial results
+    if (chunkError) {
+      const err = new Error(chunkError) as Error & { partialResult: BatchUploadResponse };
+      err.partialResult = { uploaded: allUploaded, failed: allFailed, job_id: jobId, folder_error: null };
+      throw err;
+    }
+
+    return { uploaded: allUploaded, failed: allFailed, job_id: jobId, folder_error: null };
   },
 
   delete: async (id: number): Promise<void> => {
@@ -247,8 +369,11 @@ export const foldersApi = {
     return data;
   },
 
-  delete: async (id: number): Promise<void> => {
-    await api.delete(`/folders/${id}`);
+  delete: async (id: number, deleteImages?: boolean): Promise<{ status: string; job_id?: number; total?: number; message?: string }> => {
+    const { data } = await api.delete(`/folders/${id}`, {
+      params: deleteImages ? { delete_images: true } : undefined,
+    });
+    return data;
   },
 
   addImages: async (id: number, imageIds: number[]): Promise<{ added: number }> => {
@@ -687,6 +812,16 @@ export const generationApi = {
     return data;
   },
 
+  downloadLoraWeights: async (loraId: number): Promise<{ status: string }> => {
+    const { data } = await api.post(`/generation/lora/${loraId}/download-weights`);
+    return data;
+  },
+
+  downloadAllLoraWeights: async (): Promise<{ status: string; count: number }> => {
+    const { data } = await api.post('/generation/lora/download-all-weights');
+    return data;
+  },
+
   // Generation
   generate: async (params: {
     prompt: string;
@@ -762,6 +897,10 @@ export const generationApi = {
 
   deleteEvaluation: async (evalId: number): Promise<void> => {
     await api.delete(`/generation/evaluations/${evalId}`);
+  },
+
+  getLoraWeightsUrl: (loraId: number): string => {
+    return authUrl(`/api/generation/lora/${loraId}/weights`);
   },
 
   getEvalGeneratedImageUrl: (evalId: number, pairId: number): string => {

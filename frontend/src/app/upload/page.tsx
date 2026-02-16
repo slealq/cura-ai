@@ -3,19 +3,19 @@
 import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useDropzone } from 'react-dropzone';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Upload, X, Check, AlertCircle, Loader2 } from 'lucide-react';
-import { toast } from 'sonner';
-import { imagesApi, foldersApi } from '@/lib/api';
+import { useQuery } from '@tanstack/react-query';
+import { Upload, X, Loader2, Info } from 'lucide-react';
+import { foldersApi } from '@/lib/api';
 import { cn, formatFileSize } from '@/lib/utils';
+import { useUpload } from '@/contexts/UploadContext';
 
 interface FileWithPreview extends File {
   preview?: string;
 }
 
 export default function UploadPage() {
-  const queryClient = useQueryClient();
   const router = useRouter();
+  const { startUpload, state } = useUpload();
   const [files, setFiles] = useState<FileWithPreview[]>([]);
   const [selectedFolderId, setSelectedFolderId] = useState<number | undefined>();
   const [showNewFolder, setShowNewFolder] = useState(false);
@@ -24,44 +24,6 @@ export default function UploadPage() {
   const { data: folders } = useQuery({
     queryKey: ['folders'],
     queryFn: () => foldersApi.list({ limit: 200 }),
-  });
-
-  const uploadMutation = useMutation({
-    mutationFn: async (filesToUpload: File[]) => {
-      let folderId = selectedFolderId;
-
-      // Create a new folder first if needed
-      if (showNewFolder && newFolderName.trim()) {
-        const folder = await foldersApi.create({ name: newFolderName.trim() });
-        folderId = folder.id;
-      }
-
-      return imagesApi.upload(filesToUpload, folderId);
-    },
-    onSuccess: (data) => {
-      const count = data.uploaded.length;
-      const failCount = data.failed.length;
-      if (count > 0) {
-        toast.success(`${count} image${count !== 1 ? 's' : ''} uploaded${failCount > 0 ? ` (${failCount} failed)` : ''}`, {
-          action: { label: 'View Images', onClick: () => router.push('/images') },
-        });
-      }
-      if (failCount > 0 && count === 0) {
-        toast.error(`All ${failCount} uploads failed`);
-      }
-      if (data.folder_error) {
-        toast.error('Images uploaded but failed to add to folder. You can add them from the folder page.');
-      }
-      queryClient.invalidateQueries({ queryKey: ['images'] });
-      queryClient.invalidateQueries({ queryKey: ['folders'] });
-      queryClient.invalidateQueries({ queryKey: ['stats'] });
-      setFiles([]);
-      setNewFolderName('');
-      setShowNewFolder(false);
-    },
-    onError: () => {
-      toast.error('Upload failed');
-    },
   });
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
@@ -91,9 +53,12 @@ export default function UploadPage() {
   };
 
   const handleUpload = () => {
-    if (files.length > 0) {
-      uploadMutation.mutate(files);
-    }
+    if (files.length === 0) return;
+    startUpload(files, selectedFolderId, showNewFolder ? newFolderName : undefined);
+    setFiles([]);
+    setNewFolderName('');
+    setShowNewFolder(false);
+    router.push('/images');
   };
 
   return (
@@ -104,6 +69,18 @@ export default function UploadPage() {
           Upload design inspiration images to process and cluster
         </p>
       </div>
+
+      {/* Upload in progress banner */}
+      {state.isUploading && (
+        <div className="flex items-center gap-2 px-4 py-3 rounded-lg bg-blue-50 border border-blue-200 dark:bg-blue-900/30 dark:border-blue-800 text-sm text-blue-800 dark:text-blue-300">
+          <Info className="h-4 w-4 shrink-0" />
+          <span>
+            An upload is already in progress
+            {state.progress && ` (${state.progress.uploaded}/${state.progress.total} files)`}.
+            Check the notification toast for status.
+          </span>
+        </div>
+      )}
 
       {/* Folder selector */}
       <div>
@@ -228,57 +205,22 @@ export default function UploadPage() {
 
           <button
             onClick={handleUpload}
-            disabled={uploadMutation.isPending}
+            disabled={state.isUploading}
             className={cn(
               'w-full py-3 rounded-lg font-medium transition-colors',
               'bg-primary text-primary-foreground hover:bg-primary/90',
               'disabled:opacity-50 disabled:cursor-not-allowed'
             )}
           >
-            {uploadMutation.isPending ? (
+            {state.isUploading ? (
               <span className="flex items-center justify-center gap-2">
                 <Loader2 className="h-5 w-5 animate-spin" />
-                Uploading...
+                Upload in progress...
               </span>
             ) : (
               `Upload ${files.length} ${files.length === 1 ? 'Image' : 'Images'}`
             )}
           </button>
-        </div>
-      )}
-
-      {/* Upload Results */}
-      {uploadMutation.isSuccess && (
-        <div className="bg-green-50 border border-green-200 dark:bg-green-900/30 dark:border-green-800 rounded-lg p-4">
-          <div className="flex items-start gap-3">
-            <Check className="h-5 w-5 text-green-600 dark:text-green-400 mt-0.5" />
-            <div>
-              <h3 className="font-medium text-green-800 dark:text-green-300">Upload Complete</h3>
-              <p className="text-sm text-green-700 dark:text-green-400 mt-1">
-                {uploadMutation.data.uploaded.length} images uploaded and queued
-                for processing.
-              </p>
-              {uploadMutation.data.failed.length > 0 && (
-                <p className="text-sm text-red-600 dark:text-red-400 mt-1">
-                  {uploadMutation.data.failed.length} images failed to upload.
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {uploadMutation.isError && (
-        <div className="bg-red-50 border border-red-200 dark:bg-red-900/30 dark:border-red-800 rounded-lg p-4">
-          <div className="flex items-start gap-3">
-            <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400 mt-0.5" />
-            <div>
-              <h3 className="font-medium text-red-800 dark:text-red-300">Upload Failed</h3>
-              <p className="text-sm text-red-700 dark:text-red-400 mt-1">
-                Something went wrong. Please try again.
-              </p>
-            </div>
-          </div>
         </div>
       )}
     </div>

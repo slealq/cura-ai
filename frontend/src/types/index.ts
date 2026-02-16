@@ -44,6 +44,7 @@ export interface Cluster {
   display_name: string | null;
   is_pinned: boolean;
   is_archived: boolean;
+  cover_thumbnail_url: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -191,6 +192,7 @@ export interface Folder {
   name: string;
   description: string | null;
   image_count: number;
+  cover_thumbnail_url: string | null;
   created_at: string;
   updated_at: string;
   preview_images: FolderPreviewImage[];
@@ -254,6 +256,12 @@ export interface LoraModel {
   job_id: number | null;
   source_preview_images: LoraPreviewImage[];
   latest_evaluation: LatestEvaluationSummary | null;
+  weights_object_key: string | null;
+  file_size: number | null;
+  file_hash: string | null;
+  weights_downloaded_at: string | null;
+  has_local_weights: boolean;
+  example_prompts: string[] | null;
   created_at: string;
   training_started_at: string | null;
   training_completed_at: string | null;

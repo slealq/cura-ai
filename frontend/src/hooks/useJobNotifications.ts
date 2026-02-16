@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { jobsApi } from '@/lib/api';
@@ -9,6 +9,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import type { Job } from '@/types';
 
 const JOB_TYPE_LABELS: Record<string, string> = {
+  ingest: 'Upload',
   tag: 'Tagging',
   describe: 'Description',
   embed: 'Embedding',
@@ -21,14 +22,19 @@ const JOB_TYPE_LABELS: Record<string, string> = {
   generate_image: 'Image Generation',
   batch_generate: 'Batch Generation',
   lora_evaluate: 'LoRA Evaluation',
+  folder_delete: 'Folder Delete',
 };
 
 function jobLabel(job: Job): string {
   return JOB_TYPE_LABELS[job.job_type] || job.job_type.replace('_', ' ');
 }
 
+// Job types that may create/modify folders — refresh folder list on completion
+const FOLDER_AFFECTING_JOBS = new Set(['ingest', 'folder_delete']);
+
 export function useJobNotifications() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { isAuthenticated } = useAuth();
   const statusMapRef = useRef<Map<number, string>>(new Map());
   const initializedRef = useRef(false);
@@ -76,7 +82,34 @@ export function useJobNotifications() {
           description: `Job #${job.id}`,
           duration: 3000,
         });
+
+        // Refresh folder list when ingest/delete jobs complete (deferred folder assignment)
+        if (FOLDER_AFFECTING_JOBS.has(job.job_type)) {
+          queryClient.invalidateQueries({ queryKey: ['folders'] });
+          queryClient.invalidateQueries({ queryKey: ['images'] });
+          queryClient.invalidateQueries({ queryKey: ['stats'] });
+        }
+
+        // Clean up sessionStorage tracking for completed folder deletes
+        if (job.job_type === 'folder_delete') {
+          try {
+            const fId = job.parameters?.folder_id as number | undefined;
+            if (fId) {
+              const raw = sessionStorage.getItem('deleting-folders');
+              if (raw) {
+                const ids = (JSON.parse(raw) as number[]).filter((id) => id !== fId);
+                if (ids.length > 0) {
+                  sessionStorage.setItem('deleting-folders', JSON.stringify(ids));
+                } else {
+                  sessionStorage.removeItem('deleting-folders');
+                }
+              }
+            }
+          } catch {
+            // Ignore sessionStorage errors
+          }
+        }
       }
     }
-  }, [data, router]);
+  }, [data, router, queryClient]);
 }

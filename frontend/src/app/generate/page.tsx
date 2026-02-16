@@ -1,11 +1,12 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { generationApi, settingsApi } from '@/lib/api';
 import { Loader2, Sparkles, ChevronDown, ChevronUp, X, KeyRound } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import GeneratedImageCard from '@/components/GeneratedImageCard';
 import { cn } from '@/lib/utils';
 
@@ -24,7 +25,16 @@ const BASE_MODELS = [
 ];
 
 export default function GeneratePage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-32"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>}>
+      <GeneratePageInner />
+    </Suspense>
+  );
+}
+
+function GeneratePageInner() {
   const queryClient = useQueryClient();
+  const searchParams = useSearchParams();
 
   // Form state
   const [prompt, setPrompt] = useState('');
@@ -45,6 +55,7 @@ export default function GeneratePage() {
 
   // Fetch base model from settings to initialize
   const hasInitialized = useRef(false);
+  const hasAppliedUrlParams = useRef(false);
   const { data: baseModelData } = useQuery({
     queryKey: ['base-model'],
     queryFn: settingsApi.getBaseModel,
@@ -60,6 +71,35 @@ export default function GeneratePage() {
       }
     }
   }, [baseModelData]);
+
+  // Read URL params (?lora=ID&prompt=TEXT)
+  useEffect(() => {
+    if (hasAppliedUrlParams.current) return;
+    const loraParam = searchParams.get('lora');
+    const promptParam = searchParams.get('prompt');
+
+    if (loraParam) {
+      const parsed = parseInt(loraParam, 10);
+      if (!isNaN(parsed)) {
+        hasAppliedUrlParams.current = true;
+        setLoraId(parsed);
+        // Fetch the LoRA to sync baseModel
+        generationApi.getLora(parsed).then((lora) => {
+          const modelEntry = BASE_MODELS.find((m) => m.value === lora.base_model);
+          if (modelEntry) {
+            setBaseModel(modelEntry.value);
+            setGuidance(modelEntry.defaultGuidance);
+          }
+        }).catch(() => {
+          // LoRA not found or not accessible — ignore
+        });
+      }
+    }
+    if (promptParam) {
+      hasAppliedUrlParams.current = true;
+      setPrompt(decodeURIComponent(promptParam));
+    }
+  }, [searchParams]);
 
   // Check if fal.ai API key is configured
   const { data: apiKeys } = useQuery({

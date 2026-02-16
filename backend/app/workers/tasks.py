@@ -42,16 +42,18 @@ def get_db() -> Session:
 
 
 def run_async(coro):
-    """Run async function in sync context."""
-    loop = asyncio.get_event_loop()
-    if loop.is_running():
-        # Create new loop for nested async
-        new_loop = asyncio.new_event_loop()
-        try:
-            return new_loop.run_until_complete(coro)
-        finally:
-            new_loop.close()
-    return loop.run_until_complete(coro)
+    """Run async function in sync context (works in thread-pool workers)."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop in this thread — create one
+        return asyncio.run(coro)
+    # Nested async — create a separate loop
+    new_loop = asyncio.new_event_loop()
+    try:
+        return new_loop.run_until_complete(coro)
+    finally:
+        new_loop.close()
 
 
 def _update_job_status(db: Session, job_id: int | None, status: JobStatus, **kwargs):
@@ -69,6 +71,301 @@ def _update_job_status(db: Session, job_id: int | None, status: JobStatus, **kwa
     for key, value in kwargs.items():
         setattr(job, key, value)
     db.commit()
+
+
+def _assign_folder_on_completion(db: Session, job: Job):
+    """Create folder (if needed) and assign images when an ingest job completes.
+
+    Reads folder_id / new_folder_name from job.parameters and all_upload_ids
+    from job.result. This ensures folders only appear in the UI once all
+    images have thumbnails generated.
+    """
+    params = job.parameters or {}
+    folder_id = params.get("folder_id")
+    new_folder_name = params.get("new_folder_name")
+    all_upload_ids = (job.result or {}).get("all_upload_ids", [])
+
+    if not (folder_id or new_folder_name) or not all_upload_ids:
+        return
+
+    try:
+        from app.services.folder_service import get_folder_service
+        folder_service = get_folder_service(db, job.user_id)
+
+        if new_folder_name:
+            folder = folder_service.create_folder(new_folder_name)
+            folder_id = folder.id
+
+        if folder_id:
+            folder_service.add_images_to_folder(folder_id, all_upload_ids)
+            folder_service.refresh_cover_image(folder_id)
+            folder_service.generate_cover_composite(folder_id)
+            logger.info(f"Deferred folder assignment: added {len(all_upload_ids)} images to folder {folder_id} for job {job.id}")
+    except Exception as e:
+        logger.error(f"Failed deferred folder assignment for job {job.id}: {e}")
+
+
+def _finish_ingest_job_item(db: Session, job_id: int | None, *, failed: bool):
+    """Increment job progress and finalize when all items are done.
+
+    When the last item finishes, counts actual FAILED images to set the
+    correct job status (FAILED if all failed, COMPLETED otherwise).
+    Then runs deferred folder assignment if configured.
+    """
+    if not job_id:
+        return
+    try:
+        db.execute(
+            Job.__table__.update()
+            .where(Job.id == job_id)
+            .values(progress=Job.progress + 1)
+        )
+        db.commit()
+
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job and job.total_items and job.progress >= job.total_items:
+            # Count how many images from this job actually failed
+            image_ids = (job.result or {}).get("image_ids", [])
+            n_failed = 0
+            if image_ids:
+                n_failed = (
+                    db.query(Image)
+                    .filter(Image.id.in_(image_ids), Image.status == ImageStatus.FAILED)
+                    .count()
+                )
+
+            job.completed_at = datetime.utcnow()
+            if n_failed >= job.total_items:
+                job.status = JobStatus.FAILED
+                job.error_message = f"All {n_failed} items failed"
+            elif n_failed > 0:
+                job.status = JobStatus.COMPLETED
+                job.error_message = f"{n_failed}/{job.total_items} items failed"
+            else:
+                job.status = JobStatus.COMPLETED
+            db.commit()
+
+            # Deferred folder assignment — only after all images are ingested
+            _assign_folder_on_completion(db, job)
+    except Exception:
+        pass
+
+
+@celery_app.task(bind=True)
+def process_ingest(self, image_id: int, user_id: int, job_id: int | None = None) -> dict:
+    """
+    Complete the heavy processing for a fast-ingested image.
+
+    Reads the raw file back from storage, detects MIME type, gets dimensions,
+    generates 3 thumbnails, computes perceptual hash, and updates the Image
+    record to INGESTED status. Atomically increments Job progress.
+    """
+    write_log(category=LogCategory.TASK, message=f"Task process_ingest started for image {image_id}",
+              task_name="process_ingest", image_id=image_id, job_id=job_id, user_id=user_id)
+    task_start = time.monotonic()
+    db = get_db()
+    try:
+        image_service = get_image_service(db, user_id)
+        storage = image_service.storage
+        image = image_service.get_image(image_id)
+
+        if not image:
+            logger.error(f"Image {image_id} not found")
+            return {"status": "error", "message": "Image not found"}
+
+        # Read file back from storage
+        file_data = run_async(storage.get_image(image.object_key))
+
+        # Detect MIME type via PIL
+        mime_type = storage.get_mime_type(file_data)
+
+        # Get dimensions via PIL
+        width, height = storage.get_image_dimensions(file_data)
+
+        # Generate 3 thumbnails and save to storage
+        thumbnails = run_async(storage.generate_thumbnails(file_data, image.object_key))
+
+        # Compute perceptual hash
+        perceptual_hash = storage.compute_perceptual_hash(file_data)
+
+        # Update Image record
+        image.mime_type = mime_type
+        image.width = width
+        image.height = height
+        image.perceptual_hash = perceptual_hash
+        image.thumbnail_uri_small = thumbnails.get("200")
+        image.thumbnail_uri_medium = thumbnails.get("400")
+        image.thumbnail_uri_large = thumbnails.get("800")
+        image.status = ImageStatus.INGESTED
+        image.ingested_at = datetime.utcnow()
+        image.error_message = None
+        db.commit()
+
+        # Atomically increment Job progress
+        _finish_ingest_job_item(db, job_id, failed=False)
+
+        elapsed = (time.monotonic() - task_start) * 1000
+        write_log(category=LogCategory.TASK,
+                  message=f"Task process_ingest completed for image {image_id} in {elapsed:.0f}ms ({width}x{height})",
+                  task_name="process_ingest", image_id=image_id, job_id=job_id,
+                  duration_ms=round(elapsed, 1), user_id=user_id)
+        return {"status": "success", "image_id": image_id, "width": width, "height": height}
+
+    except Exception as e:
+        elapsed = (time.monotonic() - task_start) * 1000
+        err_msg = _unwrap_error(e)
+        logger.error(f"Failed to process ingest for image {image_id}: {err_msg}")
+        write_log(category=LogCategory.TASK,
+                  message=f"Task process_ingest failed for image {image_id}: {err_msg}",
+                  level=LogLevel.ERROR, task_name="process_ingest", image_id=image_id,
+                  job_id=job_id, duration_ms=round(elapsed, 1),
+                  extra={"error": err_msg}, user_id=user_id)
+        # Mark image as FAILED
+        try:
+            image = db.query(Image).filter(Image.id == image_id).first()
+            if image:
+                image.status = ImageStatus.FAILED
+                image.error_message = err_msg
+                image.retry_count += 1
+                db.commit()
+        except Exception:
+            pass
+        # Still increment job progress on failure so the job can complete
+        _finish_ingest_job_item(db, job_id, failed=True)
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True)
+def process_ingest_batch(
+    self, image_ids: list[int], user_id: int, job_id: int | None = None
+) -> dict:
+    """
+    Process a batch of fast-ingested images in a single task.
+
+    One DB session for the whole batch. For each image: reads file from storage,
+    generates thumbnails, conditionally computes metadata (skipped if already
+    populated by fast_ingest), and updates the record to INGESTED.
+
+    Error isolation: if one image fails, it is marked FAILED and the rest continue.
+    Re-delivery guard: images already past PENDING status are skipped.
+    """
+    write_log(
+        category=LogCategory.TASK,
+        message=f"Task process_ingest_batch started for {len(image_ids)} images",
+        task_name="process_ingest_batch",
+        job_id=job_id,
+        user_id=user_id,
+    )
+    batch_start = time.monotonic()
+    db = get_db()
+    results = []
+
+    try:
+        from app.services.storage import get_storage_service
+
+        storage = get_storage_service()
+
+        for image_id in image_ids:
+            task_start = time.monotonic()
+            try:
+                image = (
+                    db.query(Image)
+                    .filter(Image.id == image_id, Image.user_id == user_id)
+                    .first()
+                )
+                if not image:
+                    logger.warning(f"Batch ingest: image {image_id} not found, skipping")
+                    _finish_ingest_job_item(db, job_id, failed=True)
+                    results.append({"image_id": image_id, "status": "not_found"})
+                    continue
+
+                # Re-delivery guard: skip images already past PENDING
+                if image.status != ImageStatus.PENDING:
+                    logger.info(
+                        f"Batch ingest: image {image_id} already {image.status.value}, skipping"
+                    )
+                    results.append({"image_id": image_id, "status": "skipped"})
+                    continue
+
+                # Read file from storage
+                file_data = run_async(storage.get_image(image.object_key))
+
+                # Only compute metadata if fast_ingest didn't populate it (Tier 3)
+                if image.width is None or image.height is None:
+                    mime_type, width, height, perceptual_hash = (
+                        storage.compute_image_metadata(file_data)
+                    )
+                    image.mime_type = mime_type
+                    image.width = width
+                    image.height = height
+                    image.perceptual_hash = perceptual_hash
+
+                # Generate thumbnails
+                thumbnails = run_async(
+                    storage.generate_thumbnails(file_data, image.object_key)
+                )
+
+                image.thumbnail_uri_small = thumbnails.get("200")
+                image.thumbnail_uri_medium = thumbnails.get("400")
+                image.thumbnail_uri_large = thumbnails.get("800")
+                image.status = ImageStatus.INGESTED
+                image.ingested_at = datetime.utcnow()
+                image.error_message = None
+                db.commit()
+
+                _finish_ingest_job_item(db, job_id, failed=False)
+
+                elapsed = (time.monotonic() - task_start) * 1000
+                results.append({
+                    "image_id": image_id,
+                    "status": "success",
+                    "width": image.width,
+                    "height": image.height,
+                    "ms": round(elapsed, 1),
+                })
+
+            except Exception as e:
+                elapsed = (time.monotonic() - task_start) * 1000
+                err_msg = _unwrap_error(e)
+                logger.error(
+                    f"Batch ingest: failed image {image_id}: {err_msg}"
+                )
+                try:
+                    image = db.query(Image).filter(Image.id == image_id).first()
+                    if image:
+                        image.status = ImageStatus.FAILED
+                        image.error_message = err_msg
+                        image.retry_count += 1
+                        db.commit()
+                except Exception:
+                    pass
+                _finish_ingest_job_item(db, job_id, failed=True)
+                results.append({
+                    "image_id": image_id,
+                    "status": "failed",
+                    "error": err_msg,
+                })
+
+        batch_elapsed = (time.monotonic() - batch_start) * 1000
+        n_ok = sum(1 for r in results if r["status"] == "success")
+        n_fail = sum(1 for r in results if r["status"] == "failed")
+        write_log(
+            category=LogCategory.TASK,
+            message=(
+                f"Task process_ingest_batch completed: {n_ok} ok, {n_fail} failed, "
+                f"{len(image_ids)} total in {batch_elapsed:.0f}ms"
+            ),
+            task_name="process_ingest_batch",
+            job_id=job_id,
+            duration_ms=round(batch_elapsed, 1),
+            user_id=user_id,
+        )
+        return {"status": "success", "results": results}
+
+    finally:
+        db.close()
 
 
 @celery_app.task(bind=True)
@@ -887,6 +1184,92 @@ def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int]) -
         raise
     finally:
         db.close()
+
+
+@celery_app.task(bind=True)
+def delete_folder_with_images(self, folder_id: int, user_id: int, job_id: int) -> dict:
+    """
+    Delete a folder and all its images in the background.
+
+    Creates a DB session, calls folder_service.delete_folder_with_images(),
+    dispatches storage cleanup, and updates the Job record.
+    """
+    write_log(category=LogCategory.TASK,
+              message=f"Task delete_folder_with_images started for folder {folder_id}",
+              task_name="delete_folder_with_images", job_id=job_id, user_id=user_id)
+    task_start = time.monotonic()
+    db = get_db()
+    try:
+        _update_job_status(db, job_id, JobStatus.RUNNING)
+
+        from app.services.folder_service import get_folder_service
+        folder_service = get_folder_service(db, user_id)
+
+        # Delete cover composite file before deleting the folder
+        from app.services.storage import get_storage_service
+        storage = get_storage_service()
+        storage.delete_folder_cover_sync(folder_id)
+
+        result = folder_service.delete_folder_with_images(folder_id)
+        if result is None:
+            _update_job_status(db, job_id, JobStatus.FAILED, error_message="Folder not found")
+            return {"status": "error", "message": "Folder not found"}
+
+        # Fire-and-forget storage cleanup
+        if result["image_files"]:
+            cleanup_storage_files.delay(result["image_files"])
+
+        _update_job_status(
+            db, job_id, JobStatus.COMPLETED,
+            progress=result["images_deleted"],
+            result={"images_deleted": result["images_deleted"], "folder_id": folder_id},
+        )
+
+        elapsed = (time.monotonic() - task_start) * 1000
+        write_log(category=LogCategory.TASK,
+                  message=f"Task delete_folder_with_images completed for folder {folder_id} in {elapsed:.0f}ms ({result['images_deleted']} images deleted)",
+                  task_name="delete_folder_with_images", job_id=job_id,
+                  duration_ms=round(elapsed, 1), user_id=user_id)
+        return {"status": "success", "images_deleted": result["images_deleted"]}
+
+    except Exception as e:
+        elapsed = (time.monotonic() - task_start) * 1000
+        err_msg = _unwrap_error(e)
+        logger.error(f"Failed to delete folder {folder_id}: {err_msg}")
+        write_log(category=LogCategory.TASK,
+                  message=f"Task delete_folder_with_images failed for folder {folder_id}: {err_msg}",
+                  level=LogLevel.ERROR, task_name="delete_folder_with_images",
+                  job_id=job_id, duration_ms=round(elapsed, 1),
+                  extra={"error": err_msg}, user_id=user_id)
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task
+def cleanup_storage_files(image_files: list[dict]) -> dict:
+    """
+    Fire-and-forget task to delete image files from storage.
+
+    Args:
+        image_files: List of {"object_key": str, "thumbnail_uris": [str, ...]}
+    """
+    from app.services.storage import get_storage_service
+
+    storage = get_storage_service()
+    total_deleted = 0
+    total_failed = 0
+
+    for entry in image_files:
+        result = run_async(
+            storage.delete_image_files(entry["object_key"], entry.get("thumbnail_uris", []))
+        )
+        total_deleted += result["deleted"]
+        total_failed += result["failed"]
+
+    logger.info(f"Storage cleanup: {total_deleted} files deleted, {total_failed} failed")
+    return {"deleted": total_deleted, "failed": total_failed}
 
 
 @celery_app.task

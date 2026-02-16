@@ -258,6 +258,14 @@ npm run build        # Production build
 npm run lint         # ESLint
 ```
 
+## UI Principles
+
+**Never block the UI on long-running operations.** All potentially slow actions (upload, delete with images, reprocess, train, generate, evaluate, etc.) must be dispatched as background Jobs via Celery. The frontend shows an immediate toast notification with a "View Jobs" link, then navigates away. Job completion/failure is surfaced via the `useJobNotifications` polling hook. The confirm dialog should close immediately on user click — never show a "Loading..." state for background-dispatched work.
+
+**Upload pattern:** Uploads are managed by a global `UploadContext` (lives in layout, never unmounts). The upload page is a thin trigger — user selects files, clicks Upload, and navigates away immediately. A Sonner toast tracks progress in real-time (`"Sending 50/200 files (25%)..."`). Files are sent in chunks of 10 via `imagesApi.uploadChunked()`. Folder creation/assignment is deferred to the backend — folders only appear in the UI after all images finish ingesting with thumbnails.
+
+**Delete pattern:** Folder delete-with-images uses three layers for instant UI feedback: (1) optimistic TanStack Query cache removal via `setQueryData`, (2) `sessionStorage('deleting-folders')` tracking for race-free persistence across navigation/refresh, (3) `useJobNotifications` cleans up sessionStorage when the `folder_delete` job completes. The folder must never flicker back into view after deletion.
+
 ## Architecture
 
 **Stack:** Next.js 14 + FastAPI + PostgreSQL/pgvector + Celery/Redis
@@ -289,12 +297,13 @@ npm run lint         # ESLint
 - **Hybrid search**: Combines semantic (embedding) and text (tsvector) search with adaptive weighting
 
 **Processing flow:**
-1. Upload → `ImageService.ingest_image()` stores file, generates thumbnails (200/400/800px), computes SHA-256 + perceptual hash
-2. `tag_image` task → Vision AI extracts flat categorization tags
-3. `describe_image` task → Vision AI generates detailed sectioned description for image reproduction
-4. `embed_image` task → Creates text embedding from tags + description
-5. `cluster_all_images` task → HDBSCAN/KMeans/Graph groups by embedding similarity (with optional UMAP reduction)
-6. `summarize_clusters` task → Generates cluster titles and descriptions
+1. Upload → `ImageService.fast_ingest()` saves raw file + SHA-256 hash, creates PENDING record (no thumbnails yet). Returns immediately.
+2. `process_ingest` Celery task → generates thumbnails (200/400/800px), computes dimensions + perceptual hash, updates status to INGESTED. On job completion, deferred folder assignment runs via `_assign_folder_on_completion()`.
+3. `tag_image` task → Vision AI extracts flat categorization tags
+4. `describe_image` task → Vision AI generates detailed sectioned description for image reproduction
+5. `embed_image` task → Creates text embedding from tags + description
+6. `cluster_all_images` task → HDBSCAN/KMeans/Graph groups by embedding similarity (with optional UMAP reduction)
+7. `summarize_clusters` task → Generates cluster titles and descriptions
 
 **API routes** (`backend/app/api/`): All endpoints require Bearer token auth (`get_current_user` dependency) unless noted.
 - `auth.py` — Login, register (public, no auth), refresh token, get current user, create user (admin-only), list users (admin-only), toggle sync (admin-only)
@@ -311,7 +320,7 @@ npm run lint         # ESLint
 - `User` — Authentication and data ownership. Fields: email (unique), hashed_password, display_name, role (admin/user), is_active, is_verified, sync_enabled, timestamps. Seed admin: stuart.leal23@gmail.com
 - `Image` + `ImageMetadata` (1:1) — Core image data with status tracking, tags, description, embedding, hashes, tsvector
 - `Cluster` + `ClusterMembership` — Clustering results with centroid, summary, pin/archive/rename, outlier exclusion
-- `Job` — Async job tracking (types: INGEST, NORMALIZE, TAG, DESCRIBE, EMBED, CLUSTER, SUMMARIZE_CLUSTER, FULL_PIPELINE, REPROCESS, BATCH_REPROCESS, LORA_TRAIN, GENERATE_IMAGE, BATCH_GENERATE, LORA_EVALUATE)
+- `Job` — Async job tracking (types: INGEST, NORMALIZE, TAG, DESCRIBE, EMBED, CLUSTER, SUMMARIZE_CLUSTER, FULL_PIPELINE, REPROCESS, BATCH_REPROCESS, LORA_TRAIN, GENERATE_IMAGE, BATCH_GENERATE, LORA_EVALUATE, FOLDER_DELETE)
 - `Folder` + `FolderImage` — User folders for organizing images (many-to-many)
 - `LoraModel` — Trained LoRA adapters linked to folder or cluster source, with training config and status. Supports multiple base models (flux-dev, qwen-2.5)
 - `GeneratedImage` — AI-generated images linked to LoRA models with prompt, params, and output files
@@ -324,12 +333,13 @@ npm run lint         # ESLint
 **Frontend structure** (`frontend/src/`):
 - Pages: Login (sign-in/sign-up toggle), Home (clusters), Folders, Folder Detail, All Images, Upload, Search, Cluster Detail, Models (with sub-components: TrainModal, FluxTrainForm, QwenTrainForm, SharedTrainFields, ModelSettings, EvaluationDetail), Model Evaluate, Evaluation Detail, Generate, Jobs, Debug, Settings
 - Auth: `contexts/AuthContext.tsx` provides `login`, `register`, `logout`, `user`, `isAuthenticated`. `AuthGate` in layout redirects unauthenticated users to `/login`. Axios interceptors attach Bearer token to all requests and handle 401 with automatic token refresh.
+- Upload: `contexts/UploadContext.tsx` provides global `startUpload(files, folderId?, newFolderName?)` and `state` (isUploading, progress). Lives in layout — persists across navigation. Manages chunked upload lifecycle with real-time progress toast.
 - Theme: `contexts/ThemeContext.tsx` provides light/dark/auto theme switching with timezone-aware auto mode (dark 19:00-07:00). Persisted in localStorage.
 - Components: Header (search+stats), Sidebar (navigation + user menu with logout), ImageCard, ImageDrawer (detail slide-over), ImageGrid (paginated with filters+batch actions), ClusterCard, FolderCard, GeneratedImageCard, AddToFolderDialog, PipelineProgress
 - API client: `lib/api.ts` — Typed Axios functions for all endpoints. `authUrl()` helper appends `?token=` to image/thumbnail URLs for authenticated file serving via `<img src>`. Supports cross-origin API calls via `NEXT_PUBLIC_API_URL` env var (used when frontend runs locally against cloud backend).
 - State: TanStack Query with polling (5s jobs, 3s logs, 10s stats)
 
-**Alembic migrations:** 18 versions (001-018) covering initial schema through multi-user support. Migration 017 creates the `users` table, seeds the admin user, adds `user_id` to all 11 data tables with backfill, and converts simple unique constraints to composite (user_id + field). Migration 018 adds `sync_enabled` to users for data sync.
+**Alembic migrations:** 22 versions (001-022) covering initial schema through multi-user support, batch upload improvements, and job type additions. Migration 017 creates the `users` table, seeds the admin user, adds `user_id` to all 11 data tables with backfill, and converts simple unique constraints to composite (user_id + field). Migration 018 adds `sync_enabled` to users for data sync. Migration 021 fixes enum casing. Migration 022 adds `FOLDER_DELETE` to the `jobtype` enum.
 
 ## Authentication
 

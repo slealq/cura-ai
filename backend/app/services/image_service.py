@@ -28,6 +28,7 @@ class ImageService:
         filename: str,
         source: ImageSource,
         original_uri: str | None = None,
+        job_id: int | None = None,
     ) -> Image:
         """
         Ingest a new image into the system.
@@ -57,6 +58,8 @@ class ImageService:
                 category=LogCategory.PIPELINE,
                 message=f"Duplicate skipped: {filename}",
                 image_id=existing.id,
+                job_id=job_id,
+                user_id=self.user_id,
                 operation="ingest",
                 duration_ms=round((time.monotonic() - start) * 1000, 1),
                 success=True,
@@ -109,6 +112,8 @@ class ImageService:
                 category=LogCategory.PIPELINE,
                 message=f"Ingested: {filename} ({width}x{height}, {len(file_data)} bytes)",
                 image_id=image.id,
+                job_id=job_id,
+                user_id=self.user_id,
                 operation="ingest",
                 duration_ms=elapsed,
                 success=True,
@@ -122,12 +127,74 @@ class ImageService:
                 category=LogCategory.PIPELINE,
                 message=f"Ingest failed: {filename} — {e}",
                 level=LogLevel.ERROR,
+                job_id=job_id,
+                user_id=self.user_id,
                 operation="ingest",
                 duration_ms=elapsed,
                 success=False,
                 extra={"filename": filename, "error": str(e)},
             )
             raise
+
+    async def fast_ingest(
+        self,
+        file_data: bytes,
+        filename: str,
+        source: ImageSource,
+        original_uri: str | None = None,
+    ) -> Image | None:
+        """
+        Fast ingest: minimal processing for batch uploads.
+
+        Only computes SHA-256 hash, checks duplicates, saves the raw file,
+        and creates a PENDING Image record. No PIL, no thumbnails, no
+        perceptual hash. Uses db.flush() so the caller can batch commits.
+
+        Returns the Image if new, or None if duplicate.
+        """
+        # Compute SHA-256 hash (fast, ~5ms for 5MB)
+        file_hash = self.storage.compute_file_hash(file_data)
+
+        # Check for duplicate (scoped to this user)
+        existing = self.db.query(Image).filter(
+            Image.file_hash == file_hash,
+            Image.user_id == self.user_id,
+        ).first()
+        if existing:
+            logger.info(f"Duplicate image detected: {filename} (hash: {file_hash[:16]}...)")
+            return None
+
+        # Generate unique object key
+        object_key = self.storage.generate_object_key(filename)
+
+        # Compute MIME type, dimensions, and perceptual hash in a single PIL open
+        mime_type, width, height, perceptual_hash = (
+            self.storage.compute_image_metadata(file_data)
+        )
+
+        # Save raw original to storage (1 write)
+        await self.storage.save_image(file_data, object_key, mime_type)
+
+        # Create Image record with metadata already populated
+        image = Image(
+            user_id=self.user_id,
+            source=source,
+            original_uri=original_uri,
+            object_key=object_key,
+            original_filename=filename,
+            file_hash=file_hash,
+            file_size=len(file_data),
+            mime_type=mime_type,
+            width=width,
+            height=height,
+            perceptual_hash=perceptual_hash,
+            status=ImageStatus.PENDING,
+        )
+
+        self.db.add(image)
+        self.db.flush()  # Get the ID without committing — caller batches the commit
+
+        return image
 
     def get_image(self, image_id: int) -> Image | None:
         """Get image by ID."""

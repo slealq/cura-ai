@@ -2,7 +2,7 @@ name: Terraform
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - "infra/**"
   pull_request:
@@ -32,7 +32,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        environment: [shared, dev, prod]
+        include:
+          - environment: shared
+            working_dir: infra/shared
+          - environment: dev
+            working_dir: infra/environments/dev
+          - environment: prod
+            working_dir: infra/environments/prod
 
     steps:
       - name: Checkout code
@@ -51,7 +57,7 @@ jobs:
           terraform_wrapper: false
 
       - name: Terraform Init (${{ matrix.environment }})
-        working-directory: infra/${{ matrix.environment }}
+        working-directory: ${{ matrix.working_dir }}
         run: |
           terraform init \
             -backend-config="resource_group_name=${{ env.TF_STATE_RESOURCE_GROUP }}" \
@@ -61,7 +67,7 @@ jobs:
 
       - name: Terraform Plan (${{ matrix.environment }})
         id: plan
-        working-directory: infra/${{ matrix.environment }}
+        working-directory: ${{ matrix.working_dir }}
         run: |
           terraform plan -no-color -out=tfplan 2>&1 | tee plan_output.txt
           echo "plan_output<<PLAN_EOF" >> $GITHUB_OUTPUT
@@ -90,13 +96,19 @@ jobs:
   terraform-apply:
     name: Terraform Apply
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
 
     strategy:
       fail-fast: true
       max-parallel: 1
       matrix:
-        environment: [shared, dev, prod]
+        include:
+          - environment: shared
+            working_dir: infra/shared
+          - environment: dev
+            working_dir: infra/environments/dev
+          - environment: prod
+            working_dir: infra/environments/prod
 
     steps:
       - name: Checkout code
@@ -113,7 +125,7 @@ jobs:
         uses: hashicorp/setup-terraform@v3
 
       - name: Terraform Init (${{ matrix.environment }})
-        working-directory: infra/${{ matrix.environment }}
+        working-directory: ${{ matrix.working_dir }}
         run: |
           terraform init \
             -backend-config="resource_group_name=${{ env.TF_STATE_RESOURCE_GROUP }}" \
@@ -122,5 +134,5 @@ jobs:
             -backend-config="key=${{ matrix.environment }}.tfstate"
 
       - name: Terraform Apply (${{ matrix.environment }})
-        working-directory: infra/${{ matrix.environment }}
+        working-directory: ${{ matrix.working_dir }}
         run: terraform apply -auto-approve

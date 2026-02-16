@@ -34,6 +34,9 @@ class StorageService:
         (self.local_path / "thumbnails").mkdir(parents=True, exist_ok=True)
         (self.local_path / "generated").mkdir(parents=True, exist_ok=True)
         (self.local_path / "generated_thumbnails").mkdir(parents=True, exist_ok=True)
+        (self.local_path / "lora_weights").mkdir(parents=True, exist_ok=True)
+        (self.local_path / "folder_covers").mkdir(parents=True, exist_ok=True)
+        (self.local_path / "cluster_covers").mkdir(parents=True, exist_ok=True)
 
     def _init_azure(self):
         """Initialize Azure Blob Storage client."""
@@ -101,6 +104,19 @@ class StorageService:
         else:
             raise ValueError(f"Unsupported storage backend: {self.storage_backend}")
 
+    async def save_lora_weights(
+        self, file_data: bytes, object_key: str, mime_type: str = "application/octet-stream"
+    ) -> str:
+        """Save LoRA weights file to storage."""
+        if self.storage_backend == "local":
+            return await self._save_local(file_data, object_key, "lora_weights")
+        elif self.storage_backend == "s3":
+            return await self._save_s3(file_data, f"lora_weights/{object_key}", mime_type)
+        elif self.storage_backend == "azure":
+            return await self._save_azure(file_data, f"lora_weights/{object_key}", mime_type)
+        else:
+            raise ValueError(f"Unsupported storage backend: {self.storage_backend}")
+
     async def _save_local(self, file_data: bytes, object_key: str, subdir: str) -> str:
         """Save file to local filesystem."""
         file_path = self.local_path / subdir / object_key
@@ -120,15 +136,24 @@ class StorageService:
         return f"s3://{settings.s3_bucket}/images/{object_key}"
 
     async def _save_azure(self, file_data: bytes, blob_path: str, mime_type: str) -> str:
-        """Save file to Azure Blob Storage."""
+        """Save file to Azure Blob Storage.
+
+        Runs the synchronous Azure SDK upload in a thread pool to avoid
+        blocking the async event loop (each upload takes ~1-3s).
+        """
+        import asyncio
+
         from azure.storage.blob import ContentSettings
 
-        blob_client = self._container_client.get_blob_client(blob_path)
-        blob_client.upload_blob(
-            file_data,
-            overwrite=True,
-            content_settings=ContentSettings(content_type=mime_type),
-        )
+        def _upload():
+            blob_client = self._container_client.get_blob_client(blob_path)
+            blob_client.upload_blob(
+                file_data,
+                overwrite=True,
+                content_settings=ContentSettings(content_type=mime_type),
+            )
+
+        await asyncio.to_thread(_upload)
         return f"azure://{self._azure_container_name}/{blob_path}"
 
     # --- Get methods ---
@@ -166,6 +191,24 @@ class StorageService:
             return response["Body"].read()
         elif self.storage_backend == "azure":
             return await self._get_azure(f"generated/{object_key}")
+        else:
+            raise ValueError(f"Unsupported storage backend: {self.storage_backend}")
+
+    async def get_lora_weights(self, object_key: str) -> bytes:
+        """Retrieve LoRA weights data from storage."""
+        if self.storage_backend == "local":
+            file_path = self.local_path / "lora_weights" / object_key
+            return file_path.read_bytes()
+        elif self.storage_backend == "s3":
+            import boto3
+            s3 = boto3.client("s3", region_name=settings.s3_region)
+            response = s3.get_object(
+                Bucket=settings.s3_bucket,
+                Key=f"lora_weights/{object_key}"
+            )
+            return response["Body"].read()
+        elif self.storage_backend == "azure":
+            return await self._get_azure(f"lora_weights/{object_key}")
         else:
             raise ValueError(f"Unsupported storage backend: {self.storage_backend}")
 
@@ -264,6 +307,44 @@ class StorageService:
 
         return f"{blob_client.url}?{sas_token}"
 
+    def generate_thumbnail_sas_url(self, thumbnail_uri: str | None) -> str | None:
+        """Generate a direct SAS URL for a thumbnail without any Azure API calls.
+
+        For Azure: uses local HMAC crypto (generate_blob_sas) — zero network calls.
+        For local: returns a relative /api/ path that the frontend wraps with authUrl().
+        """
+        if not thumbnail_uri:
+            return None
+
+        filename = self._extract_filename_from_uri(thumbnail_uri)
+        if not filename:
+            return None
+
+        if self.storage_backend == "azure":
+            from azure.storage.blob import BlobSasPermissions, generate_blob_sas
+
+            blob_path = f"thumbnails/{filename}"
+            account_name = self._blob_service_client.account_name
+            account_key = None
+            for part in self._azure_connection_string.split(";"):
+                if part.startswith("AccountKey="):
+                    account_key = part[len("AccountKey="):]
+                    break
+
+            sas_token = generate_blob_sas(
+                account_name=account_name,
+                container_name=self._azure_container_name,
+                blob_name=blob_path,
+                account_key=account_key,
+                permission=BlobSasPermissions(read=True),
+                expiry=datetime.now(timezone.utc) + timedelta(minutes=30),
+            )
+
+            blob_url = f"https://{account_name}.blob.core.windows.net/{self._azure_container_name}/{blob_path}"
+            return f"{blob_url}?{sas_token}"
+        else:
+            return f"/api/images/thumbnails/{filename}"
+
     # --- Thumbnail generation ---
 
     async def generate_thumbnails(
@@ -340,7 +421,94 @@ class StorageService:
 
         return thumbnails
 
+    # --- Delete methods ---
+
+    async def delete_file(self, subdir: str, filename: str) -> bool:
+        """Delete a single file from storage. Returns True if deleted, False if not found."""
+        if self.storage_backend == "local":
+            file_path = self.local_path / subdir / filename
+            if file_path.exists():
+                file_path.unlink()
+                return True
+            return False
+        elif self.storage_backend == "azure":
+            blob_path = f"{subdir}/{filename}"
+            blob_client = self._container_client.get_blob_client(blob_path)
+            try:
+                blob_client.delete_blob()
+                return True
+            except Exception:
+                return False
+        else:
+            raise ValueError(f"Unsupported storage backend: {self.storage_backend}")
+
+    async def delete_image_files(
+        self, object_key: str, thumbnail_uris: list[str]
+    ) -> dict[str, int]:
+        """Delete original image + all thumbnails. Returns {deleted, failed} counts."""
+        deleted = 0
+        failed = 0
+
+        # Delete original image
+        try:
+            if await self.delete_file("images", object_key):
+                deleted += 1
+        except Exception as e:
+            logger.warning(f"Failed to delete image file {object_key}: {e}")
+            failed += 1
+
+        # Delete thumbnails
+        for uri in thumbnail_uris:
+            thumb_filename = self._extract_filename_from_uri(uri)
+            if not thumb_filename:
+                continue
+            try:
+                if await self.delete_file("thumbnails", thumb_filename):
+                    deleted += 1
+            except Exception as e:
+                logger.warning(f"Failed to delete thumbnail {thumb_filename}: {e}")
+                failed += 1
+
+        return {"deleted": deleted, "failed": failed}
+
+    def _extract_filename_from_uri(self, uri: str) -> str | None:
+        """Extract the filename from a storage URI (local path or azure:// URI)."""
+        if not uri:
+            return None
+        # Azure: "azure://images/thumbnails/abc123_200.jpg" → "abc123_200.jpg"
+        if uri.startswith("azure://"):
+            parts = uri.split("/")
+            return parts[-1] if parts else None
+        # Local: "/app/storage/thumbnails/abc123_200.jpg" → "abc123_200.jpg"
+        return Path(uri).name
+
     # --- Utility methods ---
+
+    _FORMAT_TO_MIME = {
+        "JPEG": "image/jpeg",
+        "PNG": "image/png",
+        "GIF": "image/gif",
+        "WEBP": "image/webp",
+        "BMP": "image/bmp",
+        "TIFF": "image/tiff",
+    }
+
+    def compute_image_metadata(
+        self, file_data: bytes
+    ) -> tuple[str, int, int, str | None]:
+        """Compute MIME type, dimensions, and perceptual hash in a single PIL open.
+
+        Returns (mime_type, width, height, perceptual_hash).
+        """
+        img = Image.open(BytesIO(file_data))
+        mime_type = self._FORMAT_TO_MIME.get(img.format, "image/jpeg")
+        width, height = img.size
+        try:
+            phash = str(imagehash.phash(img))
+        except Exception as e:
+            logger.warning(f"Failed to compute perceptual hash: {e}")
+            phash = None
+        return mime_type, width, height, phash
 
     def get_image_dimensions(self, file_data: bytes) -> tuple[int, int]:
         """Get image width and height."""
@@ -350,15 +518,130 @@ class StorageService:
     def get_mime_type(self, file_data: bytes) -> str:
         """Detect MIME type from image data."""
         img = Image.open(BytesIO(file_data))
-        format_to_mime = {
-            "JPEG": "image/jpeg",
-            "PNG": "image/png",
-            "GIF": "image/gif",
-            "WEBP": "image/webp",
-            "BMP": "image/bmp",
-            "TIFF": "image/tiff",
-        }
-        return format_to_mime.get(img.format, "image/jpeg")
+        return self._FORMAT_TO_MIME.get(img.format, "image/jpeg")
+
+    # --- Folder cover methods (synchronous for PIL compositing) ---
+
+    def get_thumbnail_bytes_sync(self, thumbnail_uri: str) -> bytes | None:
+        """Read thumbnail file bytes synchronously (for PIL compositing)."""
+        filename = self._extract_filename_from_uri(thumbnail_uri)
+        if not filename:
+            return None
+
+        if self.storage_backend == "local":
+            file_path = self.local_path / "thumbnails" / filename
+            if file_path.exists():
+                return file_path.read_bytes()
+            return None
+        elif self.storage_backend == "azure":
+            blob_path = f"thumbnails/{filename}"
+            blob_client = self._container_client.get_blob_client(blob_path)
+            try:
+                downloader = blob_client.download_blob()
+                return downloader.readall()
+            except Exception:
+                return None
+        return None
+
+    def save_cover_sync(self, file_data: bytes, subdir: str, filename: str) -> str:
+        """Save a cover composite image. Returns the storage URI."""
+        if self.storage_backend == "local":
+            file_path = self.local_path / subdir / filename
+            file_path.write_bytes(file_data)
+            return str(file_path)
+        elif self.storage_backend == "azure":
+            from azure.storage.blob import ContentSettings
+
+            blob_path = f"{subdir}/{filename}"
+            blob_client = self._container_client.get_blob_client(blob_path)
+            blob_client.upload_blob(
+                file_data,
+                overwrite=True,
+                content_settings=ContentSettings(content_type="image/jpeg"),
+            )
+            return f"azure://{self._azure_container_name}/{blob_path}"
+        else:
+            raise ValueError(f"Unsupported storage backend: {self.storage_backend}")
+
+    def save_folder_cover_sync(self, file_data: bytes, folder_id: int) -> str:
+        """Save a folder cover composite image. Returns the storage URI."""
+        return self.save_cover_sync(file_data, "folder_covers", f"folder_{folder_id}.jpg")
+
+    def save_cluster_cover_sync(self, file_data: bytes, cluster_id: int) -> str:
+        """Save a cluster cover composite image. Returns the storage URI."""
+        return self.save_cover_sync(file_data, "cluster_covers", f"cluster_{cluster_id}.jpg")
+
+    def delete_cover_sync(self, subdir: str, filename: str) -> bool:
+        """Delete a cover composite image. Returns True if deleted."""
+        if self.storage_backend == "local":
+            file_path = self.local_path / subdir / filename
+            if file_path.exists():
+                file_path.unlink()
+                return True
+            return False
+        elif self.storage_backend == "azure":
+            blob_path = f"{subdir}/{filename}"
+            blob_client = self._container_client.get_blob_client(blob_path)
+            try:
+                blob_client.delete_blob()
+                return True
+            except Exception:
+                return False
+        return False
+
+    def delete_folder_cover_sync(self, folder_id: int) -> bool:
+        """Delete a folder cover composite image."""
+        return self.delete_cover_sync("folder_covers", f"folder_{folder_id}.jpg")
+
+    def delete_cluster_cover_sync(self, cluster_id: int) -> bool:
+        """Delete a cluster cover composite image."""
+        return self.delete_cover_sync("cluster_covers", f"cluster_{cluster_id}.jpg")
+
+    def generate_cover_sas_url(self, cover_uri: str | None, subdir: str, api_prefix: str) -> str | None:
+        """Generate a URL for a cover composite image.
+
+        For Azure: generates a SAS URL via local HMAC crypto.
+        For local: returns a relative /api/ path using api_prefix.
+        """
+        if not cover_uri:
+            return None
+
+        filename = self._extract_filename_from_uri(cover_uri)
+        if not filename:
+            return None
+
+        if self.storage_backend == "azure":
+            from azure.storage.blob import BlobSasPermissions, generate_blob_sas
+
+            blob_path = f"{subdir}/{filename}"
+            account_name = self._blob_service_client.account_name
+            account_key = None
+            for part in self._azure_connection_string.split(";"):
+                if part.startswith("AccountKey="):
+                    account_key = part[len("AccountKey="):]
+                    break
+
+            sas_token = generate_blob_sas(
+                account_name=account_name,
+                container_name=self._azure_container_name,
+                blob_name=blob_path,
+                account_key=account_key,
+                permission=BlobSasPermissions(read=True),
+                expiry=datetime.now(timezone.utc) + timedelta(minutes=30),
+            )
+
+            blob_url = f"https://{account_name}.blob.core.windows.net/{self._azure_container_name}/{blob_path}"
+            return f"{blob_url}?{sas_token}"
+        else:
+            return f"{api_prefix}/{filename}"
+
+    def generate_folder_cover_sas_url(self, cover_uri: str | None) -> str | None:
+        """Generate a URL for a folder cover composite image."""
+        return self.generate_cover_sas_url(cover_uri, "folder_covers", "/api/folders/covers")
+
+    def generate_cluster_cover_sas_url(self, cover_uri: str | None) -> str | None:
+        """Generate a URL for a cluster cover composite image."""
+        return self.generate_cover_sas_url(cover_uri, "cluster_covers", "/api/clusters/covers")
 
     def get_thumbnail_url(self, object_key: str, size: str = "medium") -> str:
         """Get URL for thumbnail based on object key and size."""

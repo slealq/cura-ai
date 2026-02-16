@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { Loader2, Plus, Image as ImageIcon } from 'lucide-react';
@@ -9,6 +9,9 @@ import Link from 'next/link';
 import { foldersApi } from '@/lib/api';
 import FolderCard from '@/components/FolderCard';
 import { cn } from '@/lib/utils';
+import type { Folder } from '@/types';
+
+const PAGE_SIZE = 20;
 
 export default function FoldersPage() {
   const queryClient = useQueryClient();
@@ -16,11 +19,39 @@ export default function FoldersPage() {
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [newFolderDescription, setNewFolderDescription] = useState('');
+  const [allItems, setAllItems] = useState<Folder[]>([]);
+  const [page, setPage] = useState(0);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['folders'],
-    queryFn: () => foldersApi.list({ limit: 200 }),
+    queryKey: ['folders', page],
+    queryFn: () => foldersApi.list({ skip: page * PAGE_SIZE, limit: PAGE_SIZE }),
   });
+
+  useEffect(() => {
+    if (data) {
+      setAllItems((prev) => {
+        const updated = prev.slice(0, page * PAGE_SIZE);
+        return [...updated, ...data.items];
+      });
+    }
+  }, [data, page]);
+
+  const total = data?.total ?? 0;
+  const hasMore = allItems.length < total;
+
+  const loadMore = useCallback(() => {
+    setPage((p) => p + 1);
+  }, []);
+
+  // Hide folders that are being deleted — read from sessionStorage (instant, no race)
+  const visibleFolders = useMemo(() => {
+    if (allItems.length === 0) return [];
+    const raw = sessionStorage.getItem('deleting-folders');
+    if (!raw) return allItems;
+    const deletingIds = new Set<number>(JSON.parse(raw) as number[]);
+    if (deletingIds.size === 0) return allItems;
+    return allItems.filter((f) => !deletingIds.has(f.id));
+  }, [allItems]);
 
   const createMutation = useMutation({
     mutationFn: () =>
@@ -69,11 +100,11 @@ export default function FoldersPage() {
         </div>
       </div>
 
-      {isLoading ? (
+      {isLoading && page === 0 ? (
         <div className="flex items-center justify-center h-64">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
-      ) : data?.items.length === 0 ? (
+      ) : visibleFolders.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-64 text-center">
           <p className="text-muted-foreground">No folders yet</p>
           <p className="text-sm text-muted-foreground mt-1">
@@ -81,11 +112,28 @@ export default function FoldersPage() {
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {data?.items.map((folder) => (
-            <FolderCard key={folder.id} folder={folder} />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {visibleFolders.map((folder) => (
+              <FolderCard key={folder.id} folder={folder} />
+            ))}
+          </div>
+
+          {hasMore && (
+            <div className="flex justify-center pt-2">
+              <button
+                onClick={loadMore}
+                disabled={isLoading}
+                className="flex items-center gap-2 px-6 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
+              >
+                {isLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : null}
+                Load More ({total - allItems.length} remaining)
+              </button>
+            </div>
+          )}
+        </>
       )}
 
       {/* Create Folder Dialog */}

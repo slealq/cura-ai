@@ -153,6 +153,7 @@ module "container_apps" {
     DATABASE_URL                       = "database-url"
     REDIS_URL                          = "redis-url"
     CELERY_BROKER_URL                  = "celery-broker-url"
+    CELERY_RESULT_BACKEND              = "celery-result-backend"
     AZURE_STORAGE_CONNECTION_STRING    = "azure-storage-connection"
     JWT_SECRET_KEY                     = "jwt-secret"
     OPENAI_API_KEY                     = "openai-api-key"
@@ -164,6 +165,7 @@ module "container_apps" {
     "database-url"              = module.database.connection_string
     "redis-url"                 = module.redis.connection_string
     "celery-broker-url"         = module.redis.connection_string
+    "celery-result-backend"     = module.redis.connection_string
     "azure-storage-connection"  = module.storage.connection_string
     "jwt-secret"                = var.jwt_secret_key
     "openai-api-key"            = var.openai_api_key
