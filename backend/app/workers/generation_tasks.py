@@ -1,5 +1,4 @@
 """Celery tasks for LoRA training, image generation, and evaluation."""
-import asyncio
 import base64
 import io
 import logging
@@ -24,6 +23,7 @@ from app.services.generation_service import get_generation_service
 from app.services.image_service import get_image_service
 from app.services.log_service import write_log
 from app.workers.celery_app import celery_app
+from app.workers.tasks import run_async as _run_async
 
 logger = logging.getLogger(__name__)
 
@@ -31,19 +31,6 @@ logger = logging.getLogger(__name__)
 def _get_db() -> Session:
     """Get database session for worker."""
     return SessionLocal()
-
-
-def _run_async(coro):
-    """Run async function in sync context (works in thread-pool workers)."""
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-    new_loop = asyncio.new_event_loop()
-    try:
-        return new_loop.run_until_complete(coro)
-    finally:
-        new_loop.close()
 
 
 def _update_job_status(db: Session, job_id: int | None, status: JobStatus, **kwargs):

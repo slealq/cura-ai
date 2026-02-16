@@ -1,6 +1,7 @@
 """Celery tasks for the image processing pipeline."""
 import asyncio
 import logging
+import threading
 import time
 from datetime import datetime
 
@@ -24,6 +25,10 @@ from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
+# Per-thread event loop kept alive so async clients (httpx inside OpenAI/Anthropic
+# SDKs) can schedule cleanup callbacks without hitting "Event loop is closed".
+_thread_local = threading.local()
+
 
 def _unwrap_error(e: Exception) -> str:
     """Extract a readable error message, unwrapping RetryError if needed."""
@@ -42,13 +47,23 @@ def get_db() -> Session:
 
 
 def run_async(coro):
-    """Run async function in sync context (works in thread-pool workers)."""
+    """Run async function in sync context (works in thread-pool workers).
+
+    Uses a per-thread event loop that stays open across calls so that async
+    HTTP clients (httpx inside OpenAI/Anthropic SDKs) can clean up their
+    connection pools without hitting 'Event loop is closed'.
+    """
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        # No running loop in this thread — create one
-        return asyncio.run(coro)
-    # Nested async — create a separate loop
+        # No running loop — use a persistent per-thread loop
+        loop = getattr(_thread_local, 'loop', None)
+        if loop is None or loop.is_closed():
+            loop = asyncio.new_event_loop()
+            _thread_local.loop = loop
+        return loop.run_until_complete(coro)
+    # There IS a running loop (shouldn't happen in Celery thread-pool, but
+    # handle defensively) — create a throwaway loop.
     new_loop = asyncio.new_event_loop()
     try:
         return new_loop.run_until_complete(coro)

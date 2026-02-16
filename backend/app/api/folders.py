@@ -267,7 +267,7 @@ async def reprocess_folder(folder_id: int, db: Session = Depends(get_db), curren
     db.commit()
     db.refresh(job)
 
-    task = run_batch_reprocess.delay(job.id, image_ids, current_user.id)
+    task = run_batch_reprocess.delay(job.id, current_user.id, image_ids)
     job.celery_task_id = task.id
     db.commit()
 
