@@ -326,7 +326,7 @@ async def get_similar_images(
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
 
-    if not image.image_metadata or not image.image_metadata.embedding:
+    if not image.image_metadata or image.image_metadata.embedding is None:
         raise HTTPException(status_code=400, detail="Image has no embedding")
 
     # Use pgvector to find similar images

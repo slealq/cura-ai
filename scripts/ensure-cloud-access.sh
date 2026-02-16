@@ -60,25 +60,21 @@ else
     echo "[OK] Firewall rule added/updated for $MY_IP"
 fi
 
-# 5. Warn about running cloud Container Apps
+# 5. Check Container App status (informational)
 echo ""
 echo "--- Container App Replicas ---"
-RUNNING_APPS=0
 for APP in "${APPS[@]}"; do
     REPLICAS=$(az containerapp show --resource-group "$RG" --name "$APP" \
         --query "properties.template.scale.minReplicas" -o tsv 2>/dev/null || echo "0")
     if [ "$REPLICAS" != "0" ]; then
-        echo "[WARN] $APP has minReplicas=$REPLICAS — cloud workers will compete for Celery tasks"
-        RUNNING_APPS=$((RUNNING_APPS + 1))
+        echo "[OK] $APP running (minReplicas=$REPLICAS)"
+    else
+        echo "[--] $APP scaled to 0"
     fi
 done
-if [ "$RUNNING_APPS" -eq 0 ]; then
-    echo "[OK] All Container Apps scaled to 0 (no competition)"
-else
-    echo ""
-    echo "  Consider scaling down cloud apps to avoid task duplication:"
-    echo "  ./scripts/dev-env-stop.sh (stops everything) or manually scale apps to 0"
-fi
+echo ""
+echo "  Cloud-native uses an isolated Celery broker (Redis db 3)."
+echo "  DEV cloud workers (db 1) will not compete with local workers."
 
 echo ""
 if [ "$ERRORS" -gt 0 ]; then

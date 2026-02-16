@@ -285,13 +285,13 @@ npm run lint         # ESLint
 | Secrets | Azure Key Vault | `kv-imggen-dev` |
 | Infrastructure-as-code | Terraform (remote state in Azure Storage) | `stimggentfstate` / `tfstate` container |
 
-**Storage abstraction** (`backend/app/services/storage.py`): Supports `local` and `azure` backends via `STORAGE_BACKEND` config. Azure mode uses Blob Storage with SAS URL redirects for file serving (302 redirect instead of streaming bytes). Configured via `AZURE_STORAGE_CONNECTION_STRING` and `AZURE_STORAGE_CONTAINER`.
+**Storage abstraction** (`backend/app/services/storage.py`): Supports `local`, `azure`, and `s3` backends via `STORAGE_BACKEND` config. Azure mode uses Blob Storage with SAS URL redirects for file serving (302 redirect instead of streaming bytes). S3 mode uses pre-signed URLs. Configured via `AZURE_STORAGE_CONNECTION_STRING`/`AZURE_STORAGE_CONTAINER` (Azure) or `S3_BUCKET`/`S3_REGION` (S3).
 
 **Key patterns:**
 - **Multi-user auth** (`backend/app/core/security.py`): JWT-based authentication (access tokens 30min, refresh tokens 7 days) using bcrypt + python-jose. Every API endpoint (except `/auth/login` and `/auth/register`) requires `get_current_user` dependency. File-serving endpoints use `get_current_user_from_token_param` (accepts `?token=` query param for `<img src>` usage). Admin-only endpoints use `require_admin`.
 - **User data isolation**: All services accept `user_id` in their constructor (e.g., `get_image_service(db, user_id)`). All queries filter by `user_id`. Celery tasks receive `user_id` as an explicit parameter.
 - **Provider abstraction** (`backend/app/providers/`): Swappable AI providers (OpenAI/Anthropic/fal.ai) via base classes and factory functions (`get_tagger()`, `get_describer()`, `get_embedder()`, `get_cluster_summarizer()`, `get_trainer()`, `get_generator()`, `get_evaluator()`)
-- **Service layer** (`backend/app/services/`): Business logic decoupled from API routes. Each service takes `(db, user_id)` and filters all queries by user.
+- **Service layer** (`backend/app/services/`): Business logic decoupled from API routes. Each service takes `(db, user_id)` and filters all queries by user. Additional utilities: `api_key_service.py` (API key management with encryption), `encryption.py` (Fernet-based encryption for API keys), `cover_utils.py` (justified-row cover thumbnail composites for folders/clusters).
 - **Celery task chaining** (`backend/app/workers/tasks.py`): `process_image_pipeline()` orchestrates tag→describe→embed flow. Upstream changes auto-trigger re-embedding. All tasks accept `user_id` parameter.
 - **pgvector**: 1536-dim embeddings for similarity search via cosine distance
 - **Hybrid search**: Combines semantic (embedding) and text (tsvector) search with adaptive weighting
@@ -308,20 +308,20 @@ npm run lint         # ESLint
 **API routes** (`backend/app/api/`): All endpoints require Bearer token auth (`get_current_user` dependency) unless noted.
 - `auth.py` — Login, register (public, no auth), refresh token, get current user, create user (admin-only), list users (admin-only), toggle sync (admin-only)
 - `images.py` — Image CRUD, upload (single/batch), reprocess, tag, describe, embed, similar images, file serving (token via query param)
-- `folders.py` — Folder CRUD, add/remove images, folder-scoped image listing, folder reprocess
-- `clusters.py` — Cluster listing, detail, rename, pin, archive, merge, exclude image, summarize, recluster, export
+- `folders.py` — Folder CRUD, add/remove images, folder-scoped image listing, folder reprocess, cover composite generation/serving
+- `clusters.py` — Cluster listing, detail, rename, pin, archive, merge, exclude image, summarize, recluster, export, cover composite generation/serving
 - `search.py` — Hybrid semantic+text search, tag filtering, tag listing
-- `jobs.py` — Job listing/detail/cancel/delete, pipeline triggers (full, tag-all, describe-all, embed-all, reprocess-all, reprocess-failed, reprocess-selected), batch job image listing
+- `jobs.py` — Job listing/detail/cancel/delete/retry, pipeline triggers (full, tag-all, describe-all, embed-all, reprocess-all, reprocess-failed, reprocess-selected), batch job image listing
 - `settings.py` — Prompt presets CRUD, activate preset, prompt get/update/reset/suggest, clustering config get/update/reset, API key management (store/validate/delete, env var keys visible to admin only), provider config, generation config (per-base-model), training config (per-base-model), base model selection
-- `generation.py` — LoRA training (from folders or clusters, with optional per-image captions, multi-base-model: flux-dev/qwen-2.5), image generation, model/image CRUD, model recover/retry, LoRA evaluation (reference + creative pairs with embedding similarity/vision scoring), file serving (token via query param)
+- `generation.py` — LoRA training (from folders or clusters, with optional per-image captions, multi-base-model: flux-dev/qwen-2.5), image generation, model/image CRUD, model recover/retry, LoRA weights download/management, LoRA evaluation (reference + creative pairs with embedding similarity/vision scoring), file serving (token via query param)
 - `logs.py` — Pipeline log queries, stats (filtered by user), cleanup (admin-only)
 
 **Database models** (`backend/app/models/`): All data models have a `user_id` foreign key to the `users` table (NOT NULL with CASCADE delete, except `PipelineLog` which is nullable). Composite unique constraints replace simple uniques where needed (e.g., `user_id + file_hash` on images).
 - `User` — Authentication and data ownership. Fields: email (unique), hashed_password, display_name, role (admin/user), is_active, is_verified, sync_enabled, timestamps. Seed admin: stuart.leal23@gmail.com
 - `Image` + `ImageMetadata` (1:1) — Core image data with status tracking, tags, description, embedding, hashes, tsvector
-- `Cluster` + `ClusterMembership` — Clustering results with centroid, summary, pin/archive/rename, outlier exclusion
+- `Cluster` + `ClusterMembership` — Clustering results with centroid, summary, pin/archive/rename, outlier exclusion, cover_image_id + cover_thumbnail_uri
 - `Job` — Async job tracking (types: INGEST, NORMALIZE, TAG, DESCRIBE, EMBED, CLUSTER, SUMMARIZE_CLUSTER, FULL_PIPELINE, REPROCESS, BATCH_REPROCESS, LORA_TRAIN, GENERATE_IMAGE, BATCH_GENERATE, LORA_EVALUATE, FOLDER_DELETE)
-- `Folder` + `FolderImage` — User folders for organizing images (many-to-many)
+- `Folder` + `FolderImage` — User folders for organizing images (many-to-many), cover_image_id + cover_thumbnail_uri
 - `LoraModel` — Trained LoRA adapters linked to folder or cluster source, with training config and status. Supports multiple base models (flux-dev, qwen-2.5)
 - `GeneratedImage` — AI-generated images linked to LoRA models with prompt, params, and output files
 - `LoraEvaluation` + `EvaluationPair` — Quality evaluation of trained LoRA models. Generates images from source prompts, compares against originals via embedding similarity and vision scoring. Supports "reference" (vs original) and "creative" (novel prompt) pair types
@@ -339,7 +339,7 @@ npm run lint         # ESLint
 - API client: `lib/api.ts` — Typed Axios functions for all endpoints. `authUrl()` helper appends `?token=` to image/thumbnail URLs for authenticated file serving via `<img src>`. Supports cross-origin API calls via `NEXT_PUBLIC_API_URL` env var (used when frontend runs locally against cloud backend).
 - State: TanStack Query with polling (5s jobs, 3s logs, 10s stats)
 
-**Alembic migrations:** 22 versions (001-022) covering initial schema through multi-user support, batch upload improvements, and job type additions. Migration 017 creates the `users` table, seeds the admin user, adds `user_id` to all 11 data tables with backfill, and converts simple unique constraints to composite (user_id + field). Migration 018 adds `sync_enabled` to users for data sync. Migration 021 fixes enum casing. Migration 022 adds `FOLDER_DELETE` to the `jobtype` enum.
+**Alembic migrations:** 24 versions (001-024) covering initial schema through multi-user support, batch upload improvements, job type additions, and cover image composites. Migration 017 creates the `users` table, seeds the admin user, adds `user_id` to all 11 data tables with backfill, and converts simple unique constraints to composite (user_id + field). Migration 018 adds `sync_enabled` to users for data sync. Migration 021 fixes enum casing. Migration 022 adds `FOLDER_DELETE` to the `jobtype` enum. Migration 023 adds `cover_image_id` FK to folders and clusters (with backfill). Migration 024 adds `cover_thumbnail_uri` to folders and clusters for composite thumbnail storage.
 
 ## Authentication
 
@@ -358,14 +358,16 @@ npm run lint         # ESLint
 - `ANTHROPIC_API_KEY` (optional, for vision/summarization — visible as fallback to admin only)
 - `FAL_API_KEY` (optional, for LoRA training and image generation via fal.ai — visible as fallback to admin only)
 - `DEFAULT_VISION_PROVIDER` (openai/anthropic)
+- `DEFAULT_EMBEDDING_PROVIDER` (openai — currently only openai is implemented)
 - `DATABASE_URL`, `REDIS_URL`, `CELERY_BROKER_URL`
 - `JWT_SECRET_KEY` (defaults to `change-me-in-production-jwt-secret` — **must override in production**)
 
 ### Azure Cloud (set via Container App secrets in Terraform)
 All the above, plus:
-- `STORAGE_BACKEND` — `azure` (enables Azure Blob Storage; `local` for Docker Compose)
-- `AZURE_STORAGE_CONNECTION_STRING` — Azure Storage account connection string
+- `STORAGE_BACKEND` — `azure` (enables Azure Blob Storage), `s3` (AWS S3), or `local` (Docker Compose filesystem)
+- `AZURE_STORAGE_CONNECTION_STRING` — Azure Storage account connection string (when `STORAGE_BACKEND=azure`)
 - `AZURE_STORAGE_CONTAINER` — Blob container name (default: `images`)
+- `S3_BUCKET`, `S3_REGION` — S3 bucket name and region (when `STORAGE_BACKEND=s3`)
 - `ENVIRONMENT` — `local`, `dev`, or `prod`
 - `CORS_ORIGINS` — Comma-separated allowed origins (configurable in `backend/app/main.py`)
 
@@ -388,7 +390,7 @@ All the above, plus:
 - `deploy-dev.yml` — Push to `dev` branch → build → push to ACR (`:dev` tag) → deploy frontend to SWA → update 4 Container Apps. Migrations are manual.
 - `deploy-prod.yml` — Manual dispatch → re-tag `:dev` as `:prod` in ACR → deploy frontend to PROD SWA → update PROD Container Apps. Migrations are manual.
 - `promote-to-prod.yml` — Manual dispatch → fast-forwards `master` to match `dev` (verifies ancestor relationship first).
-- `terraform.yml` — Plan on PR, apply on merge for `infra/**` changes. **Known issue:** Workflow targets `main` branch (not `master`) and uses `infra/$env` paths instead of `infra/environments/$env` — currently non-functional. Terraform is run manually from local machine.
+- `terraform.yml` — Plan on PR, apply on merge to `master` for `infra/**` changes. Runs matrix strategy across shared/dev/prod environments with correct `infra/environments/$env` paths.
 
 **Migration script** (`scripts/migrate_storage.py`): Migrates local filesystem images to Azure Blob Storage with concurrent uploads and incremental skip support.
 

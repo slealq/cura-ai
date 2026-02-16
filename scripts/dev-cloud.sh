@@ -54,6 +54,11 @@ fi
 source "$ENV_FILE"
 set +a
 
+# 2b. Isolate Celery broker from DEV cloud workers.
+#     DEV Container Apps use Redis db 1. Cloud-native uses db 3 so local
+#     and cloud workers never compete for the same tasks.
+export CELERY_BROKER_URL="${CELERY_BROKER_URL%/*}/3"
+
 # 3. Run preflight checks
 echo -e "${CYAN}--- Running preflight checks ---${NC}"
 "$SCRIPT_DIR/ensure-cloud-access.sh"
@@ -168,19 +173,43 @@ echo -e "  API Docs: ${CYAN}http://localhost:8001/api/docs${NC}"
 echo ""
 echo -e "${YELLOW}Press Ctrl+C to stop all services${NC}"
 
-# Open browser once frontend is ready (if launched via cura)
-if [ "${CURA_OPEN_BROWSER:-}" = "1" ]; then
-    (
-        attempts=0
-        while ! lsof -i :3001 -sTCP:LISTEN >/dev/null 2>&1; do
-            sleep 1
-            attempts=$((attempts + 1))
-            [ "$attempts" -ge 60 ] && exit 0
-        done
-        sleep 2
+# Wait for frontend, warmup all routes, then open browser
+(
+    attempts=0
+    while ! lsof -i :3001 -sTCP:LISTEN >/dev/null 2>&1; do
+        sleep 1
+        attempts=$((attempts + 1))
+        [ "$attempts" -ge 60 ] && exit 0
+    done
+    sleep 2
+
+    # Pre-compile all pages so there's no delay on first visit
+    echo -e "${CYAN}[warmup]${NC} Pre-compiling all pages..."
+    ROUTES=(
+        /
+        /login
+        /images
+        /images/all
+        /upload
+        /search
+        /jobs
+        /models
+        /generate
+        /settings
+        /debug
+        /clusters/0
+        /images/folder/0
+    )
+    for route in "${ROUTES[@]}"; do
+        curl -s -o /dev/null "http://localhost:3001${route}" &
+    done
+    wait
+    echo -e "${GREEN}[warmup]${NC} All pages pre-compiled."
+
+    if [ "${CURA_OPEN_BROWSER:-}" = "1" ]; then
         open -a "Google Chrome" "http://localhost:3001"
-    ) &
-fi
+    fi
+) &
 
 # Wait for any process to exit
 wait

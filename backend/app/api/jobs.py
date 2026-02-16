@@ -243,7 +243,7 @@ async def trigger_reprocess_all(db: Session = Depends(get_db), current_user: Use
     db.commit()
     db.refresh(job)
 
-    task = run_batch_reprocess.delay(job.id, image_ids, current_user.id)
+    task = run_batch_reprocess.delay(job.id, current_user.id, image_ids)
     job.celery_task_id = task.id
     db.commit()
 
@@ -276,7 +276,7 @@ async def trigger_reprocess_failed(db: Session = Depends(get_db), current_user: 
     db.commit()
     db.refresh(job)
 
-    task = run_batch_reprocess.delay(job.id, image_ids, current_user.id)
+    task = run_batch_reprocess.delay(job.id, current_user.id, image_ids)
     job.celery_task_id = task.id
     db.commit()
 
@@ -313,7 +313,7 @@ async def trigger_reprocess_selected(
     db.commit()
     db.refresh(job)
 
-    task = run_batch_reprocess.delay(job.id, image_ids, current_user.id)
+    task = run_batch_reprocess.delay(job.id, current_user.id, image_ids)
     job.celery_task_id = task.id
     db.commit()
 
@@ -396,7 +396,7 @@ async def retry_job(job_id: int, db: Session = Depends(get_db), current_user: Us
             db.delete(new_job)
             db.commit()
             raise HTTPException(status_code=400, detail="No image IDs found in original job to retry")
-        task = run_batch_reprocess.delay(new_job.id, image_ids, user_id)
+        task = run_batch_reprocess.delay(new_job.id, user_id, image_ids)
     elif job.job_type == JobType.GENERATE_IMAGE:
         from app.workers.generation_tasks import generate_image
         params = job.parameters or {}
