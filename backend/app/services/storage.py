@@ -372,6 +372,67 @@ class StorageService:
 
         return thumbnails
 
+    # --- Delete methods ---
+
+    async def delete_file(self, subdir: str, filename: str) -> bool:
+        """Delete a single file from storage. Returns True if deleted, False if not found."""
+        if self.storage_backend == "local":
+            file_path = self.local_path / subdir / filename
+            if file_path.exists():
+                file_path.unlink()
+                return True
+            return False
+        elif self.storage_backend == "azure":
+            blob_path = f"{subdir}/{filename}"
+            blob_client = self._container_client.get_blob_client(blob_path)
+            try:
+                blob_client.delete_blob()
+                return True
+            except Exception:
+                return False
+        else:
+            raise ValueError(f"Unsupported storage backend: {self.storage_backend}")
+
+    async def delete_image_files(
+        self, object_key: str, thumbnail_uris: list[str]
+    ) -> dict[str, int]:
+        """Delete original image + all thumbnails. Returns {deleted, failed} counts."""
+        deleted = 0
+        failed = 0
+
+        # Delete original image
+        try:
+            if await self.delete_file("images", object_key):
+                deleted += 1
+        except Exception as e:
+            logger.warning(f"Failed to delete image file {object_key}: {e}")
+            failed += 1
+
+        # Delete thumbnails
+        for uri in thumbnail_uris:
+            thumb_filename = self._extract_filename_from_uri(uri)
+            if not thumb_filename:
+                continue
+            try:
+                if await self.delete_file("thumbnails", thumb_filename):
+                    deleted += 1
+            except Exception as e:
+                logger.warning(f"Failed to delete thumbnail {thumb_filename}: {e}")
+                failed += 1
+
+        return {"deleted": deleted, "failed": failed}
+
+    def _extract_filename_from_uri(self, uri: str) -> str | None:
+        """Extract the filename from a storage URI (local path or azure:// URI)."""
+        if not uri:
+            return None
+        # Azure: "azure://images/thumbnails/abc123_200.jpg" → "abc123_200.jpg"
+        if uri.startswith("azure://"):
+            parts = uri.split("/")
+            return parts[-1] if parts else None
+        # Local: "/app/storage/thumbnails/abc123_200.jpg" → "abc123_200.jpg"
+        return Path(uri).name
+
     # --- Utility methods ---
 
     def get_image_dimensions(self, file_data: bytes) -> tuple[int, int]:

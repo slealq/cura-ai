@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { Loader2, Plus, Image as ImageIcon } from 'lucide-react';
@@ -21,6 +21,16 @@ export default function FoldersPage() {
     queryKey: ['folders'],
     queryFn: () => foldersApi.list({ limit: 200 }),
   });
+
+  // Hide folders that are being deleted — read from sessionStorage (instant, no race)
+  const visibleFolders = useMemo(() => {
+    if (!data?.items) return [];
+    const raw = sessionStorage.getItem('deleting-folders');
+    if (!raw) return data.items;
+    const deletingIds = new Set<number>(JSON.parse(raw) as number[]);
+    if (deletingIds.size === 0) return data.items;
+    return data.items.filter((f) => !deletingIds.has(f.id));
+  }, [data]);
 
   const createMutation = useMutation({
     mutationFn: () =>
@@ -73,7 +83,7 @@ export default function FoldersPage() {
         <div className="flex items-center justify-center h-64">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
-      ) : data?.items.length === 0 ? (
+      ) : visibleFolders.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-64 text-center">
           <p className="text-muted-foreground">No folders yet</p>
           <p className="text-sm text-muted-foreground mt-1">
@@ -82,7 +92,7 @@ export default function FoldersPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {data?.items.map((folder) => (
+          {visibleFolders.map((folder) => (
             <FolderCard key={folder.id} folder={folder} />
           ))}
         </div>

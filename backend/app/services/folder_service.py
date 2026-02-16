@@ -62,6 +62,52 @@ class FolderService:
         self.db.commit()
         return True
 
+    def delete_folder_with_images(self, folder_id: int) -> dict | None:
+        """Delete folder and all its images. Returns info for storage cleanup, or None if not found."""
+        folder = self.get_folder(folder_id)
+        if not folder:
+            return None
+
+        # Query images in folder with their thumbnail URIs
+        images = (
+            self.db.query(Image)
+            .join(FolderImage, FolderImage.image_id == Image.id)
+            .filter(FolderImage.folder_id == folder_id)
+            .all()
+        )
+
+        # Collect file references before deletion
+        image_files = []
+        for img in images:
+            thumbnail_uris = [
+                uri for uri in [
+                    img.thumbnail_uri_small,
+                    img.thumbnail_uri_medium,
+                    img.thumbnail_uri_large,
+                ] if uri
+            ]
+            image_files.append({
+                "object_key": img.object_key,
+                "thumbnail_uris": thumbnail_uris,
+            })
+
+        images_deleted = len(images)
+
+        # Delete Image records (ORM cascade handles ImageMetadata,
+        # ClusterMembership, FolderImage for ALL folders)
+        for img in images:
+            self.db.delete(img)
+
+        # Delete the folder itself
+        self.db.delete(folder)
+        self.db.commit()
+
+        return {
+            "folder_id": folder_id,
+            "images_deleted": images_deleted,
+            "image_files": image_files,
+        }
+
     def add_images_to_folder(self, folder_id: int, image_ids: list[int]) -> int:
         """Add images to a folder. Returns count of newly added."""
         # Verify folder belongs to user

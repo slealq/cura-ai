@@ -137,18 +137,19 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8001 2>&1 | sed "s/^/[backen
 PIDS+=($!)
 
 # Celery worker (default queue)
+# Use --pool=threads to avoid macOS fork() SIGSEGV with C extensions (Pillow, numpy, imagehash)
 echo -e "${CYAN}[celery]${NC} Starting default queue worker..."
-celery -A app.workers.celery_app worker --loglevel=info --concurrency=1 2>&1 | sed "s/^/[celery] /" &
+celery -A app.workers.celery_app worker --loglevel=info --pool=threads --concurrency=4 2>&1 | sed "s/^/[celery] /" &
 PIDS+=($!)
 
 # Celery worker (clustering queue)
 echo -e "${CYAN}[clustering]${NC} Starting clustering queue worker..."
-celery -A app.workers.celery_app worker --loglevel=info --concurrency=2 -Q clustering 2>&1 | sed "s/^/[clustering] /" &
+celery -A app.workers.celery_app worker --loglevel=info --pool=threads --concurrency=2 -Q clustering 2>&1 | sed "s/^/[clustering] /" &
 PIDS+=($!)
 
 # Celery worker (generation queue)
 echo -e "${CYAN}[generation]${NC} Starting generation queue worker..."
-celery -A app.workers.celery_app worker --loglevel=info --concurrency=2 -Q generation 2>&1 | sed "s/^/[generation] /" &
+celery -A app.workers.celery_app worker --loglevel=info --pool=threads --concurrency=2 -Q generation 2>&1 | sed "s/^/[generation] /" &
 PIDS+=($!)
 cd "$PROJECT_ROOT"
 

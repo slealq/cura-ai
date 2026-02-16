@@ -9,6 +9,7 @@ import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
 import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { UploadProvider } from '@/contexts/UploadContext';
 import { useJobNotifications } from '@/hooks/useJobNotifications';
 import { useEffect } from 'react';
 
@@ -113,7 +114,9 @@ export default function RootLayout({
         <QueryClientProvider client={queryClient}>
           <ThemeProvider>
             <AuthProvider>
-              <AuthGate>{children}</AuthGate>
+              <UploadProvider>
+                <AuthGate>{children}</AuthGate>
+              </UploadProvider>
             </AuthProvider>
           </ThemeProvider>
         </QueryClientProvider>

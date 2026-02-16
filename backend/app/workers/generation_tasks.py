@@ -34,15 +34,16 @@ def _get_db() -> Session:
 
 
 def _run_async(coro):
-    """Run async function in sync context."""
-    loop = asyncio.get_event_loop()
-    if loop.is_running():
-        new_loop = asyncio.new_event_loop()
-        try:
-            return new_loop.run_until_complete(coro)
-        finally:
-            new_loop.close()
-    return loop.run_until_complete(coro)
+    """Run async function in sync context (works in thread-pool workers)."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    new_loop = asyncio.new_event_loop()
+    try:
+        return new_loop.run_until_complete(coro)
+    finally:
+        new_loop.close()
 
 
 def _update_job_status(db: Session, job_id: int | None, status: JobStatus, **kwargs):

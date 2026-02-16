@@ -25,6 +25,7 @@ class JobType(str, enum.Enum):
     GENERATE_IMAGE = "generate_image"
     BATCH_GENERATE = "batch_generate"
     LORA_EVALUATE = "lora_evaluate"
+    FOLDER_DELETE = "folder_delete"
 
 
 class JobStatus(str, enum.Enum):

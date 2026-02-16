@@ -11,7 +11,7 @@ from app.models import ImageStatus, Job, JobStatus, JobType
 from app.models.user import User
 from app.schemas import ImageListResponse, ImageResponse
 from app.services.folder_service import get_folder_service
-from app.workers.tasks import run_batch_reprocess
+from app.workers.tasks import delete_folder_with_images, run_batch_reprocess
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/folders", tags=["folders"])
@@ -119,8 +119,43 @@ async def update_folder(folder_id: int, request: FolderUpdateRequest, db: Sessio
 
 
 @router.delete("/{folder_id}")
-async def delete_folder(folder_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+async def delete_folder(
+    folder_id: int,
+    delete_images: bool = Query(False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     folder_service = get_folder_service(db, current_user.id)
+
+    if delete_images:
+        folder = folder_service.get_folder(folder_id)
+        if not folder:
+            raise HTTPException(status_code=404, detail="Folder not found")
+
+        image_count = folder_service.count_folder_images(folder_id)
+
+        job = Job(
+            job_type=JobType.FOLDER_DELETE,
+            status=JobStatus.PENDING,
+            total_items=image_count,
+            user_id=current_user.id,
+            parameters={"folder_id": folder_id, "folder_name": folder.name},
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
+        task = delete_folder_with_images.delay(folder_id, current_user.id, job.id)
+        job.celery_task_id = task.id
+        db.commit()
+
+        return {
+            "status": "queued",
+            "job_id": job.id,
+            "total": image_count,
+            "message": f"Deleting folder '{folder.name}' and {image_count} image{'s' if image_count != 1 else ''}",
+        }
+
     if not folder_service.delete_folder(folder_id):
         raise HTTPException(status_code=404, detail="Folder not found")
     return {"status": "deleted", "folder_id": folder_id}

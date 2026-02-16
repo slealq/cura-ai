@@ -172,13 +172,13 @@ export const imagesApi = {
     files: File[],
     folderId?: number,
     onProgress?: (uploaded: number, total: number) => void,
+    newFolderName?: string,
   ): Promise<BatchUploadResponse> => {
-    const CHUNK_SIZE = 50;
-    const PARALLEL_CHUNKS = 3;
+    const CHUNK_SIZE = 10;
+    const PARALLEL_CHUNKS = 2;
     const allUploaded: BatchUploadResponse['uploaded'] = [];
     const allFailed: BatchUploadResponse['failed'] = [];
     let jobId: number | null = null;
-    let folderError: string | null = null;
     let chunkError: string | null = null;
     let sentCount = 0;
 
@@ -189,15 +189,21 @@ export const imagesApi = {
     }
 
     // Send first chunk sequentially to get the job_id
+    // Include folder info so the backend can defer folder assignment to job completion
     if (chunks.length > 0) {
       const firstChunk = chunks[0];
       const formData = new FormData();
       firstChunk.forEach((file) => formData.append('files', file));
 
+      const firstChunkParams: Record<string, string | number> = { total_items: files.length };
+      if (folderId) firstChunkParams.folder_id = folderId;
+      if (newFolderName) firstChunkParams.new_folder_name = newFolderName;
+
       try {
         const { data } = await api.post<BatchUploadResponse>('/images/upload/batch', formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
-          params: { total_items: files.length },
+          params: firstChunkParams,
+          timeout: 5 * 60 * 1000, // 5 min per chunk
         });
 
         jobId = data.job_id;
@@ -229,6 +235,7 @@ export const imagesApi = {
           return api.post<BatchUploadResponse>('/images/upload/batch', formData, {
             headers: { 'Content-Type': 'multipart/form-data' },
             params: { job_id: jobId },
+            timeout: 5 * 60 * 1000, // 5 min per chunk
           });
         });
 
@@ -271,24 +278,16 @@ export const imagesApi = {
       }
     }
 
-    // Add to folder only after all chunks completed successfully
-    if (folderId && allUploaded.length > 0) {
-      try {
-        const imageIds = allUploaded.map((u) => u.image_id);
-        await foldersApi.addImages(folderId, imageIds);
-      } catch (err) {
-        folderError = err instanceof Error ? err.message : String(err);
-      }
-    }
+    // Folder assignment is handled by the backend when the ingest job completes
 
-    // If a chunk failed, throw so the mutation's onError fires — but include partial results
+    // If a chunk failed, throw so the caller's error handler fires — but include partial results
     if (chunkError) {
       const err = new Error(chunkError) as Error & { partialResult: BatchUploadResponse };
-      err.partialResult = { uploaded: allUploaded, failed: allFailed, job_id: jobId, folder_error: folderError };
+      err.partialResult = { uploaded: allUploaded, failed: allFailed, job_id: jobId, folder_error: null };
       throw err;
     }
 
-    return { uploaded: allUploaded, failed: allFailed, job_id: jobId, folder_error: folderError };
+    return { uploaded: allUploaded, failed: allFailed, job_id: jobId, folder_error: null };
   },
 
   delete: async (id: number): Promise<void> => {
@@ -370,8 +369,11 @@ export const foldersApi = {
     return data;
   },
 
-  delete: async (id: number): Promise<void> => {
-    await api.delete(`/folders/${id}`);
+  delete: async (id: number, deleteImages?: boolean): Promise<{ status: string; job_id?: number; total?: number; message?: string }> => {
+    const { data } = await api.delete(`/folders/${id}`, {
+      params: deleteImages ? { delete_images: true } : undefined,
+    });
+    return data;
   },
 
   addImages: async (id: number, imageIds: number[]): Promise<{ added: number }> => {
