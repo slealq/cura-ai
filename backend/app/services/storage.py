@@ -35,6 +35,8 @@ class StorageService:
         (self.local_path / "generated").mkdir(parents=True, exist_ok=True)
         (self.local_path / "generated_thumbnails").mkdir(parents=True, exist_ok=True)
         (self.local_path / "lora_weights").mkdir(parents=True, exist_ok=True)
+        (self.local_path / "folder_covers").mkdir(parents=True, exist_ok=True)
+        (self.local_path / "cluster_covers").mkdir(parents=True, exist_ok=True)
 
     def _init_azure(self):
         """Initialize Azure Blob Storage client."""
@@ -296,6 +298,44 @@ class StorageService:
 
         return f"{blob_client.url}?{sas_token}"
 
+    def generate_thumbnail_sas_url(self, thumbnail_uri: str | None) -> str | None:
+        """Generate a direct SAS URL for a thumbnail without any Azure API calls.
+
+        For Azure: uses local HMAC crypto (generate_blob_sas) — zero network calls.
+        For local: returns a relative /api/ path that the frontend wraps with authUrl().
+        """
+        if not thumbnail_uri:
+            return None
+
+        filename = self._extract_filename_from_uri(thumbnail_uri)
+        if not filename:
+            return None
+
+        if self.storage_backend == "azure":
+            from azure.storage.blob import BlobSasPermissions, generate_blob_sas
+
+            blob_path = f"thumbnails/{filename}"
+            account_name = self._blob_service_client.account_name
+            account_key = None
+            for part in self._azure_connection_string.split(";"):
+                if part.startswith("AccountKey="):
+                    account_key = part[len("AccountKey="):]
+                    break
+
+            sas_token = generate_blob_sas(
+                account_name=account_name,
+                container_name=self._azure_container_name,
+                blob_name=blob_path,
+                account_key=account_key,
+                permission=BlobSasPermissions(read=True),
+                expiry=datetime.now(timezone.utc) + timedelta(minutes=30),
+            )
+
+            blob_url = f"https://{account_name}.blob.core.windows.net/{self._azure_container_name}/{blob_path}"
+            return f"{blob_url}?{sas_token}"
+        else:
+            return f"/api/images/thumbnails/{filename}"
+
     # --- Thumbnail generation ---
 
     async def generate_thumbnails(
@@ -452,6 +492,129 @@ class StorageService:
             "TIFF": "image/tiff",
         }
         return format_to_mime.get(img.format, "image/jpeg")
+
+    # --- Folder cover methods (synchronous for PIL compositing) ---
+
+    def get_thumbnail_bytes_sync(self, thumbnail_uri: str) -> bytes | None:
+        """Read thumbnail file bytes synchronously (for PIL compositing)."""
+        filename = self._extract_filename_from_uri(thumbnail_uri)
+        if not filename:
+            return None
+
+        if self.storage_backend == "local":
+            file_path = self.local_path / "thumbnails" / filename
+            if file_path.exists():
+                return file_path.read_bytes()
+            return None
+        elif self.storage_backend == "azure":
+            blob_path = f"thumbnails/{filename}"
+            blob_client = self._container_client.get_blob_client(blob_path)
+            try:
+                downloader = blob_client.download_blob()
+                return downloader.readall()
+            except Exception:
+                return None
+        return None
+
+    def save_cover_sync(self, file_data: bytes, subdir: str, filename: str) -> str:
+        """Save a cover composite image. Returns the storage URI."""
+        if self.storage_backend == "local":
+            file_path = self.local_path / subdir / filename
+            file_path.write_bytes(file_data)
+            return str(file_path)
+        elif self.storage_backend == "azure":
+            from azure.storage.blob import ContentSettings
+
+            blob_path = f"{subdir}/{filename}"
+            blob_client = self._container_client.get_blob_client(blob_path)
+            blob_client.upload_blob(
+                file_data,
+                overwrite=True,
+                content_settings=ContentSettings(content_type="image/jpeg"),
+            )
+            return f"azure://{self._azure_container_name}/{blob_path}"
+        else:
+            raise ValueError(f"Unsupported storage backend: {self.storage_backend}")
+
+    def save_folder_cover_sync(self, file_data: bytes, folder_id: int) -> str:
+        """Save a folder cover composite image. Returns the storage URI."""
+        return self.save_cover_sync(file_data, "folder_covers", f"folder_{folder_id}.jpg")
+
+    def save_cluster_cover_sync(self, file_data: bytes, cluster_id: int) -> str:
+        """Save a cluster cover composite image. Returns the storage URI."""
+        return self.save_cover_sync(file_data, "cluster_covers", f"cluster_{cluster_id}.jpg")
+
+    def delete_cover_sync(self, subdir: str, filename: str) -> bool:
+        """Delete a cover composite image. Returns True if deleted."""
+        if self.storage_backend == "local":
+            file_path = self.local_path / subdir / filename
+            if file_path.exists():
+                file_path.unlink()
+                return True
+            return False
+        elif self.storage_backend == "azure":
+            blob_path = f"{subdir}/{filename}"
+            blob_client = self._container_client.get_blob_client(blob_path)
+            try:
+                blob_client.delete_blob()
+                return True
+            except Exception:
+                return False
+        return False
+
+    def delete_folder_cover_sync(self, folder_id: int) -> bool:
+        """Delete a folder cover composite image."""
+        return self.delete_cover_sync("folder_covers", f"folder_{folder_id}.jpg")
+
+    def delete_cluster_cover_sync(self, cluster_id: int) -> bool:
+        """Delete a cluster cover composite image."""
+        return self.delete_cover_sync("cluster_covers", f"cluster_{cluster_id}.jpg")
+
+    def generate_cover_sas_url(self, cover_uri: str | None, subdir: str, api_prefix: str) -> str | None:
+        """Generate a URL for a cover composite image.
+
+        For Azure: generates a SAS URL via local HMAC crypto.
+        For local: returns a relative /api/ path using api_prefix.
+        """
+        if not cover_uri:
+            return None
+
+        filename = self._extract_filename_from_uri(cover_uri)
+        if not filename:
+            return None
+
+        if self.storage_backend == "azure":
+            from azure.storage.blob import BlobSasPermissions, generate_blob_sas
+
+            blob_path = f"{subdir}/{filename}"
+            account_name = self._blob_service_client.account_name
+            account_key = None
+            for part in self._azure_connection_string.split(";"):
+                if part.startswith("AccountKey="):
+                    account_key = part[len("AccountKey="):]
+                    break
+
+            sas_token = generate_blob_sas(
+                account_name=account_name,
+                container_name=self._azure_container_name,
+                blob_name=blob_path,
+                account_key=account_key,
+                permission=BlobSasPermissions(read=True),
+                expiry=datetime.now(timezone.utc) + timedelta(minutes=30),
+            )
+
+            blob_url = f"https://{account_name}.blob.core.windows.net/{self._azure_container_name}/{blob_path}"
+            return f"{blob_url}?{sas_token}"
+        else:
+            return f"{api_prefix}/{filename}"
+
+    def generate_folder_cover_sas_url(self, cover_uri: str | None) -> str | None:
+        """Generate a URL for a folder cover composite image."""
+        return self.generate_cover_sas_url(cover_uri, "folder_covers", "/api/folders/covers")
+
+    def generate_cluster_cover_sas_url(self, cover_uri: str | None) -> str | None:
+        """Generate a URL for a cluster cover composite image."""
+        return self.generate_cover_sas_url(cover_uri, "cluster_covers", "/api/clusters/covers")
 
     def get_thumbnail_url(self, object_key: str, size: str = "medium") -> str:
         """Get URL for thumbnail based on object key and size."""

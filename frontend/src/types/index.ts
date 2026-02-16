@@ -44,6 +44,7 @@ export interface Cluster {
   display_name: string | null;
   is_pinned: boolean;
   is_archived: boolean;
+  cover_thumbnail_url: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -191,6 +192,7 @@ export interface Folder {
   name: string;
   description: string | null;
   image_count: number;
+  cover_thumbnail_url: string | null;
   created_at: string;
   updated_at: string;
   preview_images: FolderPreviewImage[];

@@ -98,6 +98,8 @@ def _assign_folder_on_completion(db: Session, job: Job):
 
         if folder_id:
             folder_service.add_images_to_folder(folder_id, all_upload_ids)
+            folder_service.refresh_cover_image(folder_id)
+            folder_service.generate_cover_composite(folder_id)
             logger.info(f"Deferred folder assignment: added {len(all_upload_ids)} images to folder {folder_id} for job {job.id}")
     except Exception as e:
         logger.error(f"Failed deferred folder assignment for job {job.id}: {e}")
@@ -1071,6 +1073,11 @@ def delete_folder_with_images(self, folder_id: int, user_id: int, job_id: int) -
 
         from app.services.folder_service import get_folder_service
         folder_service = get_folder_service(db, user_id)
+
+        # Delete cover composite file before deleting the folder
+        from app.services.storage import get_storage_service
+        storage = get_storage_service()
+        storage.delete_folder_cover_sync(folder_id)
 
         result = folder_service.delete_folder_with_images(folder_id)
         if result is None:

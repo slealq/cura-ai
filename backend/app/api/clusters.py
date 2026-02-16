@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.security import get_current_user
+from app.core.security import get_current_user, get_current_user_from_token_param
 from app.db.base import get_db
 from app.models import Job, JobStatus, JobType
 from app.models.user import User
@@ -23,6 +23,7 @@ from app.schemas import (
     TriggerClusteringResponse,
 )
 from app.services.cluster_service import get_cluster_service
+from app.services.storage import get_storage_service
 from app.workers.tasks import cluster_all_images, summarize_cluster, summarize_clusters
 
 logger = logging.getLogger(__name__)
@@ -45,12 +46,50 @@ async def list_clusters(
     if not include_archived:
         clusters = [c for c in clusters if not c.is_archived]
 
+    storage = get_storage_service()
+    items = []
+    for c in clusters:
+        resp = ClusterResponse.model_validate(c)
+        resp.cover_thumbnail_url = storage.generate_cluster_cover_sas_url(c.cover_thumbnail_uri)
+        items.append(resp)
+
     return ClusterListResponse(
-        items=[ClusterResponse.model_validate(c) for c in clusters],
+        items=items,
         total=len(clusters),
         skip=skip,
         limit=limit,
     )
+
+
+@router.get("/covers/{filename}")
+async def serve_cluster_cover(
+    filename: str,
+    current_user: User = Depends(get_current_user_from_token_param),
+):
+    """Serve a cluster cover composite image (local storage only)."""
+    storage = get_storage_service()
+    response = storage.get_file_response("cluster_covers", filename)
+    if response is None:
+        raise HTTPException(status_code=404, detail="Cover not found")
+    return response
+
+
+@router.post("/backfill-covers")
+async def backfill_cluster_covers(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Generate composite cover images for all clusters."""
+    cluster_service = get_cluster_service(db, current_user.id)
+    clusters = cluster_service.get_latest_clusters(limit=500)
+    generated = 0
+    for cluster in clusters:
+        try:
+            cluster_service.generate_cover_composite(cluster.id)
+            generated += 1
+        except Exception as e:
+            logger.warning(f"Failed to generate cover for cluster {cluster.id}: {e}")
+    return {"status": "ok", "generated": generated, "total": len(clusters)}
 
 
 @router.get("/{cluster_id}", response_model=ClusterDetailResponse)

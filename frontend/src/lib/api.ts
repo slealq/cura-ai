@@ -129,7 +129,7 @@ api.interceptors.response.use(
 );
 
 // Helper to append auth token to static file URLs (img src, etc.)
-function authUrl(url: string): string {
+export function authUrl(url: string): string {
   const token = localStorage.getItem('access_token');
   if (!token) return url;
   const base = process.env.NEXT_PUBLIC_API_URL || '';

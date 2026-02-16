@@ -2,53 +2,36 @@
 
 import Link from 'next/link';
 import { Pin, Image as ImageIcon } from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
-import type { Cluster, Image } from '@/types';
-import { imagesApi, clustersApi } from '@/lib/api';
-import { cn } from '@/lib/utils';
+import type { Cluster } from '@/types';
+import { authUrl } from '@/lib/api';
 
 interface ClusterCardProps {
   cluster: Cluster;
 }
 
 export default function ClusterCard({ cluster }: ClusterCardProps) {
-  // Fetch representative images from the cluster images endpoint
-  const { data: images } = useQuery({
-    queryKey: ['cluster-images', cluster.id, 'preview'],
-    queryFn: () => clustersApi.getImages(cluster.id, { limit: 6 }),
-    enabled: cluster.size > 0,
-  });
-
   const title = cluster.display_name || cluster.summary_title || `Cluster ${cluster.id}`;
   const topTags = cluster.common_tags.slice(0, 6);
+
+  // For Azure SAS URLs (https://...) use directly; for local (/api/...) wrap with authUrl
+  const coverSrc = cluster.cover_thumbnail_url
+    ? cluster.cover_thumbnail_url.startsWith('http')
+      ? cluster.cover_thumbnail_url
+      : authUrl(cluster.cover_thumbnail_url)
+    : null;
 
   return (
     <Link href={`/clusters/${cluster.id}`}>
       <div className="group bg-card rounded-xl border border-border overflow-hidden hover:shadow-lg transition-shadow">
-        {/* Thumbnail Grid */}
+        {/* Cover Image */}
         <div className="aspect-video bg-muted relative">
-          {images && images.length > 0 ? (
-            <div className="grid grid-cols-3 grid-rows-2 h-full">
-              {images.slice(0, 6).map((img, i) => (
-                <div
-                  key={img.id}
-                  className={cn(
-                    'relative overflow-hidden',
-                    i === 0 && 'col-span-2 row-span-2'
-                  )}
-                >
-                  <img
-                    src={
-                      img.thumbnail_uri_medium
-                        ? imagesApi.getThumbnailUrl(img.thumbnail_uri_medium.split('/').pop()!)
-                        : '/placeholder.png'
-                    }
-                    alt=""
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                  />
-                </div>
-              ))}
-            </div>
+          {coverSrc ? (
+            <img
+              src={coverSrc}
+              alt=""
+              loading="lazy"
+              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+            />
           ) : (
             <div className="flex items-center justify-center h-full">
               <ImageIcon className="h-12 w-12 text-muted-foreground/50" />

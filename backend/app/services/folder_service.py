@@ -1,11 +1,15 @@
 """Folder service for managing folder operations."""
 import logging
+from io import BytesIO
 
+from PIL import Image as PILImage
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.folder import Folder, FolderImage
 from app.models.image import STATUS_ORDER, Image, ImageStatus
+from app.services.cover_utils import generate_cover_composite, sample_candidates
+from app.services.storage import get_storage_service
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +29,17 @@ class FolderService:
         return folder
 
     def get_folder(self, folder_id: int) -> Folder | None:
-        return self.db.query(Folder).filter(Folder.id == folder_id, Folder.user_id == self.user_id).first()
+        return (
+            self.db.query(Folder)
+            .options(joinedload(Folder.cover_image))
+            .filter(Folder.id == folder_id, Folder.user_id == self.user_id)
+            .first()
+        )
 
     def get_folders(self, skip: int = 0, limit: int = 50) -> list[Folder]:
         return (
             self.db.query(Folder)
+            .options(joinedload(Folder.cover_image))
             .filter(Folder.user_id == self.user_id)
             .order_by(Folder.updated_at.desc())
             .offset(skip)
@@ -108,6 +118,20 @@ class FolderService:
             "image_files": image_files,
         }
 
+    def refresh_cover_image(self, folder_id: int) -> None:
+        """Set cover_image_id to the most recently added image in the folder."""
+        folder = self.db.query(Folder).filter(Folder.id == folder_id, Folder.user_id == self.user_id).first()
+        if not folder:
+            return
+        newest = (
+            self.db.query(FolderImage.image_id)
+            .filter(FolderImage.folder_id == folder_id)
+            .order_by(FolderImage.added_at.desc())
+            .first()
+        )
+        folder.cover_image_id = newest[0] if newest else None
+        self.db.commit()
+
     def add_images_to_folder(self, folder_id: int, image_ids: list[int]) -> int:
         """Add images to a folder. Returns count of newly added."""
         # Verify folder belongs to user
@@ -126,7 +150,7 @@ class FolderService:
                 self.db.add(FolderImage(folder_id=folder_id, image_id=image_id))
                 added += 1
         if added:
-            folder = self.get_folder(folder_id)
+            folder = self.db.query(Folder).filter(Folder.id == folder_id, Folder.user_id == self.user_id).first()
             if folder:
                 folder.image_count = (
                     self.db.query(func.count(FolderImage.id))
@@ -135,6 +159,8 @@ class FolderService:
                     or 0
                 ) + added
             self.db.commit()
+            self.refresh_cover_image(folder_id)
+            self.generate_cover_composite(folder_id)
         return added
 
     def remove_images_from_folder(self, folder_id: int, image_ids: list[int]) -> int:
@@ -149,7 +175,7 @@ class FolderService:
             .delete(synchronize_session=False)
         )
         if deleted:
-            folder = self.get_folder(folder_id)
+            folder = self.db.query(Folder).filter(Folder.id == folder_id, Folder.user_id == self.user_id).first()
             if folder:
                 folder.image_count = (
                     self.db.query(func.count(FolderImage.id))
@@ -158,6 +184,8 @@ class FolderService:
                     or 0
                 )
             self.db.commit()
+            self.refresh_cover_image(folder_id)
+            self.generate_cover_composite(folder_id)
         return deleted
 
     def get_folder_images(
@@ -208,6 +236,48 @@ class FolderService:
             .all()
         )
         return [r[0] for r in rows]
+
+    def generate_cover_composite(self, folder_id: int) -> None:
+        """Generate a justified-row composite JPEG for a folder cover."""
+        storage = get_storage_service()
+
+        # Fetch up to 20 candidates, sample up to 6
+        candidates = self.get_folder_preview_images(folder_id, count=20)
+
+        if not candidates:
+            # No images — clear the cover
+            folder = self.db.query(Folder).filter(Folder.id == folder_id, Folder.user_id == self.user_id).first()
+            if folder:
+                storage.delete_folder_cover_sync(folder_id)
+                folder.cover_thumbnail_uri = None
+                self.db.commit()
+            return
+
+        selected = sample_candidates(candidates)
+
+        # Load PIL images from thumbnails
+        pil_images: list[PILImage.Image] = []
+        for img in selected:
+            uri = img.thumbnail_uri_medium or img.thumbnail_uri_small
+            if not uri:
+                continue
+            data = storage.get_thumbnail_bytes_sync(uri)
+            if data:
+                try:
+                    pil_images.append(PILImage.open(BytesIO(data)).convert("RGB"))
+                except Exception:
+                    continue
+
+        jpeg_data = generate_cover_composite(pil_images)
+        if jpeg_data is None:
+            return
+
+        uri = storage.save_folder_cover_sync(jpeg_data, folder_id)
+
+        folder = self.db.query(Folder).filter(Folder.id == folder_id, Folder.user_id == self.user_id).first()
+        if folder:
+            folder.cover_thumbnail_uri = uri
+            self.db.commit()
 
     def get_folder_preview_images(self, folder_id: int, count: int = 4) -> list[Image]:
         return (

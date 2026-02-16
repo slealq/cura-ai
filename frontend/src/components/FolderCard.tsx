@@ -3,40 +3,32 @@
 import Link from 'next/link';
 import { FolderOpen, Image as ImageIcon } from 'lucide-react';
 import type { Folder } from '@/types';
-import { imagesApi } from '@/lib/api';
+import { authUrl } from '@/lib/api';
 
 interface FolderCardProps {
   folder: Folder;
 }
 
 export default function FolderCard({ folder }: FolderCardProps) {
-  const previews = folder.preview_images.slice(0, 4);
+  // For Azure SAS URLs (https://...) use directly; for local (/api/...) wrap with authUrl
+  const coverSrc = folder.cover_thumbnail_url
+    ? folder.cover_thumbnail_url.startsWith('http')
+      ? folder.cover_thumbnail_url
+      : authUrl(folder.cover_thumbnail_url)
+    : null;
 
   return (
     <Link href={`/images/folder/${folder.id}`}>
       <div className="group bg-card rounded-xl border border-border overflow-hidden hover:shadow-lg transition-shadow">
-        {/* 2x2 Thumbnail Grid */}
+        {/* Cover Image */}
         <div className="aspect-video bg-muted relative">
-          {previews.length > 0 ? (
-            <div className="grid grid-cols-2 grid-rows-2 h-full">
-              {previews.map((img) => (
-                <div key={img.id} className="relative overflow-hidden">
-                  <img
-                    src={
-                      img.thumbnail_uri_medium
-                        ? imagesApi.getThumbnailUrl(img.thumbnail_uri_medium.split('/').pop()!)
-                        : '/placeholder.png'
-                    }
-                    alt=""
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                  />
-                </div>
-              ))}
-              {/* Fill remaining slots with empty cells */}
-              {Array.from({ length: 4 - previews.length }).map((_, i) => (
-                <div key={`empty-${i}`} className="bg-muted" />
-              ))}
-            </div>
+          {coverSrc ? (
+            <img
+              src={coverSrc}
+              alt=""
+              loading="lazy"
+              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+            />
           ) : (
             <div className="flex items-center justify-center h-full">
               <ImageIcon className="h-12 w-12 text-muted-foreground/50" />

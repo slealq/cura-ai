@@ -1,7 +1,9 @@
 """Cluster service for managing image clusters."""
 import logging
+from io import BytesIO
 
 import numpy as np
+from PIL import Image as PILImage
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import (
@@ -10,6 +12,8 @@ from app.models import (
     Image,
 )
 from app.services.clustering import ClusteringResult, get_clustering_service
+from app.services.cover_utils import generate_cover_composite, sample_candidates
+from app.services.storage import get_storage_service
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +43,11 @@ class ClusterService:
         limit: int = 100,
     ) -> list[Cluster]:
         """Get paginated list of clusters."""
-        query = self.db.query(Cluster).filter(Cluster.user_id == self.user_id)
+        query = (
+            self.db.query(Cluster)
+            .options(joinedload(Cluster.cover_image))
+            .filter(Cluster.user_id == self.user_id)
+        )
 
         if run_id:
             query = query.filter(Cluster.run_id == run_id)
@@ -130,6 +138,7 @@ class ClusterService:
                 centroid_embedding=centroid.tolist() if centroid is not None else None,
                 size=len(member_image_ids),
                 representative_image_ids=representative_ids,
+                cover_image_id=representative_ids[0] if representative_ids else None,
                 common_tags=[],
             )
 
@@ -171,6 +180,7 @@ class ClusterService:
                 summary_title="Unclustered Images",
                 summary_description="Images that don't fit well into other clusters",
                 representative_image_ids=noise_image_ids[:6],
+                cover_image_id=noise_image_ids[0] if noise_image_ids else None,
                 common_tags=[],
             )
 
@@ -263,6 +273,7 @@ class ClusterService:
             all_image_ids.extend([m.image_id for m in memberships])
             all_representative_ids.extend(cluster.representative_image_ids[:2])
 
+        rep_ids = list(set(all_representative_ids))[:6]
         merged_cluster = Cluster(
             user_id=self.user_id,
             method=primary.method,
@@ -270,7 +281,8 @@ class ClusterService:
             centroid_embedding=primary.centroid_embedding,
             size=len(set(all_image_ids)),
             display_name=new_name,
-            representative_image_ids=list(set(all_representative_ids))[:6],
+            representative_image_ids=rep_ids,
+            cover_image_id=rep_ids[0] if rep_ids else None,
             common_tags={},
         )
 
@@ -340,6 +352,44 @@ class ClusterService:
         if run_id:
             query = query.filter(Cluster.run_id == run_id)
         return query.count()
+
+    def generate_cover_composite(self, cluster_id: int) -> None:
+        """Generate a justified-row composite JPEG for a cluster cover."""
+        cluster = self.get_cluster(cluster_id)
+        if not cluster:
+            return
+
+        storage = get_storage_service()
+
+        # Fetch up to 20 candidates; include outliers so the "Unclustered" group gets a cover
+        candidates = self.get_cluster_images(cluster_id, include_outliers=True, limit=20)
+        if not candidates:
+            cluster.cover_thumbnail_uri = None
+            self.db.commit()
+            return
+
+        selected = sample_candidates(candidates)
+
+        # Load PIL images from thumbnails
+        pil_images: list[PILImage.Image] = []
+        for img in selected:
+            uri = img.thumbnail_uri_medium or img.thumbnail_uri_small
+            if not uri:
+                continue
+            data = storage.get_thumbnail_bytes_sync(uri)
+            if data:
+                try:
+                    pil_images.append(PILImage.open(BytesIO(data)).convert("RGB"))
+                except Exception:
+                    continue
+
+        jpeg_data = generate_cover_composite(pil_images)
+        if jpeg_data is None:
+            return
+
+        uri = storage.save_cluster_cover_sync(jpeg_data, cluster_id)
+        cluster.cover_thumbnail_uri = uri
+        self.db.commit()
 
 
 def get_cluster_service(db: Session, user_id: int) -> ClusterService:
