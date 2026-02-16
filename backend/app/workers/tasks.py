@@ -238,6 +238,137 @@ def process_ingest(self, image_id: int, user_id: int, job_id: int | None = None)
 
 
 @celery_app.task(bind=True)
+def process_ingest_batch(
+    self, image_ids: list[int], user_id: int, job_id: int | None = None
+) -> dict:
+    """
+    Process a batch of fast-ingested images in a single task.
+
+    One DB session for the whole batch. For each image: reads file from storage,
+    generates thumbnails, conditionally computes metadata (skipped if already
+    populated by fast_ingest), and updates the record to INGESTED.
+
+    Error isolation: if one image fails, it is marked FAILED and the rest continue.
+    Re-delivery guard: images already past PENDING status are skipped.
+    """
+    write_log(
+        category=LogCategory.TASK,
+        message=f"Task process_ingest_batch started for {len(image_ids)} images",
+        task_name="process_ingest_batch",
+        job_id=job_id,
+        user_id=user_id,
+    )
+    batch_start = time.monotonic()
+    db = get_db()
+    results = []
+
+    try:
+        from app.services.storage import get_storage_service
+
+        storage = get_storage_service()
+
+        for image_id in image_ids:
+            task_start = time.monotonic()
+            try:
+                image = (
+                    db.query(Image)
+                    .filter(Image.id == image_id, Image.user_id == user_id)
+                    .first()
+                )
+                if not image:
+                    logger.warning(f"Batch ingest: image {image_id} not found, skipping")
+                    _finish_ingest_job_item(db, job_id, failed=True)
+                    results.append({"image_id": image_id, "status": "not_found"})
+                    continue
+
+                # Re-delivery guard: skip images already past PENDING
+                if image.status != ImageStatus.PENDING:
+                    logger.info(
+                        f"Batch ingest: image {image_id} already {image.status.value}, skipping"
+                    )
+                    results.append({"image_id": image_id, "status": "skipped"})
+                    continue
+
+                # Read file from storage
+                file_data = run_async(storage.get_image(image.object_key))
+
+                # Only compute metadata if fast_ingest didn't populate it (Tier 3)
+                if image.width is None or image.height is None:
+                    mime_type, width, height, perceptual_hash = (
+                        storage.compute_image_metadata(file_data)
+                    )
+                    image.mime_type = mime_type
+                    image.width = width
+                    image.height = height
+                    image.perceptual_hash = perceptual_hash
+
+                # Generate thumbnails
+                thumbnails = run_async(
+                    storage.generate_thumbnails(file_data, image.object_key)
+                )
+
+                image.thumbnail_uri_small = thumbnails.get("200")
+                image.thumbnail_uri_medium = thumbnails.get("400")
+                image.thumbnail_uri_large = thumbnails.get("800")
+                image.status = ImageStatus.INGESTED
+                image.ingested_at = datetime.utcnow()
+                image.error_message = None
+                db.commit()
+
+                _finish_ingest_job_item(db, job_id, failed=False)
+
+                elapsed = (time.monotonic() - task_start) * 1000
+                results.append({
+                    "image_id": image_id,
+                    "status": "success",
+                    "width": image.width,
+                    "height": image.height,
+                    "ms": round(elapsed, 1),
+                })
+
+            except Exception as e:
+                elapsed = (time.monotonic() - task_start) * 1000
+                err_msg = _unwrap_error(e)
+                logger.error(
+                    f"Batch ingest: failed image {image_id}: {err_msg}"
+                )
+                try:
+                    image = db.query(Image).filter(Image.id == image_id).first()
+                    if image:
+                        image.status = ImageStatus.FAILED
+                        image.error_message = err_msg
+                        image.retry_count += 1
+                        db.commit()
+                except Exception:
+                    pass
+                _finish_ingest_job_item(db, job_id, failed=True)
+                results.append({
+                    "image_id": image_id,
+                    "status": "failed",
+                    "error": err_msg,
+                })
+
+        batch_elapsed = (time.monotonic() - batch_start) * 1000
+        n_ok = sum(1 for r in results if r["status"] == "success")
+        n_fail = sum(1 for r in results if r["status"] == "failed")
+        write_log(
+            category=LogCategory.TASK,
+            message=(
+                f"Task process_ingest_batch completed: {n_ok} ok, {n_fail} failed, "
+                f"{len(image_ids)} total in {batch_elapsed:.0f}ms"
+            ),
+            task_name="process_ingest_batch",
+            job_id=job_id,
+            duration_ms=round(batch_elapsed, 1),
+            user_id=user_id,
+        )
+        return {"status": "success", "results": results}
+
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True)
 def tag_image(self, image_id: int, user_id: int, tag_prompt: str | None = None, job_id: int | None = None) -> dict:
     """
     Tag an image with categorization tags.

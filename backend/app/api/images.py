@@ -25,7 +25,7 @@ from app.workers.tasks import (
     describe_image,
     embed_image,
     process_image_pipeline,
-    process_ingest,
+    process_ingest_batch,
     tag_image,
 )
 
@@ -190,23 +190,29 @@ async def upload_images_batch(
     }
     db.commit()
 
-    # Dispatch Celery tasks for each new (non-duplicate) image
-    for image_id in new_image_ids:
-        process_ingest.delay(image_id, current_user.id, job.id)
+    # Dispatch a single batch Celery task for all new images in this chunk
+    if new_image_ids:
+        process_ingest_batch.delay(new_image_ids, current_user.id, job.id)
 
-    # If there are no new images to process in this chunk (all duplicates/failures),
-    # check if the overall job is done
-    if not new_image_ids and job.total_items:
-        # Count how many non-PENDING images exist for this job
-        # (duplicates don't create PENDING records, so we advance the job)
-        job.progress = (job.progress or 0) + len(uploaded) + len(failed)
+    # Immediately count items that won't go through Celery (duplicates + failures).
+    # Only new images are counted by _finish_ingest_job_item in the Celery task.
+    n_immediate = (len(uploaded) - len(new_image_ids)) + len(failed)
+    if n_immediate > 0 and job.total_items:
+        db.execute(
+            Job.__table__.update()
+            .where(Job.id == job.id)
+            .values(progress=Job.progress + n_immediate)
+        )
+        db.commit()
+        # Re-fetch to see updated progress
+        job = db.query(Job).filter(Job.id == job.id).first()
+
+        # Check if job is done (e.g. all items in this chunk were duplicates/failures
+        # and no Celery tasks remain from earlier chunks)
         if job.progress >= job.total_items:
             job.status = JobStatus.COMPLETED
             job.completed_at = datetime.utcnow()
-        db.commit()
-
-        # Deferred folder assignment when job completes (all duplicates case)
-        if job.status == JobStatus.COMPLETED:
+            db.commit()
             from app.workers.tasks import _assign_folder_on_completion
             _assign_folder_on_completion(db, job)
 

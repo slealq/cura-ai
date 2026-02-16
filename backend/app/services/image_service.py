@@ -1,6 +1,5 @@
 """Image service for managing image operations."""
 import logging
-import mimetypes
 import time
 from datetime import datetime
 
@@ -168,15 +167,15 @@ class ImageService:
         # Generate unique object key
         object_key = self.storage.generate_object_key(filename)
 
-        # Infer MIME type from file extension (no PIL needed)
-        mime_type, _ = mimetypes.guess_type(filename)
-        if not mime_type or not mime_type.startswith("image/"):
-            mime_type = "image/jpeg"
+        # Compute MIME type, dimensions, and perceptual hash in a single PIL open
+        mime_type, width, height, perceptual_hash = (
+            self.storage.compute_image_metadata(file_data)
+        )
 
         # Save raw original to storage (1 write)
         await self.storage.save_image(file_data, object_key, mime_type)
 
-        # Create Image record with minimal fields
+        # Create Image record with metadata already populated
         image = Image(
             user_id=self.user_id,
             source=source,
@@ -186,6 +185,9 @@ class ImageService:
             file_hash=file_hash,
             file_size=len(file_data),
             mime_type=mime_type,
+            width=width,
+            height=height,
+            perceptual_hash=perceptual_hash,
             status=ImageStatus.PENDING,
         )
 

@@ -174,8 +174,8 @@ export const imagesApi = {
     onProgress?: (uploaded: number, total: number) => void,
     newFolderName?: string,
   ): Promise<BatchUploadResponse> => {
-    const CHUNK_SIZE = 10;
-    const PARALLEL_CHUNKS = 2;
+    const CHUNK_SIZE = 15;
+    const PARALLEL_CHUNKS = 3;
     const allUploaded: BatchUploadResponse['uploaded'] = [];
     const allFailed: BatchUploadResponse['failed'] = [];
     let jobId: number | null = null;

@@ -136,15 +136,24 @@ class StorageService:
         return f"s3://{settings.s3_bucket}/images/{object_key}"
 
     async def _save_azure(self, file_data: bytes, blob_path: str, mime_type: str) -> str:
-        """Save file to Azure Blob Storage."""
+        """Save file to Azure Blob Storage.
+
+        Runs the synchronous Azure SDK upload in a thread pool to avoid
+        blocking the async event loop (each upload takes ~1-3s).
+        """
+        import asyncio
+
         from azure.storage.blob import ContentSettings
 
-        blob_client = self._container_client.get_blob_client(blob_path)
-        blob_client.upload_blob(
-            file_data,
-            overwrite=True,
-            content_settings=ContentSettings(content_type=mime_type),
-        )
+        def _upload():
+            blob_client = self._container_client.get_blob_client(blob_path)
+            blob_client.upload_blob(
+                file_data,
+                overwrite=True,
+                content_settings=ContentSettings(content_type=mime_type),
+            )
+
+        await asyncio.to_thread(_upload)
         return f"azure://{self._azure_container_name}/{blob_path}"
 
     # --- Get methods ---
@@ -475,6 +484,32 @@ class StorageService:
 
     # --- Utility methods ---
 
+    _FORMAT_TO_MIME = {
+        "JPEG": "image/jpeg",
+        "PNG": "image/png",
+        "GIF": "image/gif",
+        "WEBP": "image/webp",
+        "BMP": "image/bmp",
+        "TIFF": "image/tiff",
+    }
+
+    def compute_image_metadata(
+        self, file_data: bytes
+    ) -> tuple[str, int, int, str | None]:
+        """Compute MIME type, dimensions, and perceptual hash in a single PIL open.
+
+        Returns (mime_type, width, height, perceptual_hash).
+        """
+        img = Image.open(BytesIO(file_data))
+        mime_type = self._FORMAT_TO_MIME.get(img.format, "image/jpeg")
+        width, height = img.size
+        try:
+            phash = str(imagehash.phash(img))
+        except Exception as e:
+            logger.warning(f"Failed to compute perceptual hash: {e}")
+            phash = None
+        return mime_type, width, height, phash
+
     def get_image_dimensions(self, file_data: bytes) -> tuple[int, int]:
         """Get image width and height."""
         img = Image.open(BytesIO(file_data))
@@ -483,15 +518,7 @@ class StorageService:
     def get_mime_type(self, file_data: bytes) -> str:
         """Detect MIME type from image data."""
         img = Image.open(BytesIO(file_data))
-        format_to_mime = {
-            "JPEG": "image/jpeg",
-            "PNG": "image/png",
-            "GIF": "image/gif",
-            "WEBP": "image/webp",
-            "BMP": "image/bmp",
-            "TIFF": "image/tiff",
-        }
-        return format_to_mime.get(img.format, "image/jpeg")
+        return self._FORMAT_TO_MIME.get(img.format, "image/jpeg")
 
     # --- Folder cover methods (synchronous for PIL compositing) ---
 
