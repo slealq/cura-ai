@@ -28,6 +28,7 @@ class JobType(str, enum.Enum):
     FOLDER_DELETE = "folder_delete"
     EDIT_IMAGE = "edit_image"
     BATCH_EDIT = "batch_edit"
+    BATCH_DESCRIBE = "batch_describe"
 
 
 class JobStatus(str, enum.Enum):

@@ -6,6 +6,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import Image, ImageMetadata, ImageSource, ImageStatus
+from app.models.folder import FolderImage
 from app.models.image import STATUS_ORDER
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.services.log_service import write_log
@@ -206,7 +207,9 @@ class ImageService:
         self,
         status: ImageStatus | None = None,
         min_status: ImageStatus | None = None,
+        max_status: ImageStatus | None = None,
         source: ImageSource | None = None,
+        in_folder: bool | None = None,
         skip: int = 0,
         limit: int = 100,
     ) -> list[Image]:
@@ -221,8 +224,18 @@ class ImageService:
             min_rank = STATUS_ORDER.get(min_status, 0)
             eligible = [s for s, rank in STATUS_ORDER.items() if rank >= min_rank]
             query = query.filter(Image.status.in_(eligible))
+        elif max_status:
+            max_rank = STATUS_ORDER.get(max_status, 6)
+            eligible = [s for s, rank in STATUS_ORDER.items() if rank <= max_rank]
+            query = query.filter(Image.status.in_(eligible))
         if source:
             query = query.filter(Image.source == source)
+        if in_folder is not None:
+            folder_subq = self.db.query(FolderImage.image_id).distinct().subquery()
+            if in_folder:
+                query = query.filter(Image.id.in_(self.db.query(folder_subq.c.image_id)))
+            else:
+                query = query.filter(~Image.id.in_(self.db.query(folder_subq.c.image_id)))
 
         return query.order_by(Image.created_at.desc()).offset(skip).limit(limit).all()
 
@@ -272,6 +285,12 @@ class ImageService:
         caption_model: str | None = None,
         embedding_model: str | None = None,
         tagging_prompt_version: str | None = None,
+        tag_prompt_text: str | None = None,
+        description_prompt_text: str | None = None,
+        tagged_at: datetime | None = None,
+        described_at: datetime | None = None,
+        tagging_duration_ms: int | None = None,
+        caption_duration_ms: int | None = None,
     ) -> ImageMetadata | None:
         """Save or update image metadata."""
         metadata = self.db.query(ImageMetadata).filter(
@@ -298,6 +317,18 @@ class ImageService:
             metadata.embedding_model = embedding_model
         if tagging_prompt_version is not None:
             metadata.tagging_prompt_version = tagging_prompt_version
+        if tag_prompt_text is not None:
+            metadata.tag_prompt_text = tag_prompt_text
+        if description_prompt_text is not None:
+            metadata.description_prompt_text = description_prompt_text
+        if tagged_at is not None:
+            metadata.tagged_at = tagged_at
+        if described_at is not None:
+            metadata.described_at = described_at
+        if tagging_duration_ms is not None:
+            metadata.tagging_duration_ms = tagging_duration_ms
+        if caption_duration_ms is not None:
+            metadata.caption_duration_ms = caption_duration_ms
 
         self.db.commit()
         self.db.refresh(metadata)
@@ -307,6 +338,8 @@ class ImageService:
         self,
         status: ImageStatus | None = None,
         min_status: ImageStatus | None = None,
+        max_status: ImageStatus | None = None,
+        in_folder: bool | None = None,
     ) -> int:
         """Count images with optional status filter."""
         query = self.db.query(Image).filter(Image.user_id == self.user_id)
@@ -316,6 +349,16 @@ class ImageService:
             min_rank = STATUS_ORDER.get(min_status, 0)
             eligible = [s for s, rank in STATUS_ORDER.items() if rank >= min_rank]
             query = query.filter(Image.status.in_(eligible))
+        elif max_status:
+            max_rank = STATUS_ORDER.get(max_status, 6)
+            eligible = [s for s, rank in STATUS_ORDER.items() if rank <= max_rank]
+            query = query.filter(Image.status.in_(eligible))
+        if in_folder is not None:
+            folder_subq = self.db.query(FolderImage.image_id).distinct().subquery()
+            if in_folder:
+                query = query.filter(Image.id.in_(self.db.query(folder_subq.c.image_id)))
+            else:
+                query = query.filter(~Image.id.in_(self.db.query(folder_subq.c.image_id)))
         return query.count()
 
     async def get_image_data(self, image_id: int) -> bytes | None:
@@ -333,6 +376,17 @@ class ImageService:
             self.db.commit()
             return True
         return False
+
+    def delete_images_batch(self, image_ids: list[int]) -> int:
+        """Delete multiple images. Returns count of deleted images."""
+        images = self.db.query(Image).filter(
+            Image.id.in_(image_ids), Image.user_id == self.user_id
+        ).all()
+        count = len(images)
+        for image in images:
+            self.db.delete(image)
+        self.db.commit()
+        return count
 
 
 def get_image_service(db: Session, user_id: int) -> ImageService:

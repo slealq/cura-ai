@@ -443,7 +443,10 @@ def process_ingest_batch(
 
 
 @celery_app.task(bind=True)
-def tag_image(self, image_id: int, user_id: int, tag_prompt: str | None = None, job_id: int | None = None) -> dict:
+def tag_image(
+    self, image_id: int, user_id: int, tag_prompt: str | None = None,
+    job_id: int | None = None, provider: str | None = None, model: str | None = None,
+) -> dict:
     """
     Tag an image with categorization tags.
 
@@ -476,8 +479,10 @@ def tag_image(self, image_id: int, user_id: int, tag_prompt: str | None = None, 
             tag_prompt = compose_tag_prompt(tag_prompt)
 
         # Tag image
-        tagger = get_tagger(db=db, user_id=user_id)
+        tagger = get_tagger(provider=provider, model=model, db=db, user_id=user_id)
+        tag_start = time.monotonic()
         result = run_async(tagger.tag_image(image_data, image.mime_type, tag_prompt))
+        tagging_duration_ms = round((time.monotonic() - tag_start) * 1000)
 
         # Save metadata
         image_service.save_metadata(
@@ -485,6 +490,9 @@ def tag_image(self, image_id: int, user_id: int, tag_prompt: str | None = None, 
             tags=result.tags,
             tagging_model=result.model,
             tagging_prompt_version=result.prompt_version,
+            tag_prompt_text=tag_prompt,
+            tagged_at=datetime.utcnow(),
+            tagging_duration_ms=tagging_duration_ms,
         )
 
         # Update status
@@ -516,7 +524,10 @@ def tag_image(self, image_id: int, user_id: int, tag_prompt: str | None = None, 
 
 
 @celery_app.task(bind=True)
-def describe_image(self, image_id: int, user_id: int, description_prompt: str | None = None, job_id: int | None = None) -> dict:
+def describe_image(
+    self, image_id: int, user_id: int, description_prompt: str | None = None,
+    job_id: int | None = None, provider: str | None = None, model: str | None = None,
+) -> dict:
     """
     Generate a detailed description for an image.
 
@@ -548,14 +559,19 @@ def describe_image(self, image_id: int, user_id: int, description_prompt: str | 
             description_prompt = compose_description_prompt(description_prompt)
 
         # Generate description
-        describer = get_describer(db=db, user_id=user_id)
+        describer = get_describer(provider=provider, model=model, db=db, user_id=user_id)
+        desc_start = time.monotonic()
         result = run_async(describer.describe_image(image_data, image.mime_type, description_prompt))
+        caption_duration_ms = round((time.monotonic() - desc_start) * 1000)
 
         # Save metadata
         image_service.save_metadata(
             image_id=image_id,
             description_long=result.description,
             caption_model=result.model,
+            description_prompt_text=description_prompt,
+            described_at=datetime.utcnow(),
+            caption_duration_ms=caption_duration_ms,
         )
 
         # Update status
@@ -956,7 +972,9 @@ def summarize_clusters(self, cluster_ids: list[int], user_id: int, job_id: int |
 
 @celery_app.task(bind=True)
 def process_image_pipeline(
-    self, image_id: int, user_id: int, tag_prompt: str | None = None, description_prompt: str | None = None, job_id: int | None = None
+    self, image_id: int, user_id: int, tag_prompt: str | None = None,
+    description_prompt: str | None = None, job_id: int | None = None,
+    provider: str | None = None, model: str | None = None,
 ) -> dict:
     """
     Run full pipeline for a single image: tag -> describe -> embed.
@@ -993,12 +1011,16 @@ def process_image_pipeline(
             description_prompt = compose_description_prompt(description_prompt)
 
         # Tag
-        tagger = get_tagger(db=db, user_id=user_id)
+        tagger = get_tagger(provider=provider, model=model, db=db, user_id=user_id)
+        tag_start = time.monotonic()
         tag_result = run_async(tagger.tag_image(image_data, image.mime_type, tag_prompt))
+        tagging_duration_ms = round((time.monotonic() - tag_start) * 1000)
 
         # Describe
-        describer = get_describer(db=db, user_id=user_id)
+        describer = get_describer(provider=provider, model=model, db=db, user_id=user_id)
+        desc_start = time.monotonic()
         description_result = run_async(describer.describe_image(image_data, image.mime_type, description_prompt))
+        caption_duration_ms = round((time.monotonic() - desc_start) * 1000)
 
         # Build text for embedding
         text_parts = []
@@ -1011,6 +1033,8 @@ def process_image_pipeline(
         embedder = get_embedder(db=db, user_id=user_id)
         embed_result = run_async(embedder.embed_text(text))
 
+        now = datetime.utcnow()
+
         # Save all metadata at once
         image_service.save_metadata(
             image_id=image_id,
@@ -1021,6 +1045,12 @@ def process_image_pipeline(
             tagging_prompt_version=tag_result.prompt_version,
             caption_model=description_result.model,
             embedding_model=embed_result.model,
+            tag_prompt_text=tag_prompt,
+            description_prompt_text=description_prompt,
+            tagged_at=now,
+            described_at=now,
+            tagging_duration_ms=tagging_duration_ms,
+            caption_duration_ms=caption_duration_ms,
         )
 
         # Update status
@@ -1226,7 +1256,6 @@ def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int]) -
 
         job = db.query(Job).filter(Job.id == job_id).first()
         if job:
-            job.status = JobStatus.COMPLETED
             job.completed_at = datetime.utcnow()
             job.result = {
                 "total": len(image_ids),
@@ -1236,6 +1265,14 @@ def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int]) -
                 "image_ids": image_ids,
                 "dispatched": True,
             }
+            if failed_count >= len(image_ids):
+                job.status = JobStatus.FAILED
+                job.error_message = f"All {failed_count} images failed"
+            elif failed_count > 0:
+                job.status = JobStatus.COMPLETED
+                job.error_message = f"{failed_count}/{len(image_ids)} images failed"
+            else:
+                job.status = JobStatus.COMPLETED
             db.commit()
 
         elapsed = (time.monotonic() - task_start) * 1000
@@ -1249,6 +1286,139 @@ def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int]) -
         logger.error(f"Batch reprocess failed: {e}")
         write_log(category=LogCategory.TASK, message=f"Task run_batch_reprocess failed: {e}",
                   level=LogLevel.ERROR, task_name="run_batch_reprocess", job_id=job_id,
+                  duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)}, user_id=user_id)
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.status = JobStatus.FAILED
+            job.error_message = str(e)
+            db.commit()
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True, queue='clustering')
+def run_batch_describe(
+    self, job_id: int, user_id: int, image_ids: list[int],
+    tag_prompt: str | None = None, description_prompt: str | None = None,
+    provider: str | None = None, model: str | None = None,
+) -> dict:
+    """
+    Describe a batch of images: reset each to INGESTED, dispatch process_image_pipeline
+    with custom prompts and provider/model, then poll until all images have finished.
+    """
+    write_log(category=LogCategory.TASK, message=f"Task run_batch_describe started ({len(image_ids)} images)",
+              task_name="run_batch_describe", job_id=job_id, user_id=user_id)
+    task_start = time.monotonic()
+    db = get_db()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+
+        if job and job.status == JobStatus.CANCELLED:
+            logger.info(f"Batch describe job {job_id} already cancelled, skipping")
+            return {"status": "cancelled", "total": len(image_ids)}
+
+        # Idempotency check
+        already_dispatched = False
+        if job and isinstance(job.result, dict) and job.result.get("dispatched"):
+            already_dispatched = True
+            logger.info(f"Batch describe job {job_id} already dispatched, skipping to Phase 2")
+
+        if job and not already_dispatched:
+            job.status = JobStatus.RUNNING
+            job.started_at = datetime.utcnow()
+            job.total_items = len(image_ids)
+            job.result = {"image_ids": image_ids}
+            db.commit()
+
+        image_service = get_image_service(db, user_id)
+        queued = 0
+
+        # Phase 1: Reset images and dispatch pipeline tasks
+        if not already_dispatched:
+            for image_id in image_ids:
+                try:
+                    image_service.update_status(image_id, ImageStatus.INGESTED)
+                    process_image_pipeline.delay(
+                        image_id, user_id, tag_prompt, description_prompt,
+                        provider=provider, model=model,
+                    )
+                    queued += 1
+                except Exception as e:
+                    logger.error(f"Failed to queue describe for image {image_id}: {e}")
+
+            if job:
+                job.result = {"image_ids": image_ids, "dispatched": True, "queued": queued}
+                db.commit()
+
+        # Phase 2: Poll until all images have finished
+        image_id_set = set(image_ids)
+        poll_interval = 5
+        while True:
+            db.expire_all()
+            job = db.query(Job).filter(Job.id == job_id).first()
+            if job and job.status == JobStatus.CANCELLED:
+                logger.info(f"Batch describe job {job_id} cancelled during polling")
+                return {"status": "cancelled", "total": len(image_ids)}
+
+            done_count = (
+                db.query(Image)
+                .filter(
+                    Image.id.in_(image_id_set),
+                    Image.status != ImageStatus.INGESTED,
+                )
+                .count()
+            )
+
+            if job:
+                job.progress = done_count
+                db.commit()
+
+            if done_count >= len(image_ids):
+                break
+
+            time.sleep(poll_interval)
+
+        # Count outcomes
+        failed_count = (
+            db.query(Image)
+            .filter(Image.id.in_(image_id_set), Image.status == ImageStatus.FAILED)
+            .count()
+        )
+        succeeded = len(image_ids) - failed_count
+
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.completed_at = datetime.utcnow()
+            job.result = {
+                "total": len(image_ids),
+                "queued": queued,
+                "succeeded": succeeded,
+                "failed": failed_count,
+                "image_ids": image_ids,
+                "dispatched": True,
+            }
+            if failed_count >= len(image_ids):
+                job.status = JobStatus.FAILED
+                job.error_message = f"All {failed_count} images failed"
+            elif failed_count > 0:
+                job.status = JobStatus.COMPLETED
+                job.error_message = f"{failed_count}/{len(image_ids)} images failed"
+            else:
+                job.status = JobStatus.COMPLETED
+            db.commit()
+
+        elapsed = (time.monotonic() - task_start) * 1000
+        write_log(category=LogCategory.TASK,
+                  message=f"Task run_batch_describe completed in {elapsed:.0f}ms ({succeeded} succeeded, {failed_count} failed)",
+                  task_name="run_batch_describe", job_id=job_id, duration_ms=round(elapsed, 1), user_id=user_id)
+        return {"status": "success", "total": len(image_ids), "succeeded": succeeded, "failed": failed_count}
+
+    except Exception as e:
+        elapsed = (time.monotonic() - task_start) * 1000
+        logger.error(f"Batch describe failed: {e}")
+        write_log(category=LogCategory.TASK, message=f"Task run_batch_describe failed: {e}",
+                  level=LogLevel.ERROR, task_name="run_batch_describe", job_id=job_id,
                   duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)}, user_id=user_id)
         job = db.query(Job).filter(Job.id == job_id).first()
         if job:

@@ -5,6 +5,12 @@ export interface ImageMetadata {
   tagging_model: string | null;
   caption_model: string | null;
   embedding_model: string | null;
+  tag_prompt_text: string | null;
+  description_prompt_text: string | null;
+  tagged_at: string | null;
+  described_at: string | null;
+  tagging_duration_ms: number | null;
+  caption_duration_ms: number | null;
 }
 
 export interface Image {

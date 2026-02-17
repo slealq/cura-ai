@@ -144,11 +144,18 @@ export const imagesApi = {
   list: async (params?: {
     status?: string;
     min_status?: string;
+    max_status?: string;
     source?: string;
+    in_folder?: boolean;
     skip?: number;
     limit?: number;
   }): Promise<ImageListResponse> => {
     const { data } = await api.get('/images', { params });
+    return data;
+  },
+
+  batchDelete: async (imageIds: number[]): Promise<{ deleted: number }> => {
+    const { data } = await api.post('/images/batch-delete', { image_ids: imageIds });
     return data;
   },
 
@@ -391,7 +398,7 @@ export const foldersApi = {
 
   listImages: async (
     id: number,
-    params?: { status?: string; min_status?: string; skip?: number; limit?: number }
+    params?: { status?: string; min_status?: string; max_status?: string; skip?: number; limit?: number }
   ): Promise<ImageListResponse> => {
     const { data } = await api.get(`/folders/${id}/images`, { params });
     return data;
@@ -399,6 +406,34 @@ export const foldersApi = {
 
   reprocess: async (id: number): Promise<{ job_id: number; total: number }> => {
     const { data } = await api.post(`/folders/${id}/reprocess`);
+    return data;
+  },
+
+  describe: async (
+    id: number,
+    params: {
+      provider?: string;
+      model?: string;
+      tag_prompt?: string;
+      description_prompt?: string;
+    }
+  ): Promise<{ status: string; job_id: number; total: number; message: string }> => {
+    const { data } = await api.post(`/folders/${id}/describe`, params);
+    return data;
+  },
+
+  autoPromptQuestions: async (
+    id: number
+  ): Promise<{ questions: string[]; sample_analysis: string }> => {
+    const { data } = await api.post(`/folders/${id}/auto-prompt/questions`);
+    return data;
+  },
+
+  autoPromptGenerate: async (
+    id: number,
+    params: { answers: string[]; sample_analysis: string }
+  ): Promise<{ tag_prompt: string; description_prompt: string; explanation: string }> => {
+    const { data } = await api.post(`/folders/${id}/auto-prompt/generate`, params);
     return data;
   },
 };

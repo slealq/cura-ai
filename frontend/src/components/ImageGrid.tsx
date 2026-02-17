@@ -3,25 +3,22 @@
 import { Suspense, useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { Loader2, CheckSquare, X, RefreshCw, FolderPlus, Trash2 } from 'lucide-react';
+import { Loader2, CheckSquare, X, RefreshCw, FolderPlus, Trash2, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import { imagesApi, jobsApi, foldersApi } from '@/lib/api';
 import ImageCard from '@/components/ImageCard';
 import ImageDrawer from '@/components/ImageDrawer';
 import AddToFolderDialog from '@/components/AddToFolderDialog';
+import DescribeAllDialog from '@/components/DescribeAllDialog';
 import { cn } from '@/lib/utils';
 import type { Image, ImageListResponse } from '@/types';
 
-type FilterMode = 'none' | 'min_status' | 'exact';
+type FilterKey = 'failed' | 'not_described' | 'not_clustered';
 
-const statusFilters: { value: string | undefined; label: string; mode: FilterMode }[] = [
-  { value: undefined, label: 'All', mode: 'none' },
-  { value: 'ingested', label: 'Ingested', mode: 'exact' },
-  { value: 'tagged', label: 'Tagged', mode: 'exact' },
-  { value: 'described', label: 'Described', mode: 'exact' },
-  { value: 'embedded', label: 'Embedded', mode: 'exact' },
-  { value: 'clustered', label: 'Clustered', mode: 'exact' },
-  { value: 'failed', label: 'Failed', mode: 'exact' },
+const imageFilters: { key: FilterKey; label: string }[] = [
+  { key: 'failed', label: 'Failed' },
+  { key: 'not_described', label: 'Not described' },
+  { key: 'not_clustered', label: 'Not clustered' },
 ];
 
 interface ImageGridProps {
@@ -30,6 +27,8 @@ interface ImageGridProps {
   fetchImages: (params: {
     status?: string;
     min_status?: string;
+    max_status?: string;
+    in_folder?: boolean;
     skip?: number;
     limit?: number;
   }) => Promise<ImageListResponse>;
@@ -61,8 +60,7 @@ function ImageGridContent({ title, queryKeyPrefix, fetchImages, folderId }: Imag
   const searchParams = useSearchParams();
   const imageIdParam = searchParams.get('image_id');
   const [selectedImage, setSelectedImage] = useState<Image | null>(null);
-  const [statusFilter, setStatusFilter] = useState<string | undefined>();
-  const [filterMode, setFilterMode] = useState<FilterMode>('none');
+  const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null);
   const [page, setPage] = useState(0);
   const limit = 50;
 
@@ -72,6 +70,9 @@ function ImageGridContent({ title, queryKeyPrefix, fetchImages, folderId }: Imag
 
   // Add to folder dialog
   const [showAddToFolder, setShowAddToFolder] = useState(false);
+
+  // Describe all dialog
+  const [showDescribeAll, setShowDescribeAll] = useState(false);
 
   // Auto-open drawer when image_id is in URL params
   const hasOpenedLinked = useRef(false);
@@ -88,12 +89,20 @@ function ImageGridContent({ title, queryKeyPrefix, fetchImages, folderId }: Imag
     }
   }, [linkedImage]);
 
+  const filterParams = (() => {
+    switch (activeFilter) {
+      case 'failed': return { status: 'failed' };
+      case 'not_described': return { max_status: 'tagged' };
+      case 'not_clustered': return { max_status: 'embedded' };
+      default: return {};
+    }
+  })();
+
   const { data, isLoading } = useQuery({
-    queryKey: [queryKeyPrefix, statusFilter, filterMode, page],
+    queryKey: [queryKeyPrefix, activeFilter, page],
     queryFn: () =>
       fetchImages({
-        status: filterMode === 'exact' ? statusFilter : undefined,
-        min_status: filterMode === 'min_status' ? statusFilter : undefined,
+        ...filterParams,
         skip: page * limit,
         limit,
       }),
@@ -106,7 +115,7 @@ function ImageGridContent({ title, queryKeyPrefix, fetchImages, folderId }: Imag
   });
 
   const hasBatchRunning = jobs?.items.some(
-    (j) => j.job_type === 'batch_reprocess' && (j.status === 'running' || j.status === 'pending')
+    (j) => (j.job_type === 'batch_reprocess' || j.job_type === 'batch_describe') && (j.status === 'running' || j.status === 'pending')
   ) ?? false;
 
   const reprocessSelectedMutation = useMutation({
@@ -127,21 +136,6 @@ function ImageGridContent({ title, queryKeyPrefix, fetchImages, folderId }: Imag
     },
   });
 
-  const reprocessFolderMutation = useMutation({
-    mutationFn: (fId: number) => foldersApi.reprocess(fId),
-    onSuccess: (data) => {
-      toast.success(`Reprocessing folder`, {
-        description: `Job #${data.job_id} — ${data.total} images`,
-        action: { label: 'View Jobs', onClick: () => router.push('/jobs') },
-      });
-      queryClient.invalidateQueries({ queryKey: ['jobs'] });
-      queryClient.invalidateQueries({ queryKey: [queryKeyPrefix] });
-    },
-    onError: () => {
-      toast.error('Failed to reprocess folder');
-    },
-  });
-
   const removeFromFolderMutation = useMutation({
     mutationFn: (imageIds: number[]) => foldersApi.removeImages(folderId!, imageIds),
     onSuccess: (data) => {
@@ -153,6 +147,23 @@ function ImageGridContent({ title, queryKeyPrefix, fetchImages, folderId }: Imag
     },
     onError: () => {
       toast.error('Failed to remove images');
+    },
+  });
+
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  const deleteSelectedMutation = useMutation({
+    mutationFn: (imageIds: number[]) => imagesApi.batchDelete(imageIds),
+    onSuccess: (data) => {
+      toast.success(`Deleted ${data.deleted} images`);
+      queryClient.invalidateQueries({ queryKey: [queryKeyPrefix] });
+      queryClient.invalidateQueries({ queryKey: ['stats'] });
+      queryClient.invalidateQueries({ queryKey: ['folders'] });
+      setSelectedIds(new Set());
+      setSelectMode(false);
+    },
+    onError: () => {
+      toast.error('Failed to delete images');
     },
   });
 
@@ -195,19 +206,19 @@ function ImageGridContent({ title, queryKeyPrefix, fetchImages, folderId }: Imag
         <h1 className="text-2xl font-bold">{title}</h1>
 
         <div className="flex items-center gap-2">
-          {/* Folder reprocess button */}
+          {/* Folder describe button */}
           {folderId && (
             <>
               <button
-                onClick={() => reprocessFolderMutation.mutate(folderId)}
-                disabled={reprocessFolderMutation.isPending || hasBatchRunning}
+                onClick={() => setShowDescribeAll(true)}
+                disabled={hasBatchRunning}
                 className={cn(
                   'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors',
                   'border border-border hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed'
                 )}
               >
-                <RefreshCw className={cn('h-3.5 w-3.5', reprocessFolderMutation.isPending && 'animate-spin')} />
-                Reprocess All
+                <FileText className="h-3.5 w-3.5" />
+                Describe All
               </button>
               <div className="w-px h-6 bg-border" />
             </>
@@ -255,18 +266,17 @@ function ImageGridContent({ title, queryKeyPrefix, fetchImages, folderId }: Imag
             </>
           )}
 
-          {/* Status Filter */}
-          {statusFilters.map((filter) => (
+          {/* Filters */}
+          {imageFilters.map((filter) => (
             <button
-              key={filter.label}
+              key={filter.key}
               onClick={() => {
-                setStatusFilter(filter.value);
-                setFilterMode(filter.mode);
+                setActiveFilter((prev) => prev === filter.key ? null : filter.key);
                 setPage(0);
               }}
               className={cn(
                 'px-3 py-1.5 rounded-lg text-sm transition-colors',
-                statusFilter === filter.value
+                activeFilter === filter.key
                   ? 'bg-primary text-primary-foreground'
                   : 'border border-border hover:bg-muted'
               )}
@@ -365,7 +375,7 @@ function ImageGridContent({ title, queryKeyPrefix, fetchImages, folderId }: Imag
               disabled={removeFromFolderMutation.isPending}
               className={cn(
                 'flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
-                'border border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/30',
+                'border border-border hover:bg-muted',
                 'disabled:opacity-50 disabled:cursor-not-allowed'
               )}
             >
@@ -373,6 +383,18 @@ function ImageGridContent({ title, queryKeyPrefix, fetchImages, folderId }: Imag
               Remove from Folder
             </button>
           )}
+
+          {/* Delete images */}
+          <button
+            onClick={() => setShowDeleteConfirm(true)}
+            className={cn(
+              'flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
+              'border border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/30'
+            )}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete
+          </button>
 
           <button
             onClick={() => setSelectedIds(new Set())}
@@ -392,8 +414,58 @@ function ImageGridContent({ title, queryKeyPrefix, fetchImages, folderId }: Imag
             setShowAddToFolder(false);
             setSelectedIds(new Set());
             setSelectMode(false);
+            queryClient.invalidateQueries({ queryKey: [queryKeyPrefix] });
           }}
         />
+      )}
+
+      {/* Describe All dialog */}
+      {showDescribeAll && folderId && (
+        <DescribeAllDialog
+          folderId={folderId}
+          onClose={() => setShowDescribeAll(false)}
+          onStarted={(jobId, total) => {
+            setShowDescribeAll(false);
+            toast.success(`Describing ${total} images`, {
+              description: `Job #${jobId}`,
+              action: { label: 'View Jobs', onClick: () => router.push('/jobs') },
+            });
+            queryClient.invalidateQueries({ queryKey: ['jobs'] });
+            queryClient.invalidateQueries({ queryKey: [queryKeyPrefix] });
+          }}
+        />
+      )}
+
+      {/* Delete confirmation */}
+      {showDeleteConfirm && (
+        <>
+          <div className="fixed inset-0 bg-black/50 z-50" onClick={() => setShowDeleteConfirm(false)} />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="bg-card rounded-xl shadow-xl max-w-sm w-full p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+              <h3 className="text-lg font-semibold">Delete Images</h3>
+              <p className="text-sm text-muted-foreground">
+                Permanently delete {selectedIds.size} image{selectedIds.size !== 1 ? 's' : ''}? This cannot be undone.
+              </p>
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => setShowDeleteConfirm(false)}
+                  className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    setShowDeleteConfirm(false);
+                    deleteSelectedMutation.mutate(Array.from(selectedIds));
+                  }}
+                  className="px-4 py-2 text-sm text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
       )}
 
       {selectedImage && (
