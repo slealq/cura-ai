@@ -1,5 +1,6 @@
 """Base interfaces for AI providers."""
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -212,11 +213,13 @@ class BaseGenerator(ABC):
         guidance_scale: float = 3.5,
         seed: int | None = None,
         loras: list[dict] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> GenerationResult:
         """Generate an image. Returns GenerationResult with image bytes.
 
         Args:
             loras: Optional list of LoRA configs, each {"path": url, "scale": float}.
+            cancel_check: Optional callable returning True if the task has been cancelled.
         """
         pass
 
