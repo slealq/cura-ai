@@ -2,6 +2,7 @@
 from fastapi import APIRouter
 
 from app.api.auth import router as auth_router
+from app.api.billing import router as billing_router
 from app.api.clusters import router as clusters_router
 from app.api.edit import router as edit_router
 from app.api.folders import router as folders_router
@@ -16,6 +17,7 @@ from app.api.vision import router as vision_router
 api_router = APIRouter()
 
 api_router.include_router(auth_router)
+api_router.include_router(billing_router)
 api_router.include_router(images_router)
 api_router.include_router(folders_router)
 api_router.include_router(clusters_router)

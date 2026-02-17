@@ -12,7 +12,6 @@ from app.core.security import get_current_user
 from app.db.base import get_db
 from app.models.api_key import APIProvider
 from app.models.user import User
-from app.services.api_key_service import get_api_key_service
 from app.services.settings_service import (
     DEFAULT_CLUSTERING_CONFIG,
     DEFAULT_DESCRIPTION_PROMPT,
@@ -321,10 +320,18 @@ async def reset_prompt_settings(
 async def suggest_prompt(request: PromptSuggestRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Use AI to suggest edits to a prompt based on a change request."""
     try:
-        key_service = get_api_key_service(db, current_user.id)
-        openai_key = key_service.resolve_key(APIProvider.OPENAI)
+        from app.core.config import get_settings
+        from app.services.billing_service import BillingService, InsufficientBalanceError
+
+        try:
+            BillingService(db, current_user.id).check_balance_or_raise()
+        except InsufficientBalanceError:
+            raise HTTPException(status_code=402, detail="Insufficient credits")
+
+        app_settings = get_settings()
+        openai_key = app_settings.openai_api_key
         if not openai_key:
-            raise HTTPException(status_code=400, detail="OpenAI API key not set. Configure it in Settings > API Keys.")
+            raise HTTPException(status_code=400, detail="OpenAI API key not configured on the platform.")
         client = AsyncOpenAI(api_key=openai_key)
 
         system_prompt = (
@@ -368,72 +375,6 @@ def _api_key_to_response(key) -> APIKeyResponse:
         last_validated_at=key.last_validated_at.isoformat() if key.last_validated_at else None,
         last_error=key.last_error,
     )
-
-
-@router.get("/api-keys", response_model=list[APIKeyResponse])
-async def list_api_keys(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """List all stored API keys (returns metadata only, never the actual key)."""
-    service = get_api_key_service(db, current_user.id)
-    keys = service.get_all_keys()
-
-    # Build response including providers with no stored key
-    stored = {k.provider: k for k in keys}
-    result = []
-    for provider in APIProvider:
-        if provider.value in stored:
-            result.append(_api_key_to_response(stored[provider.value]))
-        else:
-            result.append(APIKeyResponse(
-                provider=provider.value,
-                key_suffix=None,
-                status="not_set",
-                last_validated_at=None,
-                last_error=None,
-            ))
-    return result
-
-
-@router.put("/api-keys/{provider}", response_model=APIKeyResponse)
-async def save_api_key(provider: str, request: APIKeySaveRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Save or update an API key (validates first)."""
-    try:
-        api_provider = APIProvider(provider)
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
-
-    service = get_api_key_service(db, current_user.id)
-    api_key, result = await service.validate_and_save_key(api_provider, request.key)
-    return _api_key_to_response(api_key)
-
-
-@router.delete("/api-keys/{provider}", status_code=204)
-async def delete_api_key(provider: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Remove a stored API key."""
-    try:
-        api_provider = APIProvider(provider)
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
-
-    service = get_api_key_service(db, current_user.id)
-    if not service.delete_key(api_provider):
-        raise HTTPException(status_code=404, detail="No stored key for this provider")
-
-
-@router.post("/api-keys/{provider}/validate", response_model=APIKeyResponse)
-async def validate_api_key(provider: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Re-validate an existing stored key."""
-    try:
-        api_provider = APIProvider(provider)
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
-
-    service = get_api_key_service(db, current_user.id)
-    key_value = service.resolve_key(api_provider)
-    if not key_value:
-        raise HTTPException(status_code=404, detail="No key configured for this provider")
-
-    api_key, result = await service.validate_and_save_key(api_provider, key_value)
-    return _api_key_to_response(api_key)
 
 
 # --- Provider config endpoints ---

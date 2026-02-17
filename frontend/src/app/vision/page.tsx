@@ -67,17 +67,6 @@ export default function VisionPage() {
 
   const results = resultsData?.items ?? [];
 
-  // Check API keys
-  const { data: apiKeys } = useQuery({
-    queryKey: ['api-keys'],
-    queryFn: settingsApi.getApiKeys,
-  });
-
-  const hasKeyForProvider = (p: string) => {
-    const key = apiKeys?.find((k) => k.provider === p);
-    return key?.status === 'active' || key?.status === 'quota_exceeded';
-  };
-
   // Fetch models for the selected provider
   const { data: providerModels } = useQuery({
     queryKey: ['provider-models', provider],
@@ -351,7 +340,7 @@ export default function VisionPage() {
             >
               {VISION_PROVIDERS.map((p) => (
                 <option key={p.value} value={p.value}>
-                  {p.label}{!hasKeyForProvider(p.value) && apiKeys ? ' (no key)' : ''}
+                  {p.label}
                 </option>
               ))}
             </select>

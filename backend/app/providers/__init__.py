@@ -44,37 +44,40 @@ settings = get_settings()
 
 
 def _resolve_config(db: Session | None, user_id: int | None = None):
-    """Resolve API keys and provider config from DB (with env var fallback).
+    """Resolve API keys from platform env vars and provider config from DB.
 
     Returns (key_map, provider_config) where key_map is {provider_name: key_value}
     and provider_config is the merged config dict.
     """
+    # Platform-owned API keys from env vars
+    keys = {
+        "openai": settings.openai_api_key or None,
+        "anthropic": settings.anthropic_api_key or None,
+        "fal": settings.fal_api_key or None,
+    }
+
     if db is None:
-        return {}, {}
+        return keys, {}
 
     try:
-        from app.models.api_key import APIProvider
-        from app.services.api_key_service import get_api_key_service
         from app.services.settings_service import get_settings_service
 
-        key_service = get_api_key_service(db, user_id) if user_id else None
-        if key_service:
-            keys = {
-                "openai": key_service.resolve_key(APIProvider.OPENAI),
-                "anthropic": key_service.resolve_key(APIProvider.ANTHROPIC),
-                "fal": key_service.resolve_key(APIProvider.FAL),
-            }
-        else:
-            # No user context — no keys available
-            keys = {}
+        # Pre-flight balance check
+        if user_id:
+            from app.services.billing_service import BillingService
+            BillingService(db, user_id).check_balance_or_raise()
 
         settings_service = get_settings_service(db, user_id) if user_id else None
         provider_config = settings_service.get_provider_config() if settings_service else {}
 
         return keys, provider_config
     except Exception as e:
+        # Re-raise InsufficientBalanceError so callers can handle it
+        from app.services.billing_service import InsufficientBalanceError
+        if isinstance(e, InsufficientBalanceError):
+            raise
         logger.warning(f"Failed to resolve config from DB: {e}")
-        return {}, {}
+        return keys, {}
 
 
 def _token_config(config: dict) -> dict:

@@ -7,7 +7,7 @@ import { RotateCcw, Plus, Trash2, Check, Copy, Play, HelpCircle, Eye, EyeOff, Sh
 import { toast } from 'sonner';
 import { getStatusColor, cn, formatDate } from '@/lib/utils';
 import { useTheme } from '@/contexts/ThemeContext';
-import type { APIKeyInfo, ClusteringConfig, GenerationConfig, ProviderConfig, ProviderModel, TrainingConfig, PromptPreset } from '@/types';
+import type { ClusteringConfig, GenerationConfig, ProviderConfig, ProviderModel, TrainingConfig, PromptPreset } from '@/types';
 
 function PromptSuggest({
   promptType,
@@ -435,9 +435,6 @@ export default function SettingsPage() {
           </div>
         </div>
       </section>
-
-      {/* API Keys */}
-      <APIKeysSettings />
 
       {/* Provider & Model Selection */}
       <ProviderModelSettings />
@@ -1241,200 +1238,6 @@ function StatusBadge({ status }: { status: string }) {
     <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-900/50 dark:text-gray-400 rounded-full">
       <Shield className="h-3 w-3" /> Unknown
     </span>
-  );
-}
-
-function APIKeysSettings() {
-  const queryClient = useQueryClient();
-
-  const { data: keys, isLoading } = useQuery({
-    queryKey: ['api-keys'],
-    queryFn: settingsApi.getApiKeys,
-  });
-
-  const [editingProvider, setEditingProvider] = useState<string | null>(null);
-  const [keyInput, setKeyInput] = useState('');
-  const [showKey, setShowKey] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
-
-  const saveMutation = useMutation({
-    mutationFn: ({ provider, key }: { provider: string; key: string }) =>
-      settingsApi.saveApiKey(provider, key),
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['api-keys'] });
-      setEditingProvider(null);
-      setKeyInput('');
-      setShowKey(false);
-      if (data.status === 'active') {
-        toast.success(`${PROVIDER_LABELS[data.provider] || data.provider} key saved and validated`);
-      } else if (data.status === 'invalid') {
-        toast.error(`Key saved but validation failed: ${data.last_error || 'Invalid key'}`);
-      } else {
-        toast.success(`${PROVIDER_LABELS[data.provider] || data.provider} key saved (status: ${data.status})`);
-      }
-    },
-    onError: () => toast.error('Failed to save API key'),
-  });
-
-  const validateMutation = useMutation({
-    mutationFn: (provider: string) => settingsApi.validateApiKey(provider),
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['api-keys'] });
-      if (data.status === 'active') {
-        toast.success(`${PROVIDER_LABELS[data.provider] || data.provider} key is valid`);
-      } else {
-        toast.error(`Validation result: ${data.status}${data.last_error ? ` - ${data.last_error}` : ''}`);
-      }
-    },
-    onError: () => toast.error('Validation failed'),
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (provider: string) => settingsApi.deleteApiKey(provider),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['api-keys'] });
-      setConfirmDelete(null);
-      toast.success('API key removed');
-    },
-    onError: () => toast.error('Failed to remove key'),
-  });
-
-  if (isLoading) {
-    return (
-      <section className="bg-card rounded-xl border border-border p-6">
-        <h2 className="font-semibold mb-4">API Keys</h2>
-        <p className="text-muted-foreground text-sm">Loading...</p>
-      </section>
-    );
-  }
-
-  return (
-    <section className="bg-card rounded-xl border border-border p-6">
-      <div className="mb-4">
-        <h2 className="font-semibold">API Keys</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          Manage API keys for AI providers. Keys are encrypted at rest and never exposed after saving.
-        </p>
-      </div>
-
-      <div className="space-y-3">
-        {(keys || []).map((key) => (
-          <div
-            key={key.provider}
-            className="border border-border rounded-lg p-4"
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <span className="font-medium text-sm">
-                  {PROVIDER_LABELS[key.provider] || key.provider}
-                </span>
-                <StatusBadge status={key.status} />
-              </div>
-              <div className="flex items-center gap-2">
-                {key.key_suffix && (
-                  <span className="text-xs text-muted-foreground font-mono">
-                    ...{key.key_suffix}
-                  </span>
-                )}
-                {key.status !== 'not_set' && (
-                  <>
-                    <button
-                      onClick={() => validateMutation.mutate(key.provider)}
-                      disabled={validateMutation.isPending}
-                      className="px-2.5 py-1 text-xs border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
-                    >
-                      {validateMutation.isPending && validateMutation.variables === key.provider ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      ) : (
-                        'Validate'
-                      )}
-                    </button>
-                    {confirmDelete === key.provider ? (
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => deleteMutation.mutate(key.provider)}
-                          className="px-2.5 py-1 text-xs bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
-                        >
-                          Confirm
-                        </button>
-                        <button
-                          onClick={() => setConfirmDelete(null)}
-                          className="px-2.5 py-1 text-xs border border-border rounded-lg hover:bg-muted transition-colors"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => setConfirmDelete(key.provider)}
-                        className="px-2.5 py-1 text-xs border border-red-200 text-red-600 dark:border-red-800 dark:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors"
-                      >
-                        Remove
-                      </button>
-                    )}
-                  </>
-                )}
-                <button
-                  onClick={() => {
-                    if (editingProvider === key.provider) {
-                      setEditingProvider(null);
-                      setKeyInput('');
-                      setShowKey(false);
-                    } else {
-                      setEditingProvider(key.provider);
-                      setKeyInput('');
-                      setShowKey(false);
-                    }
-                  }}
-                  className="px-2.5 py-1 text-xs border border-border rounded-lg hover:bg-muted transition-colors"
-                >
-                  {editingProvider === key.provider ? 'Cancel' : key.status === 'not_set' ? 'Add Key' : 'Edit Key'}
-                </button>
-              </div>
-            </div>
-
-            {key.last_validated_at && (
-              <p className="text-[10px] text-muted-foreground mt-1">
-                Last validated: {formatDate(key.last_validated_at)}
-              </p>
-            )}
-
-            {editingProvider === key.provider && (
-              <div className="mt-3 flex gap-2">
-                <div className="relative flex-1">
-                  <input
-                    type={showKey ? 'text' : 'password'}
-                    value={keyInput}
-                    onChange={(e) => setKeyInput(e.target.value)}
-                    placeholder={`Enter ${PROVIDER_LABELS[key.provider] || key.provider} API key...`}
-                    className="w-full px-3 py-1.5 pr-8 border border-border rounded-lg text-sm font-mono"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && keyInput.trim()) {
-                        saveMutation.mutate({ provider: key.provider, key: keyInput.trim() });
-                      }
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowKey(!showKey)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  >
-                    {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                  </button>
-                </div>
-                <button
-                  onClick={() => saveMutation.mutate({ provider: key.provider, key: keyInput.trim() })}
-                  disabled={saveMutation.isPending || !keyInput.trim()}
-                  className="px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
-                >
-                  {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
-                </button>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </section>
   );
 }
 

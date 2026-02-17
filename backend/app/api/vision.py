@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.security import get_current_user
 from app.db.base import get_db
 from app.models.user import User
+from app.services.billing_service import InsufficientBalanceError
 from app.services.vision_service import get_vision_service
 
 logger = logging.getLogger(__name__)
@@ -230,6 +231,8 @@ async def analyze_image(
             )
             return VisionDescribeResult(id=saved.id, mode="custom", description=result.description, model=result.model, duration_ms=duration_ms)
 
+    except InsufficientBalanceError:
+        raise HTTPException(status_code=402, detail="Insufficient credits")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

@@ -81,6 +81,14 @@ export function formatFileSize(bytes: number | null): string {
   return `${size.toFixed(1)} ${units[i]}`;
 }
 
+/** Format a number with commas and fixed decimal places (e.g. 10000 → "10,000.00") */
+export function formatNumber(value: number, decimals = 2): string {
+  return value.toLocaleString('en-US', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+}
+
 export function getStatusColor(status: string): string {
   const colors: Record<string, string> = {
     pending: 'bg-gray-100 text-gray-800 dark:bg-gray-900/50 dark:text-gray-300',

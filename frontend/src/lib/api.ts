@@ -1,6 +1,6 @@
 import axios from 'axios';
 import type {
-  APIKeyInfo,
+  AdminUserBalance,
   AuthUser,
   BatchJobImage,
   BatchUploadResponse,
@@ -8,6 +8,7 @@ import type {
   ClusterDetail,
   ClusteringConfig,
   ClusterListResponse,
+  CostCatalogEntry,
   EditConfig,
   EvaluationListResponse,
   Folder,
@@ -26,6 +27,7 @@ import type {
   LoraListResponse,
   LoraModel,
   PipelineStats,
+  PlatformUsageSummary,
   PromptPreset,
   ProviderConfig,
   ProviderModel,
@@ -33,6 +35,9 @@ import type {
   StepResponse,
   TokenResponse,
   TrainingConfig,
+  TransactionListResponse,
+  UsageSummary,
+  UserBalance,
 } from '@/types';
 
 const apiBaseURL = process.env.NEXT_PUBLIC_API_URL
@@ -120,6 +125,12 @@ api.interceptors.response.use(
           resolve(api(originalRequest));
         });
       });
+    }
+
+    // Handle 402 Insufficient Credits
+    if (error.response?.status === 402) {
+      error.message = 'Insufficient credits. Please add credits to continue.';
+      return Promise.reject(error);
     }
 
     if (error.response?.data?.detail) {
@@ -777,26 +788,6 @@ export const settingsApi = {
     return data;
   },
 
-  // API Keys
-  getApiKeys: async (): Promise<APIKeyInfo[]> => {
-    const { data } = await api.get('/settings/api-keys');
-    return data;
-  },
-
-  saveApiKey: async (provider: string, key: string): Promise<APIKeyInfo> => {
-    const { data } = await api.put(`/settings/api-keys/${provider}`, { key });
-    return data;
-  },
-
-  deleteApiKey: async (provider: string): Promise<void> => {
-    await api.delete(`/settings/api-keys/${provider}`);
-  },
-
-  validateApiKey: async (provider: string): Promise<APIKeyInfo> => {
-    const { data } = await api.post(`/settings/api-keys/${provider}/validate`);
-    return data;
-  },
-
   // Provider config
   getProviderConfig: async (): Promise<ProviderConfig> => {
     const { data } = await api.get('/settings/providers');
@@ -1154,6 +1145,70 @@ export const authApi = {
   me: async (): Promise<AuthUser> => {
     const { data } = await api.get('/auth/me');
     return data;
+  },
+};
+
+// Billing API
+export const billingApi = {
+  getBalance: async (): Promise<UserBalance> => {
+    const { data } = await api.get('/billing/balance');
+    return data;
+  },
+
+  getTransactions: async (skip = 0, limit = 50): Promise<TransactionListResponse> => {
+    const { data } = await api.get('/billing/transactions', { params: { skip, limit } });
+    return data;
+  },
+
+  getUsage: async (startDate?: string, endDate?: string): Promise<UsageSummary> => {
+    const { data } = await api.get('/billing/usage', {
+      params: { start_date: startDate, end_date: endDate },
+    });
+    return data;
+  },
+
+  // Admin endpoints
+  adminGetUsers: async (): Promise<AdminUserBalance[]> => {
+    const { data } = await api.get('/billing/admin/users');
+    return data;
+  },
+
+  adminGetUserUsage: async (userId: number, startDate?: string, endDate?: string): Promise<UsageSummary> => {
+    const { data } = await api.get(`/billing/admin/users/${userId}/usage`, {
+      params: { start_date: startDate, end_date: endDate },
+    });
+    return data;
+  },
+
+  adminAddCredits: async (userId: number, amount: number, description: string): Promise<UserBalance> => {
+    const { data } = await api.post(`/billing/admin/users/${userId}/credits`, { amount, description });
+    return data;
+  },
+
+  adminGetSummary: async (startDate?: string, endDate?: string): Promise<PlatformUsageSummary> => {
+    const { data } = await api.get('/billing/admin/summary', {
+      params: { start_date: startDate, end_date: endDate },
+    });
+    return data;
+  },
+
+  adminGetCatalog: async (): Promise<CostCatalogEntry[]> => {
+    const { data } = await api.get('/billing/admin/catalog');
+    return data;
+  },
+
+  adminCreateCatalogEntry: async (entry: Omit<CostCatalogEntry, 'id' | 'is_active' | 'created_at' | 'updated_at'>): Promise<CostCatalogEntry> => {
+    const { data } = await api.post('/billing/admin/catalog', entry);
+    return data;
+  },
+
+  adminUpdateCatalogEntry: async (id: number, entry: Omit<CostCatalogEntry, 'id' | 'is_active' | 'created_at' | 'updated_at'>): Promise<CostCatalogEntry> => {
+    const { data } = await api.put(`/billing/admin/catalog/${id}`, entry);
+    return data;
+  },
+
+  adminDeleteCatalogEntry: async (id: number): Promise<void> => {
+    await api.delete(`/billing/admin/catalog/${id}`);
   },
 };
 

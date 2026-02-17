@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, Suspense } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { generationApi, settingsApi } from '@/lib/api';
-import { Loader2, Sparkles, ChevronDown, ChevronUp, X, KeyRound, Plus, Trash2 } from 'lucide-react';
+import { Loader2, Sparkles, ChevronDown, ChevronUp, X, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -165,14 +165,6 @@ function GeneratePageInner() {
     }
   }, [searchParams]);
 
-  // Check if fal.ai API key is configured
-  const { data: apiKeys } = useQuery({
-    queryKey: ['api-keys'],
-    queryFn: settingsApi.getApiKeys,
-  });
-  const falKey = apiKeys?.find((k) => k.provider === 'fal');
-  const hasFalKey = falKey?.status === 'active' || falKey?.status === 'quota_exceeded';
-
   // Fetch completed + uploaded LoRA models filtered by base model
   const { data: loraList } = useQuery({
     queryKey: ['lora-models', 'completed,uploaded', baseModel],
@@ -269,28 +261,8 @@ function GeneratePageInner() {
         </p>
       </div>
 
-      {/* API Key Warning */}
-      {!hasFalKey && apiKeys && (
-        <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl p-6 flex items-start gap-4">
-          <KeyRound className="h-6 w-6 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-          <div>
-            <h3 className="font-semibold text-amber-900 dark:text-amber-200">fal.ai API key required</h3>
-            <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
-              Image generation requires a fal.ai API key. Set one in{' '}
-              <Link href="/settings" className="underline font-medium hover:text-amber-900 dark:hover:text-amber-100">
-                Settings &rarr; API Keys
-              </Link>{' '}
-              to enable generation.
-            </p>
-          </div>
-        </div>
-      )}
-
       {/* Generation Form */}
-      <section className={cn(
-        'bg-card rounded-xl border border-border p-6 space-y-4',
-        !hasFalKey && apiKeys && 'opacity-50 pointer-events-none select-none'
-      )}>
+      <section className="bg-card rounded-xl border border-border p-6 space-y-4">
         {/* Prompt */}
         <div>
           <label className="block text-sm font-medium mb-1">Prompt</label>

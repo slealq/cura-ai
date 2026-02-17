@@ -14,6 +14,7 @@ from app.models.folder import Folder
 from app.models.user import User
 from app.providers import get_describer
 from app.schemas import ImageListResponse, ImageResponse
+from app.services.billing_service import InsufficientBalanceError
 from app.services.folder_service import get_folder_service
 from app.services.image_service import get_image_service
 from app.services.settings_service import get_settings_service
@@ -427,6 +428,8 @@ async def auto_prompt_questions(
             "questions": parsed.get("questions", []),
             "sample_analysis": parsed.get("sample_analysis", ""),
         }
+    except InsufficientBalanceError:
+        raise HTTPException(status_code=402, detail="Insufficient credits")
     except Exception as e:
         logger.error(f"Auto-prompt questions failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to analyze images: {e}")
@@ -489,6 +492,8 @@ async def auto_prompt_generate(
             "description_prompt": parsed.get("description_prompt", ""),
             "explanation": parsed.get("explanation", ""),
         }
+    except InsufficientBalanceError:
+        raise HTTPException(status_code=402, detail="Insufficient credits")
     except Exception as e:
         logger.error(f"Auto-prompt generate failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate prompts: {e}")

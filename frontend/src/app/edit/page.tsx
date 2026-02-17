@@ -2,8 +2,8 @@
 
 import { useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { editApi, settingsApi } from '@/lib/api';
-import { Loader2, Pencil, ChevronDown, ChevronUp, X, KeyRound, Upload, ImageIcon } from 'lucide-react';
+import { editApi } from '@/lib/api';
+import { Loader2, Pencil, ChevronDown, ChevronUp, X, Upload, ImageIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import GeneratedImageCard from '@/components/GeneratedImageCard';
@@ -135,14 +135,6 @@ export default function EditPage() {
 
   // Full-size modal
   const [selectedImageId, setSelectedImageId] = useState<number | null>(null);
-
-  // Check fal.ai API key
-  const { data: apiKeys } = useQuery({
-    queryKey: ['api-keys'],
-    queryFn: settingsApi.getApiKeys,
-  });
-  const falKey = apiKeys?.find((k) => k.provider === 'fal');
-  const hasFalKey = falKey?.status === 'active' || falKey?.status === 'quota_exceeded';
 
   // Fetch edited images with polling
   const { data: editedImages, isLoading: imagesLoading } = useQuery({
@@ -333,29 +325,9 @@ export default function EditPage() {
         </p>
       </div>
 
-      {/* API Key Warning */}
-      {!hasFalKey && apiKeys && (
-        <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl p-6 flex items-start gap-4">
-          <KeyRound className="h-6 w-6 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-          <div>
-            <h3 className="font-semibold text-amber-900 dark:text-amber-200">fal.ai API key required</h3>
-            <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
-              Image editing requires a fal.ai API key. Set one in{' '}
-              <Link href="/settings" className="underline font-medium hover:text-amber-900 dark:hover:text-amber-100">
-                Settings &rarr; API Keys
-              </Link>{' '}
-              to enable editing.
-            </p>
-          </div>
-        </div>
-      )}
-
       {/* Edit Form */}
       <section
-        className={cn(
-          'bg-card rounded-xl border border-border p-6 space-y-4',
-          !hasFalKey && apiKeys && 'opacity-50 pointer-events-none select-none'
-        )}
+        className="bg-card rounded-xl border border-border p-6 space-y-4"
         onPaste={handlePaste}
       >
         {/* Source Images */}

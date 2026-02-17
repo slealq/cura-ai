@@ -12,6 +12,8 @@ from app.db.base import SessionLocal
 from app.models import Image, ImageStatus, Job, JobStatus
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers import get_cluster_summarizer, get_describer, get_embedder, get_tagger
+from app.services.billing_context import set_billing_user
+from app.services.billing_service import InsufficientBalanceError
 from app.services.cluster_service import get_cluster_service
 from app.services.clustering import get_clustering_service
 from app.services.image_service import get_image_service
@@ -455,6 +457,7 @@ def tag_image(
     write_log(category=LogCategory.TASK, message=f"Task tag_image started for image {image_id}",
               task_name="tag_image", image_id=image_id, job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
+    set_billing_user(user_id)
     db = get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -509,6 +512,9 @@ def tag_image(
                   task_name="tag_image", image_id=image_id, job_id=job_id, duration_ms=round(elapsed, 1), user_id=user_id)
         return {"status": "success", "image_id": image_id, "tags": result.tags}
 
+    except InsufficientBalanceError:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
+        return {"status": "error", "message": "Insufficient credits"}
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
@@ -536,6 +542,7 @@ def describe_image(
     write_log(category=LogCategory.TASK, message=f"Task describe_image started for image {image_id}",
               task_name="describe_image", image_id=image_id, job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
+    set_billing_user(user_id)
     db = get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -588,6 +595,9 @@ def describe_image(
                   task_name="describe_image", image_id=image_id, job_id=job_id, duration_ms=round(elapsed, 1), user_id=user_id)
         return {"status": "success", "image_id": image_id}
 
+    except InsufficientBalanceError:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
+        return {"status": "error", "message": "Insufficient credits"}
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
@@ -612,6 +622,7 @@ def embed_image(self, image_id: int, user_id: int, job_id: int | None = None) ->
     write_log(category=LogCategory.TASK, message=f"Task embed_image started for image {image_id}",
               task_name="embed_image", image_id=image_id, job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
+    set_billing_user(user_id)
     db = get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -656,6 +667,9 @@ def embed_image(self, image_id: int, user_id: int, job_id: int | None = None) ->
                   task_name="embed_image", image_id=image_id, job_id=job_id, duration_ms=round(elapsed, 1), user_id=user_id)
         return {"status": "success", "image_id": image_id, "dimensions": result.dimensions}
 
+    except InsufficientBalanceError:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
+        return {"status": "error", "message": "Insufficient credits"}
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         logger.error(f"Failed to embed image {image_id}: {e}")
@@ -678,6 +692,7 @@ def tag_and_describe_image(
 
     This is more efficient as it only loads the image once.
     """
+    set_billing_user(user_id)
     db = get_db()
     try:
         image_service = get_image_service(db, user_id)
@@ -748,6 +763,7 @@ def cluster_all_images(self, user_id: int, job_id: int | None = None) -> dict:
     write_log(category=LogCategory.TASK, message="Task cluster_all_images started",
               task_name="cluster_all_images", job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
+    set_billing_user(user_id)
     db = get_db()
     try:
         # Update job status
@@ -860,6 +876,7 @@ def summarize_cluster(self, cluster_id: int, user_id: int) -> dict:
     write_log(category=LogCategory.TASK, message=f"Task summarize_cluster started for cluster {cluster_id}",
               task_name="summarize_cluster", user_id=user_id)
     task_start = time.monotonic()
+    set_billing_user(user_id)
     db = get_db()
     try:
         cluster_service = get_cluster_service(db, user_id)
@@ -984,6 +1001,7 @@ def process_image_pipeline(
     write_log(category=LogCategory.TASK, message=f"Task process_image_pipeline started for image {image_id}",
               task_name="process_image_pipeline", image_id=image_id, job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
+    set_billing_user(user_id)
     db = get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -1066,6 +1084,9 @@ def process_image_pipeline(
             "tags": tag_result.tags,
         }
 
+    except InsufficientBalanceError:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
+        return {"status": "error", "message": "Insufficient credits"}
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
@@ -1088,6 +1109,7 @@ def run_full_pipeline(self, job_id: int, user_id: int) -> dict:
     write_log(category=LogCategory.TASK, message="Task run_full_pipeline started",
               task_name="run_full_pipeline", job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
+    set_billing_user(user_id)
     db = get_db()
     try:
         job = db.query(Job).filter(Job.id == job_id).first()

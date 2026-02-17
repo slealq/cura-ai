@@ -15,9 +15,13 @@ import {
   Eye,
   Box,
   LogOut,
+  CreditCard,
+  BarChart3,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { useQuery } from '@tanstack/react-query';
+import { cn, formatNumber } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
+import { billingApi } from '@/lib/api';
 
 const ENV_LABEL = process.env.NEXT_PUBLIC_ENV_LABEL || 'local';
 
@@ -45,6 +49,7 @@ const navigation = [
   { name: 'Generate', href: '/generate', icon: Sparkles },
   { name: 'Edit', href: '/edit', icon: Pencil },
   { name: 'Jobs', href: '/jobs', icon: Activity },
+  { name: 'Billing', href: '/billing', icon: CreditCard },
   { name: 'Debug', href: '/debug', icon: Bug },
   { name: 'Settings', href: '/settings', icon: Settings },
 ];
@@ -52,6 +57,21 @@ const navigation = [
 export default function Sidebar() {
   const pathname = usePathname();
   const { user, logout } = useAuth();
+
+  const { data: balanceData } = useQuery({
+    queryKey: ['billing', 'balance'],
+    queryFn: billingApi.getBalance,
+    refetchInterval: 30000,
+    enabled: !!user,
+  });
+
+  const isAdmin = user?.role === 'admin';
+
+  // Build navigation with conditional admin item
+  const navItems = [
+    ...navigation,
+    ...(isAdmin ? [{ name: 'Usage', href: '/admin/usage', icon: BarChart3 }] : []),
+  ];
 
   return (
     <aside className="w-64 bg-card border-r border-border flex flex-col">
@@ -83,7 +103,7 @@ export default function Sidebar() {
       </div>
 
       <nav className="flex-1 p-4 space-y-1">
-        {navigation.map((item) => {
+        {navItems.map((item) => {
           const isActive =
             pathname === item.href ||
             (item.href !== '/' && pathname.startsWith(item.href));
@@ -108,22 +128,35 @@ export default function Sidebar() {
 
       <div className="p-4 border-t border-border">
         {user && (
-          <div className="flex items-center justify-between">
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium truncate">
-                {user.display_name || user.email}
-              </p>
-              {user.display_name && (
-                <p className="text-xs text-muted-foreground truncate">{user.email}</p>
-              )}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium truncate">
+                  {user.display_name || user.email}
+                </p>
+                {user.display_name && (
+                  <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+                )}
+              </div>
+              <button
+                onClick={logout}
+                className="ml-2 p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
+                title="Sign out"
+              >
+                <LogOut className="h-4 w-4" />
+              </button>
             </div>
-            <button
-              onClick={logout}
-              className="ml-2 p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
-              title="Sign out"
-            >
-              <LogOut className="h-4 w-4" />
-            </button>
+            {balanceData && (
+              <Link
+                href="/billing"
+                className={cn(
+                  'block text-xs font-medium px-1',
+                  balanceData.balance < 10 ? 'text-red-500' : 'text-muted-foreground',
+                )}
+              >
+                Credits: {formatNumber(balanceData.balance)}
+              </Link>
+            )}
           </div>
         )}
       </div>

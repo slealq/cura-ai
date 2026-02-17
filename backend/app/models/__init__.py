@@ -1,5 +1,12 @@
 """Database models package."""
 from app.models.api_key import APIKey, APIKeyStatus, APIProvider
+from app.models.billing import (
+    BalanceTransaction,
+    CostCatalog,
+    TransactionType,
+    UsageRecord,
+    UserBalance,
+)
 from app.models.cluster import Cluster, ClusteringMethod, ClusterMembership
 from app.models.folder import Folder, FolderImage
 from app.models.generated_image import GeneratedImage, GenerationStatus
@@ -17,6 +24,11 @@ __all__ = [
     "APIKey",
     "APIKeyStatus",
     "APIProvider",
+    "BalanceTransaction",
+    "CostCatalog",
+    "TransactionType",
+    "UsageRecord",
+    "UserBalance",
     "EvaluationPair",
     "EvaluationStatus",
     "Folder",

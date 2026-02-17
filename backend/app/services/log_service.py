@@ -49,6 +49,27 @@ def write_log(
         )
         db.add(entry)
         db.commit()
+
+        # Record usage for successful API calls
+        if category == LogCategory.API_CALL and success is True:
+            from app.services.billing_context import get_billing_user
+
+            effective_user_id = user_id or get_billing_user()
+            if effective_user_id and provider and operation:
+                try:
+                    from app.services.billing_service import record_usage_standalone
+
+                    record_usage_standalone(
+                        user_id=effective_user_id,
+                        provider=provider,
+                        model=model or "unknown",
+                        operation=operation,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        pipeline_log_id=entry.id,
+                    )
+                except Exception as usage_err:
+                    logger.warning(f"Failed to record usage: {usage_err}")
     except Exception as e:
         logger.warning(f"Failed to write pipeline log: {e}")
         db.rollback()

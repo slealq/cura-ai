@@ -19,6 +19,8 @@ from app.models.lora_model import LoraModelStatus
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers import get_describer, get_editor, get_embedder, get_evaluator, get_generator, get_trainer
 from app.providers.fal_provider import GenerationCancelledError
+from app.services.billing_context import set_billing_user
+from app.services.billing_service import InsufficientBalanceError
 from app.services.evaluation_service import get_evaluation_service
 from app.services.generation_service import get_generation_service
 from app.services.image_service import get_image_service
@@ -206,6 +208,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
     4. Save result URL to LoraModel record
     """
     task_start = time.monotonic()
+    set_billing_user(user_id)
     db = _get_db()
     try:
         # --- GUARD: Never re-submit training for already-completed models ---
@@ -473,6 +476,11 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
         )
         return {"status": "success", "lora_model_id": lora_model_id, "lora_url": result.lora_url}
 
+    except InsufficientBalanceError:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
+        gen_service = get_generation_service(db, user_id)
+        gen_service.update_lora_status(lora_model_id, LoraModelStatus.FAILED, "Insufficient credits")
+        return {"status": "error", "message": "Insufficient credits"}
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
@@ -508,6 +516,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
         user_id=user_id,
     )
     task_start = time.monotonic()
+    set_billing_user(user_id)
     db = _get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -595,6 +604,14 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
         )
         return {"status": "success", "generated_image_id": generated_image_id}
 
+    except InsufficientBalanceError:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
+        gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
+        if gen:
+            gen.status = GenerationStatus.FAILED
+            gen.error_message = "Insufficient credits"
+            db.commit()
+        return {"status": "error", "message": "Insufficient credits"}
     except GenerationCancelledError:
         elapsed = (time.monotonic() - task_start) * 1000
         logger.info(f"Generation cancelled for generated_image {generated_image_id}")
@@ -828,6 +845,7 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
         user_id=user_id,
     )
     task_start = time.monotonic()
+    set_billing_user(user_id)
     db = _get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -916,6 +934,14 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
         )
         return {"status": "success", "generated_image_id": generated_image_id}
 
+    except InsufficientBalanceError:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
+        gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
+        if gen:
+            gen.status = GenerationStatus.FAILED
+            gen.error_message = "Insufficient credits"
+            db.commit()
+        return {"status": "error", "message": "Insufficient credits"}
     except GenerationCancelledError:
         elapsed = (time.monotonic() - task_start) * 1000
         logger.info(f"Edit cancelled for generated_image {generated_image_id}")
@@ -1117,6 +1143,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
         user_id=user_id,
     )
     task_start = time.monotonic()
+    set_billing_user(user_id)
     db = _get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -1567,6 +1594,11 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
             "creative_pairs": len(creative_completed),
         }
 
+    except InsufficientBalanceError:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
+        eval_service = get_evaluation_service(db, user_id)
+        eval_service.update_evaluation_status(evaluation_id, EvaluationStatus.FAILED, error_message="Insufficient credits")
+        return {"status": "error", "message": "Insufficient credits"}
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)

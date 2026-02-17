@@ -457,3 +457,64 @@ export interface TokenResponse {
   token_type: string;
   user: AuthUser;
 }
+
+// --- Billing types ---
+
+export interface UserBalance {
+  balance: number;
+  currency: string;
+}
+
+export interface BalanceTransaction {
+  id: number;
+  amount: number;
+  transaction_type: string;
+  description: string;
+  reference_id: number | null;
+  created_by: number | null;
+  created_at: string;
+}
+
+export interface TransactionListResponse {
+  items: BalanceTransaction[];
+  total: number;
+}
+
+export interface UsageSummary {
+  total_cost: number;
+  by_operation: Record<string, number>;
+  by_provider: Record<string, number>;
+  record_count: number;
+}
+
+export interface AdminUserBalance {
+  user_id: number;
+  email: string;
+  display_name: string | null;
+  balance: number;
+  total_spent: number;
+  last_activity: string | null;
+}
+
+export interface CostCatalogEntry {
+  id: number;
+  provider: string;
+  model: string;
+  operation: string;
+  cost_per_input_token: number | null;
+  cost_per_output_token: number | null;
+  cost_per_call: number | null;
+  platform_markup: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlatformUsageSummary {
+  total_raw_cost: number;
+  total_charged: number;
+  margin: number;
+  by_provider: Record<string, number>;
+  by_operation: Record<string, number>;
+  record_count: number;
+}
