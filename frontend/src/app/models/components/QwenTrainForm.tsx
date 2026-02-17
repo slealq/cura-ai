@@ -6,7 +6,7 @@ import type { Folder, Cluster } from '@/types';
 
 export interface QwenTrainData {
   name: string;
-  trigger_word: string;
+  trigger_word?: string;
   base_model: 'qwen-2.5';
   folder_id?: number;
   cluster_id?: number;
@@ -15,6 +15,7 @@ export interface QwenTrainData {
   use_captions: true;
   caption_include_tags: boolean;
   caption_include_description: boolean;
+  example_prompts?: string[];
 }
 
 interface QwenTrainFormProps {
@@ -37,6 +38,8 @@ export default function QwenTrainForm({
   onCancel,
 }: QwenTrainFormProps) {
   const [name, setName] = useState('');
+  const [triggerWord, setTriggerWord] = useState('');
+  const [samplePromptsText, setSamplePromptsText] = useState('');
   const [sourceType, setSourceType] = useState<SourceType>('folder');
   const [folderId, setFolderId] = useState<number | undefined>(undefined);
   const [clusterId, setClusterId] = useState<number | undefined>(undefined);
@@ -50,9 +53,13 @@ export default function QwenTrainForm({
 
   const handleSubmit = () => {
     if (!canSubmit) return;
+    const examplePrompts = samplePromptsText
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
     onSubmit({
       name: name.trim(),
-      trigger_word: name.trim(),
+      ...(triggerWord.trim() ? { trigger_word: triggerWord.trim() } : {}),
       base_model: 'qwen-2.5',
       ...(sourceType === 'folder' ? { folder_id: folderId } : { cluster_id: clusterId }),
       steps,
@@ -60,6 +67,7 @@ export default function QwenTrainForm({
       use_captions: true,
       caption_include_tags: captionTags,
       caption_include_description: captionDescription,
+      ...(examplePrompts.length > 0 ? { example_prompts: examplePrompts } : {}),
     });
   };
 
@@ -77,6 +85,20 @@ export default function QwenTrainForm({
         folders={folders}
         clusters={clusters}
       />
+
+      <div>
+        <label className="block text-sm font-medium mb-1">Trigger Word (optional)</label>
+        <input
+          type="text"
+          value={triggerWord}
+          onChange={(e) => setTriggerWord(e.target.value)}
+          placeholder="e.g. TOK"
+          className="w-full px-3 py-2 border border-border rounded-lg text-sm"
+        />
+        <p className="text-xs text-muted-foreground mt-1">
+          Qwen trains via captions, so a trigger word is usually not needed
+        </p>
+      </div>
 
       <div>
         <label className="block text-sm font-medium mb-1">
@@ -148,6 +170,20 @@ export default function QwenTrainForm({
             <p className="text-xs text-red-500">At least one caption source must be selected</p>
           )}
         </div>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium mb-1">Sample Prompts (optional)</label>
+        <textarea
+          value={samplePromptsText}
+          onChange={(e) => setSamplePromptsText(e.target.value)}
+          rows={3}
+          placeholder="One prompt per line..."
+          className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm resize-none"
+        />
+        <p className="text-xs text-muted-foreground mt-1">
+          Known prompts that work well with this model. Auto-collected after training if left empty.
+        </p>
       </div>
 
       <div className="flex gap-2 justify-end pt-2">

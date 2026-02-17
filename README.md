@@ -51,10 +51,11 @@ Automatically ingest, tag, cluster, and browse design inspiration images using A
 
 ### LoRA Training & Image Generation
 - **LoRA fine-tuning**: Train LoRA adapters from folders or clusters of images via fal.ai
+- **External LoRA upload**: Upload pre-trained `.safetensors` files (from Civitai, Kohya, etc.) — stored in Azure/local storage and uploaded to fal.ai CDN for generation
 - **Multiple base models**: Support for Flux Dev and Qwen 2.5 with model-specific training forms and parameters
 - **Cluster or folder source**: Use any image folder or cluster as training data (minimum 5 images)
 - **Per-image captions**: Optionally include AI-generated tags and descriptions as per-image caption files for higher-quality training (required for Qwen, optional for Flux)
-- **Image generation**: Generate images using trained LoRA models with configurable parameters (size, steps, guidance, seed)
+- **Image generation**: Generate images using trained or uploaded LoRA models with configurable parameters (size, steps, guidance, seed)
 - **Batch generation**: Generate up to 8 images per request
 - **Model management**: Track training status, view model details, recover stuck jobs, retry failed training, delete models
 - **Per-model settings**: Configurable default training steps, learning rate, and generation parameters per base model
@@ -211,13 +212,14 @@ Real-time job monitor (5s polling) with pipeline statistics. Trigger individual 
 Structured pipeline logs with filtering by category, level, and text search. Expandable log rows show full detail: token counts, duration, prompts used, model responses, and error messages. Log statistics dashboard.
 
 ### Models — `/models`
-LoRA model management page. View all trained models with status badges (pending, training, completed, failed, archived) and latest evaluation scores. Multiple base model support with model-specific training forms:
+LoRA model management page. View all trained and uploaded models with status badges (pending, training, completed, failed, archived, uploaded) and latest evaluation scores. Multiple base model support with model-specific training forms:
 - **Flux Dev**: Configurable steps (100-4000), trigger word, style mode toggle, optional per-image captions
 - **Qwen 2.5**: Configurable steps (100-30000), learning rate (0.0001-0.005), required per-image captions
 - **Shared fields**: Name, source (folder or cluster), caption options (include tags, include description)
+- **Upload LoRA**: Upload external `.safetensors` files with name, trigger word (optional), base model, description, and sample prompts. File is uploaded to fal.ai CDN and backed up to storage.
 - **Model actions**: View training details, recover stuck training jobs, retry failed training, delete models
 - **Per-model settings**: Configure default training parameters and generation defaults per base model
-- **Evaluation**: Run quality evaluations on completed models, view evaluation history with scores, drill into per-pair comparisons (original vs generated side-by-side with similarity metrics)
+- **Evaluation**: Run quality evaluations on completed/uploaded models, view evaluation history with scores, drill into per-pair comparisons (original vs generated side-by-side with similarity metrics)
 
 ### Generate — `/generate`
 Image generation page using trained LoRA models. Select a completed LoRA model, write a prompt with the trigger word, configure generation parameters (size, steps, guidance scale, LoRA scale, seed), and generate 1-8 images. View generated images in a gallery with thumbnails. Generation parameters respect per-model defaults set in model settings.
@@ -319,7 +321,8 @@ Full interactive docs available at http://localhost:8000/api/docs
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/lora/train` | Start LoRA training from a folder or cluster (min 5 images, supports flux-dev/qwen-2.5) |
-| GET | `/lora` | List LoRA models (filter by `status`, `base_model`) |
+| POST | `/lora/upload` | Upload external .safetensors LoRA file (multipart form: file, name, trigger_word, base_model, description, example_prompts) |
+| GET | `/lora` | List LoRA models (filter by `status` with comma-separated values, `base_model`) |
 | GET | `/lora/{id}` | Get LoRA model details |
 | POST | `/lora/{id}/recover` | Recover stuck training job (checks fal.ai status) |
 | POST | `/lora/{id}/retry` | Retry failed training job |
@@ -387,7 +390,7 @@ Core image record with processing status tracking (PENDING → INGESTED → TAGG
 Clusters from a specific clustering run (identified by `run_id`). Each cluster has a centroid embedding, AI-generated summary, common tags, and representative images. Memberships link images to clusters with distance-to-centroid scores. Supports pinning, archiving, renaming, and user-excluded outliers.
 
 ### LoraModel
-Trained LoRA adapter records. Linked to source folder or cluster. Supports multiple base models (flux-dev, qwen-2.5). Tracks training status (PENDING → TRAINING → COMPLETED/FAILED), provider, config (steps, style mode, learning rate, caption settings), result URL, provider metadata (for fal.ai polling/recovery), and timestamps.
+LoRA adapter records — either trained via fal.ai or uploaded externally (.safetensors). Linked to source folder or cluster (null for uploaded models). Supports multiple base models (flux-dev, qwen-2.5). Statuses: PENDING → TRAINING → COMPLETED/FAILED (trained) or UPLOADED (external). `trigger_word` is optional (nullable). Tracks provider (`"upload"` for external), config, result URL, weights storage (object_key, file_size, file_hash), provider metadata, example prompts, and timestamps.
 
 ### GeneratedImage
 AI-generated image records linked to LoRA models. Tracks generation status, prompt, negative prompt, parameters (width, height, steps, guidance_scale, seed), LoRA scale, output file, dimensions, thumbnails, and provider metadata.

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Image Model Generator - a multi-user full-stack app for AI-powered image tagging, description, clustering, semantic search, LoRA model training, and image generation. Images are processed through a pipeline: ingest → tag → describe → embed → cluster → summarize. Trained LoRA models can be evaluated against source images for quality measurement. All data is isolated per user via `user_id` foreign keys on every table.
+Image Model Generator - a multi-user full-stack app for AI-powered image tagging, description, clustering, semantic search, LoRA model training/upload, and image generation. Images are processed through a pipeline: ingest → tag → describe → embed → cluster → summarize. Trained LoRA models can be evaluated against source images for quality measurement. All data is isolated per user via `user_id` foreign keys on every table.
 
 ## Environments
 
@@ -313,7 +313,7 @@ npm run lint         # ESLint
 - `search.py` — Hybrid semantic+text search, tag filtering, tag listing
 - `jobs.py` — Job listing/detail/cancel/delete/retry, pipeline triggers (full, tag-all, describe-all, embed-all, reprocess-all, reprocess-failed, reprocess-selected), batch job image listing
 - `settings.py` — Prompt presets CRUD, activate preset, prompt get/update/reset/suggest, clustering config get/update/reset, API key management (store/validate/delete, env var keys visible to admin only), provider config, generation config (per-base-model), training config (per-base-model), base model selection
-- `generation.py` — LoRA training (from folders or clusters, with optional per-image captions, multi-base-model: flux-dev/qwen-2.5), image generation, model/image CRUD, model recover/retry, LoRA weights download/management, LoRA evaluation (reference + creative pairs with embedding similarity/vision scoring), file serving (token via query param)
+- `generation.py` — LoRA training (from folders or clusters, with optional per-image captions, multi-base-model: flux-dev/qwen-2.5), external LoRA upload (.safetensors → fal CDN + storage), image generation, model/image CRUD, model recover/retry, LoRA weights download/management, LoRA evaluation (reference + creative pairs with embedding similarity/vision scoring), file serving (token via query param)
 - `logs.py` — Pipeline log queries, stats (filtered by user), cleanup (admin-only)
 
 **Database models** (`backend/app/models/`): All data models have a `user_id` foreign key to the `users` table (NOT NULL with CASCADE delete, except `PipelineLog` which is nullable). Composite unique constraints replace simple uniques where needed (e.g., `user_id + file_hash` on images).
@@ -322,7 +322,7 @@ npm run lint         # ESLint
 - `Cluster` + `ClusterMembership` — Clustering results with centroid, summary, pin/archive/rename, outlier exclusion, cover_image_id + cover_thumbnail_uri
 - `Job` — Async job tracking (types: INGEST, NORMALIZE, TAG, DESCRIBE, EMBED, CLUSTER, SUMMARIZE_CLUSTER, FULL_PIPELINE, REPROCESS, BATCH_REPROCESS, LORA_TRAIN, GENERATE_IMAGE, BATCH_GENERATE, LORA_EVALUATE, FOLDER_DELETE)
 - `Folder` + `FolderImage` — User folders for organizing images (many-to-many), cover_image_id + cover_thumbnail_uri
-- `LoraModel` — Trained LoRA adapters linked to folder or cluster source, with training config and status. Supports multiple base models (flux-dev, qwen-2.5)
+- `LoraModel` — LoRA adapters: either trained via fal.ai (linked to folder/cluster source) or uploaded externally (.safetensors). Statuses: PENDING, TRAINING, COMPLETED, FAILED, ARCHIVED, UPLOADED. `trigger_word` is optional (nullable). Supports multiple base models (flux-dev, qwen-2.5)
 - `GeneratedImage` — AI-generated images linked to LoRA models with prompt, params, and output files
 - `LoraEvaluation` + `EvaluationPair` — Quality evaluation of trained LoRA models. Generates images from source prompts, compares against originals via embedding similarity and vision scoring. Supports "reference" (vs original) and "creative" (novel prompt) pair types
 - `PromptPreset` — Named tag+description prompt pairs with active/default flag
@@ -331,7 +331,7 @@ npm run lint         # ESLint
 - `APIKey` — Encrypted API key storage with validation status
 
 **Frontend structure** (`frontend/src/`):
-- Pages: Login (sign-in/sign-up toggle), Home (clusters), Folders, Folder Detail, All Images, Upload, Search, Cluster Detail, Models (with sub-components: TrainModal, FluxTrainForm, QwenTrainForm, SharedTrainFields, ModelSettings, EvaluationDetail), Model Evaluate, Evaluation Detail, Generate, Jobs, Debug, Settings
+- Pages: Login (sign-in/sign-up toggle), Home (clusters), Folders, Folder Detail, All Images, Upload, Search, Cluster Detail, Models (with sub-components: TrainModal, FluxTrainForm, QwenTrainForm, SharedTrainFields, ModelSettings, EvaluationDetail, UploadLoraModal), Model Evaluate, Evaluation Detail, Generate, Jobs, Debug, Settings
 - Auth: `contexts/AuthContext.tsx` provides `login`, `register`, `logout`, `user`, `isAuthenticated`. `AuthGate` in layout redirects unauthenticated users to `/login`. Axios interceptors attach Bearer token to all requests and handle 401 with automatic token refresh.
 - Upload: `contexts/UploadContext.tsx` provides global `startUpload(files, folderId?, newFolderName?)` and `state` (isUploading, progress). Lives in layout — persists across navigation. Manages chunked upload lifecycle with real-time progress toast.
 - Theme: `contexts/ThemeContext.tsx` provides light/dark/auto theme switching with timezone-aware auto mode (dark 19:00-07:00). Persisted in localStorage.

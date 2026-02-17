@@ -174,7 +174,7 @@ class BaseTrainer(ABC):
     async def start_training(
         self,
         image_urls: list[str],
-        trigger_word: str,
+        trigger_word: str | None = None,
         steps: int = 1000,
         is_style: bool = False,
         **kwargs: Any,
@@ -211,10 +211,13 @@ class BaseGenerator(ABC):
         num_inference_steps: int = 28,
         guidance_scale: float = 3.5,
         seed: int | None = None,
-        lora_url: str | None = None,
-        lora_scale: float = 1.0,
+        loras: list[dict] | None = None,
     ) -> GenerationResult:
-        """Generate an image. Returns GenerationResult with image bytes."""
+        """Generate an image. Returns GenerationResult with image bytes.
+
+        Args:
+            loras: Optional list of LoRA configs, each {"path": url, "scale": float}.
+        """
         pass
 
     @abstractmethod

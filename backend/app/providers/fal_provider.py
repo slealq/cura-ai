@@ -61,7 +61,7 @@ class FalTrainer(BaseTrainer):
     async def start_training(
         self,
         image_urls: list[str],
-        trigger_word: str,
+        trigger_word: str | None = None,
         steps: int = 1000,
         is_style: bool = False,
         **kwargs: Any,
@@ -75,7 +75,7 @@ class FalTrainer(BaseTrainer):
         }
 
         # Only include trigger_word and is_style for models that support them
-        if self.config["supports_trigger_word"]:
+        if self.config["supports_trigger_word"] and trigger_word:
             arguments["trigger_word"] = trigger_word
         if self.config["supports_is_style"]:
             arguments["is_style"] = is_style
@@ -214,21 +214,20 @@ class FalGenerator(BaseGenerator):
         num_inference_steps: int = 28,
         guidance_scale: float = 3.5,
         seed: int | None = None,
-        lora_url: str | None = None,
-        lora_scale: float = 1.0,
+        loras: list[dict] | None = None,
     ) -> GenerationResult:
         """Generate an image via fal.ai."""
         task_start = time.monotonic()
 
         # Choose endpoint based on LoRA
-        if lora_url:
+        if loras:
             endpoint = self.config["generation_lora_endpoint"]
             arguments: dict[str, Any] = {
                 "prompt": prompt,
                 "image_size": {"width": width, "height": height},
                 "num_inference_steps": num_inference_steps,
                 "guidance_scale": guidance_scale,
-                "loras": [{"path": lora_url, "scale": lora_scale}],
+                "loras": loras,
                 "output_format": "png",
                 "enable_safety_checker": False,
             }
@@ -279,7 +278,7 @@ class FalGenerator(BaseGenerator):
                 operation="generate",
                 duration_ms=round(elapsed, 1),
                 success=True,
-                extra={"seed": result_seed, "lora": bool(lora_url), "base_model": self.base_model},
+                extra={"seed": result_seed, "lora_count": len(loras) if loras else 0, "base_model": self.base_model},
             )
 
             return GenerationResult(
@@ -301,7 +300,7 @@ class FalGenerator(BaseGenerator):
                 message=f"fal.ai generation failed: {e}",
                 level=LogLevel.ERROR,
                 provider="fal",
-                model=endpoint if lora_url else self.config["generation_base_endpoint"],
+                model=endpoint if loras else self.config["generation_base_endpoint"],
                 operation="generate",
                 duration_ms=round(elapsed, 1),
                 success=False,

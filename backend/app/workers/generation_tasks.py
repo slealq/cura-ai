@@ -141,6 +141,11 @@ def _collect_example_prompts(db: Session, lora_model_id: int, user_id: int) -> N
     sample_size = min(sample_size, len(candidates))
     sampled = random.sample(candidates, sample_size)
 
+    # Don't overwrite user-provided example prompts
+    if lora.example_prompts:
+        logger.info(f"Skipping example prompt collection for LoRA {lora_model_id} — user-provided prompts exist")
+        return
+
     # Build prompts
     prompts = []
     for image in sampled:
@@ -148,7 +153,10 @@ def _collect_example_prompts(db: Session, lora_model_id: int, user_id: int) -> N
         # Truncate long descriptions to keep prompts reasonable
         if len(desc) > 300:
             desc = desc[:297] + "..."
-        prompts.append(f"{lora.trigger_word}, {desc}")
+        if lora.trigger_word:
+            prompts.append(f"{lora.trigger_word}, {desc}")
+        else:
+            prompts.append(desc)
 
     lora.example_prompts = prompts
     db.commit()
@@ -182,32 +190,64 @@ def download_lora_weights(self, lora_model_id: int, user_id: int | None = None) 
         db.close()
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
 def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int | None = None) -> dict:
     """
     Train a LoRA model from folder images via fal.ai.
+
+    SAFETY: Training is expensive and must only run from explicit user action.
+    This task will NOT resubmit training if the model is already completed,
+    and will NOT be retried or re-delivered on worker restart.
 
     1. Load folder images, encode as base64 data URLs
     2. Submit to fal.ai via get_trainer()
     3. Poll until complete (check for job cancellation)
     4. Save result URL to LoraModel record
     """
-    write_log(
-        category=LogCategory.TASK,
-        message=f"Task train_lora started for lora_model {lora_model_id}",
-        task_name="train_lora",
-        job_id=job_id,
-        user_id=user_id,
-    )
     task_start = time.monotonic()
     db = _get_db()
     try:
-        _update_job_status(db, job_id, JobStatus.RUNNING)
-
+        # --- GUARD: Never re-submit training for already-completed models ---
         gen_service = get_generation_service(db, user_id)
         lora = gen_service.get_lora_model(lora_model_id)
         if not lora:
             return {"status": "error", "message": "LoRA model not found"}
+
+        if lora.status in (LoraModelStatus.COMPLETED, LoraModelStatus.UPLOADED):
+            msg = f"LoRA {lora_model_id} already {lora.status.value} — refusing to re-submit training"
+            logger.warning(msg)
+            write_log(
+                category=LogCategory.TASK,
+                message=msg,
+                level=LogLevel.WARNING,
+                task_name="train_lora",
+                job_id=job_id,
+                user_id=user_id,
+            )
+            return {"status": "skipped", "message": msg}
+
+        if lora.lora_url and lora.status != LoraModelStatus.TRAINING:
+            msg = f"LoRA {lora_model_id} already has lora_url (status={lora.status.value}) — refusing to re-submit training"
+            logger.warning(msg)
+            write_log(
+                category=LogCategory.TASK,
+                message=msg,
+                level=LogLevel.WARNING,
+                task_name="train_lora",
+                job_id=job_id,
+                user_id=user_id,
+            )
+            return {"status": "skipped", "message": msg}
+
+        write_log(
+            category=LogCategory.TASK,
+            message=f"Task train_lora started for lora_model {lora_model_id}",
+            task_name="train_lora",
+            job_id=job_id,
+            user_id=user_id,
+        )
+
+        _update_job_status(db, job_id, JobStatus.RUNNING)
 
         # Check if this is a resume (LoRA already submitted to fal.ai)
         existing_request_id = None
@@ -292,7 +332,8 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
                         if use_captions:
                             # Build caption from trigger word + tags/description
                             caption_parts = []
-                            caption_parts.append(lora.trigger_word)
+                            if lora.trigger_word:
+                                caption_parts.append(lora.trigger_word)
 
                             metadata = image.image_metadata
                             if metadata:
@@ -314,8 +355,8 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
                             caption = ", ".join(caption_parts)
                             zf.writestr(f"{prefix}.txt", caption)
                         elif requires_zip:
-                            # ZIP-only model without captions: use trigger word as caption
-                            zf.writestr(f"{prefix}.txt", lora.trigger_word)
+                            # ZIP-only model without captions: use trigger word as caption (or empty)
+                            zf.writestr(f"{prefix}.txt", lora.trigger_word or "")
 
                         image_count += 1
 
@@ -479,16 +520,23 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
         gen.status = GenerationStatus.GENERATING
         db.commit()
 
-        # Get LoRA URL if applicable
-        lora_url = None
-        lora_scale = gen.lora_scale or 1.0
-        if gen.lora_model_id:
-            lora = gen_service.get_lora_model(gen.lora_model_id)
-            if lora and lora.lora_url:
-                lora_url = lora.lora_url
-
         # Get generation params
         params = gen.generation_params or {}
+
+        # Build loras list for provider
+        loras_for_provider: list[dict] | None = None
+        if "loras" in params:
+            # Multi-LoRA: look up each LoRA's URL
+            loras_for_provider = []
+            for entry in params["loras"]:
+                lora = gen_service.get_lora_model(entry["lora_model_id"])
+                if lora and lora.lora_url:
+                    loras_for_provider.append({"path": lora.lora_url, "scale": entry.get("lora_scale", 1.0)})
+        elif gen.lora_model_id:
+            # Backward compat: old records with flat lora_model_id
+            lora = gen_service.get_lora_model(gen.lora_model_id)
+            if lora and lora.lora_url:
+                loras_for_provider = [{"path": lora.lora_url, "scale": gen.lora_scale or 1.0}]
 
         # Generate
         generator = get_generator(gen.generation_provider, db=db, base_model=gen.base_model, user_id=user_id)
@@ -501,8 +549,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
                 num_inference_steps=params.get("num_inference_steps", 28),
                 guidance_scale=params.get("guidance_scale", 3.5),
                 seed=params.get("seed"),
-                lora_url=lora_url,
-                lora_scale=lora_scale,
+                loras=loras_for_provider,
             )
         )
 
@@ -748,7 +795,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
         lora = gen_service.get_lora_model(evaluation.lora_model_id)
         if not lora:
             raise Exception("LoRA model not found")
-        if lora.status != LoraModelStatus.COMPLETED or not lora.lora_url:
+        if lora.status not in (LoraModelStatus.COMPLETED, LoraModelStatus.UPLOADED) or not lora.lora_url:
             raise Exception("LoRA model is not completed or has no URL")
 
         # Mark evaluation RUNNING
@@ -824,7 +871,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
             pair = None
             try:
                 description = image.image_metadata.description_long
-                prompt = f"{lora.trigger_word}, {description}"
+                prompt = f"{lora.trigger_word}, {description}" if lora.trigger_word else description
 
                 # Create pair record
                 pair = eval_service.create_pair(
@@ -846,8 +893,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                         height=gen_height,
                         num_inference_steps=gen_params.get("num_inference_steps", 28),
                         guidance_scale=gen_params.get("guidance_scale", 3.5),
-                        lora_url=lora.lora_url,
-                        lora_scale=gen_params.get("lora_scale", 1.0),
+                        loras=[{"path": lora.lora_url, "scale": gen_params.get("lora_scale", 1.0)}],
                     )
                 )
 
@@ -973,7 +1019,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                 # Generate creative prompts
                 creative_prompts = _run_async(
                     evaluator.generate_creative_prompts(
-                        trigger_word=lora.trigger_word,
+                        trigger_word=lora.trigger_word or "",
                         sample_descriptions=sample_descriptions,
                         count=creative_count,
                     )
@@ -1002,8 +1048,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                                 height=c_height,
                                 num_inference_steps=gen_params.get("num_inference_steps", 28),
                                 guidance_scale=gen_params.get("guidance_scale", 3.5),
-                                lora_url=lora.lora_url,
-                                lora_scale=gen_params.get("lora_scale", 1.0),
+                                loras=[{"path": lora.lora_url, "scale": gen_params.get("lora_scale", 1.0)}],
                             )
                         )
 
@@ -1122,7 +1167,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                     assessment_summary = _run_async(
                         evaluator.summarize_assessments(
                             model_name=lora.name,
-                            trigger_word=lora.trigger_word,
+                            trigger_word=lora.trigger_word or "N/A",
                             pair_assessments=pair_assessments,
                             overall_score=overall,
                             avg_vision=avg_vision,
