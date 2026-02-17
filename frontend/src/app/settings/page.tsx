@@ -1503,7 +1503,7 @@ function ProviderModelSettings() {
     m.capabilities.includes('embedding')
   );
 
-  const currentVisionModel = visionProvider === 'openai' ? draft.openai_vision_model : draft.anthropic_vision_model;
+  const currentVisionModel = visionProvider === 'openai' ? draft.openai_vision_model : visionProvider === 'fal' ? draft.fal_vision_model : draft.anthropic_vision_model;
 
   return (
     <section className="bg-card rounded-xl border border-border p-6">
@@ -1526,6 +1526,7 @@ function ProviderModelSettings() {
             >
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic</option>
+              <option value="fal">fal.ai (OpenRouter)</option>
             </select>
           </div>
 
@@ -1537,6 +1538,8 @@ function ProviderModelSettings() {
               onChange={(e) => {
                 if (draft.vision_provider === 'openai') {
                   setDraft({ ...draft, openai_vision_model: e.target.value });
+                } else if (draft.vision_provider === 'fal') {
+                  setDraft({ ...draft, fal_vision_model: e.target.value });
                 } else {
                   setDraft({ ...draft, anthropic_vision_model: e.target.value });
                 }

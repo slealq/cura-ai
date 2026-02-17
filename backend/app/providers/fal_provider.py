@@ -10,7 +10,7 @@ from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wai
 
 from app.core.config import get_settings
 from app.models.pipeline_log import LogCategory, LogLevel
-from app.providers.base import BaseGenerator, BaseTrainer, GenerationResult, TrainingResult
+from app.providers.base import BaseEditor, BaseGenerator, BaseTrainer, EditResult, GenerationResult, TrainingResult
 from app.services.log_service import write_log
 
 
@@ -336,6 +336,155 @@ class FalGenerator(BaseGenerator):
                 provider="fal",
                 model=endpoint if loras else self.config["generation_base_endpoint"],
                 operation="generate",
+                duration_ms=round(elapsed, 1),
+                success=False,
+                extra={"error": str(e), "request_id": request_id},
+            )
+            raise
+
+    def get_provider_name(self) -> str:
+        return "fal"
+
+
+# --- Edit model configuration ---
+
+FAL_EDIT_MODEL_CONFIG = {
+    "qwen-image-max-edit": {
+        "endpoint": "fal-ai/qwen-image-max/edit",
+        "supports_negative_prompt": True,
+        "supports_prompt_expansion": True,
+        "supports_safety_checker": True,
+        "max_source_images": 3,
+        "max_num_images": 6,
+    },
+}
+
+
+class FalEditor(BaseEditor):
+    """fal.ai image editing provider."""
+
+    def __init__(self, api_key: str | None = None, edit_model: str = "qwen-image-max-edit"):
+        _ensure_fal_key(api_key)
+        self.config = FAL_EDIT_MODEL_CONFIG.get(edit_model, FAL_EDIT_MODEL_CONFIG["qwen-image-max-edit"])
+        self.edit_model = edit_model
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30),
+           retry=retry_if_not_exception_type(GenerationCancelledError))
+    async def edit(
+        self,
+        image_urls: list[str],
+        prompt: str,
+        negative_prompt: str | None = None,
+        image_size: dict | str | None = None,
+        num_images: int = 1,
+        seed: int | None = None,
+        output_format: str = "png",
+        enable_prompt_expansion: bool = True,
+        enable_safety_checker: bool = True,
+        cancel_check: Callable[[], bool] | None = None,
+        **kwargs: Any,
+    ) -> EditResult:
+        """Edit images via fal.ai using submit + manual polling."""
+        task_start = time.monotonic()
+        poll_interval = 2.0
+        endpoint = self.config["endpoint"]
+
+        arguments: dict[str, Any] = {
+            "prompt": prompt,
+            "image_urls": image_urls,
+            "num_images": num_images,
+            "output_format": output_format,
+            "enable_safety_checker": enable_safety_checker,
+        }
+
+        if self.config["supports_prompt_expansion"]:
+            arguments["enable_prompt_expansion"] = enable_prompt_expansion
+
+        if negative_prompt and self.config["supports_negative_prompt"]:
+            arguments["negative_prompt"] = negative_prompt
+
+        if image_size is not None:
+            arguments["image_size"] = image_size
+
+        if seed is not None:
+            arguments["seed"] = seed
+
+        request_id = None
+        try:
+            handle = fal_client.submit(endpoint, arguments=arguments)
+            request_id = handle.request_id
+
+            from fal_client.client import Completed
+            while True:
+                if cancel_check and cancel_check():
+                    logger.info(f"Edit cancelled during polling (request_id={request_id})")
+                    try:
+                        fal_client.cancel(endpoint, request_id)
+                    except Exception:
+                        pass
+                    raise GenerationCancelledError(f"Edit cancelled (request_id={request_id})")
+
+                status = handle.status(with_logs=False)
+                if isinstance(status, Completed):
+                    break
+                time.sleep(poll_interval)
+
+            result = handle.get()
+
+            images_data = result.get("images", [])
+            if not images_data:
+                raise RuntimeError("No images returned from fal.ai edit")
+
+            downloaded: list[bytes] = []
+            widths: list[int] = []
+            heights: list[int] = []
+
+            async with httpx.AsyncClient(timeout=60) as client:
+                for img_info in images_data:
+                    response = await client.get(img_info["url"])
+                    response.raise_for_status()
+                    downloaded.append(response.content)
+                    widths.append(img_info.get("width", 1024))
+                    heights.append(img_info.get("height", 1024))
+
+            result_seed = result.get("seed")
+
+            elapsed = (time.monotonic() - task_start) * 1000
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"fal.ai edit completed ({len(downloaded)} images)",
+                provider="fal",
+                model=endpoint,
+                operation="edit",
+                duration_ms=round(elapsed, 1),
+                success=True,
+                extra={"seed": result_seed, "edit_model": self.edit_model, "request_id": request_id},
+            )
+
+            return EditResult(
+                images=downloaded,
+                widths=widths,
+                heights=heights,
+                seed=result_seed,
+                provider="fal",
+                metadata={
+                    "endpoint": endpoint,
+                    "request_id": request_id,
+                    "has_nsfw_concepts": result.get("has_nsfw_concepts", []),
+                },
+            )
+
+        except GenerationCancelledError:
+            raise
+        except Exception as e:
+            elapsed = (time.monotonic() - task_start) * 1000
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"fal.ai edit failed: {e}",
+                level=LogLevel.ERROR,
+                provider="fal",
+                model=endpoint,
+                operation="edit",
                 duration_ms=round(elapsed, 1),
                 success=False,
                 extra={"error": str(e), "request_id": request_id},

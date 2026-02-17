@@ -61,14 +61,34 @@ def run_async(coro):
         if loop is None or loop.is_closed():
             loop = asyncio.new_event_loop()
             _thread_local.loop = loop
-        return loop.run_until_complete(coro)
+        try:
+            return loop.run_until_complete(coro)
+        except Exception as e:
+            return _unwrap_retry_success(e)
     # There IS a running loop (shouldn't happen in Celery thread-pool, but
     # handle defensively) — create a throwaway loop.
     new_loop = asyncio.new_event_loop()
     try:
         return new_loop.run_until_complete(coro)
+    except Exception as e:
+        return _unwrap_retry_success(e)
     finally:
         new_loop.close()
+
+
+def _unwrap_retry_success(e: Exception):
+    """Handle tenacity RetryError that wraps a *successful* last attempt.
+
+    tenacity 9.x can raise RetryError even when the final retry succeeded
+    (the Future shows state=finished with a returned value). Extract the
+    successful result instead of propagating the error.
+    """
+    if hasattr(e, 'last_attempt'):
+        fut = e.last_attempt
+        if not fut.failed:
+            logger.warning("tenacity RetryError wrapping a successful result — extracting it")
+            return fut.result()
+    raise e
 
 
 def _update_job_status(db: Session, job_id: int | None, status: JobStatus, **kwargs):

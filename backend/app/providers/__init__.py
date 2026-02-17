@@ -14,6 +14,7 @@ from app.providers.anthropic_provider import (
 from app.providers.base import (
     BaseClusterSummarizer,
     BaseDescriber,
+    BaseEditor,
     BaseEmbedder,
     BaseEvaluator,
     BaseGenerator,
@@ -21,13 +22,15 @@ from app.providers.base import (
     BaseTrainer,
     ClusterSummaryResult,
     DescriptionResult,
+    EditResult,
     EmbeddingResult,
     GenerationResult,
     TaggingResult,
     TrainingResult,
     VisionEvalResult,
 )
-from app.providers.fal_provider import FalGenerator, FalTrainer
+from app.providers.fal_provider import FalEditor, FalGenerator, FalTrainer
+from app.providers.fal_vision_provider import FalVisionDescriber, FalVisionEvaluator, FalVisionTagger
 from app.providers.openai_provider import (
     OpenAIClusterSummarizer,
     OpenAIDescriber,
@@ -84,7 +87,7 @@ def _token_config(config: dict) -> dict:
 
 
 def get_tagger(
-    provider: Literal["openai", "anthropic"] | None = None,
+    provider: Literal["openai", "anthropic", "fal"] | None = None,
     db: Session | None = None,
     user_id: int | None = None,
 ) -> BaseTagger:
@@ -104,12 +107,18 @@ def get_tagger(
             model=config.get("anthropic_vision_model"),
             max_tokens=max_tokens,
         )
+    elif provider == "fal":
+        return FalVisionTagger(
+            api_key=keys.get("fal"),
+            model=config.get("fal_vision_model"),
+            max_tokens=max_tokens,
+        )
     else:
         raise ValueError(f"Unknown tagger provider: {provider}")
 
 
 def get_describer(
-    provider: Literal["openai", "anthropic"] | None = None,
+    provider: Literal["openai", "anthropic", "fal"] | None = None,
     db: Session | None = None,
     user_id: int | None = None,
 ) -> BaseDescriber:
@@ -127,6 +136,12 @@ def get_describer(
         return AnthropicDescriber(
             api_key=keys.get("anthropic"),
             model=config.get("anthropic_vision_model"),
+            max_tokens=max_tokens,
+        )
+    elif provider == "fal":
+        return FalVisionDescriber(
+            api_key=keys.get("fal"),
+            model=config.get("fal_vision_model"),
             max_tokens=max_tokens,
         )
     else:
@@ -205,8 +220,23 @@ def get_generator(
         raise ValueError(f"Unknown generator provider: {provider}")
 
 
+def get_editor(
+    provider: Literal["fal"] | None = None,
+    db: Session | None = None,
+    edit_model: str = "qwen-image-max-edit",
+    user_id: int | None = None,
+) -> BaseEditor:
+    """Get editor instance for the specified provider."""
+    keys, _ = _resolve_config(db, user_id)
+    provider = provider or "fal"
+    if provider == "fal":
+        return FalEditor(api_key=keys.get("fal"), edit_model=edit_model)
+    else:
+        raise ValueError(f"Unknown editor provider: {provider}")
+
+
 def get_evaluator(
-    provider: Literal["openai", "anthropic"] | None = None,
+    provider: Literal["openai", "anthropic", "fal"] | None = None,
     db: Session | None = None,
     user_id: int | None = None,
 ) -> BaseEvaluator:
@@ -223,6 +253,11 @@ def get_evaluator(
             api_key=keys.get("anthropic"),
             model=config.get("anthropic_vision_model"),
         )
+    elif provider == "fal":
+        return FalVisionEvaluator(
+            api_key=keys.get("fal"),
+            model=config.get("fal_vision_model"),
+        )
     else:
         raise ValueError(f"Unknown evaluator provider: {provider}")
 
@@ -230,6 +265,7 @@ def get_evaluator(
 __all__ = [
     "BaseTagger",
     "BaseDescriber",
+    "BaseEditor",
     "BaseEmbedder",
     "BaseEvaluator",
     "BaseClusterSummarizer",
@@ -237,6 +273,7 @@ __all__ = [
     "BaseGenerator",
     "TaggingResult",
     "DescriptionResult",
+    "EditResult",
     "EmbeddingResult",
     "ClusterSummaryResult",
     "TrainingResult",
@@ -244,6 +281,7 @@ __all__ = [
     "VisionEvalResult",
     "get_tagger",
     "get_describer",
+    "get_editor",
     "get_embedder",
     "get_cluster_summarizer",
     "get_trainer",

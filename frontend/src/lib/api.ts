@@ -8,6 +8,7 @@ import type {
   ClusterDetail,
   ClusteringConfig,
   ClusterListResponse,
+  EditConfig,
   EvaluationListResponse,
   Folder,
   FolderBrief,
@@ -719,6 +720,28 @@ export const settingsApi = {
     return data;
   },
 
+  // Edit config
+  getEditConfig: async (editModel?: string): Promise<EditConfig> => {
+    const { data } = await api.get('/settings/edit', {
+      params: editModel ? { edit_model: editModel } : undefined,
+    });
+    return data;
+  },
+
+  updateEditConfig: async (config: Partial<EditConfig>, editModel?: string): Promise<EditConfig> => {
+    const { data } = await api.put('/settings/edit', config, {
+      params: editModel ? { edit_model: editModel } : undefined,
+    });
+    return data;
+  },
+
+  resetEditConfig: async (editModel?: string): Promise<EditConfig> => {
+    const { data } = await api.post('/settings/edit/reset', null, {
+      params: editModel ? { edit_model: editModel } : undefined,
+    });
+    return data;
+  },
+
   // API Keys
   getApiKeys: async (): Promise<APIKeyInfo[]> => {
     const { data } = await api.get('/settings/api-keys');
@@ -929,6 +952,61 @@ export const generationApi = {
 
   getEvalGeneratedImageUrl: (evalId: number, pairId: number): string => {
     return authUrl(`/api/generation/evaluations/${evalId}/pairs/${pairId}/generated-file`);
+  },
+};
+
+// Edit API
+export const editApi = {
+  edit: async (params: {
+    prompt: string;
+    negative_prompt?: string;
+    source_image_ids?: number[];
+    source_generated_ids?: number[];
+    source_upload_keys?: string[];
+    edit_model?: string;
+    image_size?: string | { width: number; height: number };
+    num_images?: number;
+    seed?: number;
+    output_format?: string;
+    enable_prompt_expansion?: boolean;
+    enable_safety_checker?: boolean;
+  }): Promise<{ status: string; job_id: number; generated_image_ids: number[] }> => {
+    const { data } = await api.post('/edit', params);
+    return data;
+  },
+
+  uploadSource: async (file: File): Promise<{ object_key: string }> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const { data } = await api.post('/edit/upload-source', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return data;
+  },
+
+  listImages: async (params?: {
+    skip?: number;
+    limit?: number;
+  }): Promise<GeneratedImageListResponse> => {
+    const { data } = await api.get('/edit/images', { params });
+    return data;
+  },
+
+  getImage: async (id: number): Promise<GeneratedImage> => {
+    const { data } = await api.get(`/edit/images/${id}`);
+    return data;
+  },
+
+  deleteImage: async (id: number): Promise<void> => {
+    await api.delete(`/edit/images/${id}`);
+  },
+
+  getImageUrl: (id: number): string => {
+    return authUrl(`/api/edit/images/${id}/file`);
+  },
+
+  getThumbnailUrl: (filename: string): string => {
+    return authUrl(`/api/edit/thumbnails/${filename}`);
   },
 };
 

@@ -976,10 +976,12 @@ async def list_generated_images(
         status=status_filter,
         skip=skip,
         limit=limit,
+        mode="generate",
     )
     total = gen_service.count_generated_images(
         lora_model_id=lora_model_id,
         status=status_filter,
+        mode="generate",
     )
     return GeneratedImageListResponse(
         items=[_gen_to_response(g, db) for g in items],

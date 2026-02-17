@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     watch_folder_enabled: bool = True
 
     # AI Provider settings
-    default_vision_provider: Literal["openai", "anthropic"] = "openai"
+    default_vision_provider: Literal["openai", "anthropic", "fal"] = "openai"
     default_embedding_provider: Literal["openai", "local"] = "openai"
 
     # OpenAI
@@ -54,6 +54,7 @@ class Settings(BaseSettings):
 
     # fal.ai
     fal_api_key: str = ""
+    fal_vision_model: str = "x-ai/grok-4-fast"
 
     # Generation / Training providers
     default_training_provider: str = "fal"

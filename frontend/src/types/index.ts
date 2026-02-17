@@ -327,6 +327,14 @@ export interface TrainingConfig {
   learning_rate?: number;
 }
 
+export interface EditConfig {
+  image_size: string | { width: number; height: number };
+  num_images: number;
+  output_format: string;
+  enable_prompt_expansion: boolean;
+  enable_safety_checker: boolean;
+}
+
 export interface APIKeyInfo {
   provider: string;
   key_suffix: string | null;
@@ -341,6 +349,7 @@ export interface ProviderConfig {
   openai_vision_model: string;
   openai_embedding_model: string;
   anthropic_vision_model: string;
+  fal_vision_model: string;
   max_tokens_tagging: number;
   max_tokens_description: number;
   max_tokens_summarization: number;

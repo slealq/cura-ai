@@ -31,6 +31,16 @@ DEFAULT_GENERATION_CONFIGS = {
     "qwen-2.5": {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 4.0, "default_lora_scale": 1.0},
 }
 
+DEFAULT_EDIT_CONFIGS = {
+    "qwen-image-max-edit": {
+        "image_size": "square_hd",
+        "num_images": 1,
+        "output_format": "png",
+        "enable_prompt_expansion": True,
+        "enable_safety_checker": True,
+    },
+}
+
 DEFAULT_BASE_MODEL = "flux-dev"
 
 DEFAULT_PROVIDER_CONFIG = {
@@ -39,6 +49,7 @@ DEFAULT_PROVIDER_CONFIG = {
     "openai_vision_model": "gpt-4o",
     "openai_embedding_model": "text-embedding-3-small",
     "anthropic_vision_model": "claude-sonnet-4-20250514",
+    "fal_vision_model": "x-ai/grok-4-fast",
     "max_tokens_tagging": 1000,
     "max_tokens_description": 3000,
     "max_tokens_summarization": 500,
@@ -404,6 +415,30 @@ class SettingsService:
             if key in DEFAULT_PROVIDER_CONFIG:
                 current[key] = config[key]
         self.set_setting("provider_config", json.dumps(current), description="Provider configuration")
+        return current
+
+    # --- Edit config ---
+
+    def get_edit_config(self, edit_model: str = "qwen-image-max-edit") -> dict:
+        """Get edit configuration scoped to an edit model."""
+        raw = self.get_setting(f"edit_config:{edit_model}")
+        defaults = DEFAULT_EDIT_CONFIGS.get(edit_model, {})
+        if raw:
+            try:
+                config = json.loads(raw)
+                return {**defaults, **config}
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return dict(defaults)
+
+    def set_edit_config(self, config: dict, edit_model: str = "qwen-image-max-edit") -> dict:
+        """Validate and store edit config scoped to an edit model."""
+        current = self.get_edit_config(edit_model)
+        defaults = DEFAULT_EDIT_CONFIGS.get(edit_model, {})
+        for key in config:
+            if key in defaults:
+                current[key] = config[key]
+        self.set_setting(f"edit_config:{edit_model}", json.dumps(current), description=f"Edit parameters ({edit_model})")
         return current
 
     # --- Prompt getters (compose system format + guidance from active preset) ---

@@ -317,6 +317,45 @@ class BaseEvaluator(ABC):
         pass
 
 
+@dataclass
+class EditResult:
+    """Result from image editing."""
+
+    images: list[bytes]
+    widths: list[int]
+    heights: list[int]
+    seed: int | None = None
+    provider: str = ""
+    metadata: dict[str, Any] | None = None
+
+
+class BaseEditor(ABC):
+    """Abstract base class for image editing providers."""
+
+    @abstractmethod
+    async def edit(
+        self,
+        image_urls: list[str],
+        prompt: str,
+        negative_prompt: str | None = None,
+        image_size: dict | str | None = None,
+        num_images: int = 1,
+        seed: int | None = None,
+        output_format: str = "png",
+        enable_prompt_expansion: bool = True,
+        enable_safety_checker: bool = True,
+        cancel_check: Callable[[], bool] | None = None,
+        **kwargs: Any,
+    ) -> EditResult:
+        """Edit image(s) using a prompt. Returns EditResult with output images."""
+        pass
+
+    @abstractmethod
+    def get_provider_name(self) -> str:
+        """Get the provider identifier."""
+        pass
+
+
 class BaseClusterSummarizer(ABC):
     """Abstract base class for cluster summarization providers."""
 

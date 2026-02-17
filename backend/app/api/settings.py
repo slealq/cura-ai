@@ -16,6 +16,7 @@ from app.services.api_key_service import get_api_key_service
 from app.services.settings_service import (
     DEFAULT_CLUSTERING_CONFIG,
     DEFAULT_DESCRIPTION_PROMPT,
+    DEFAULT_EDIT_CONFIGS,
     DEFAULT_GENERATION_CONFIG,
     DEFAULT_GENERATION_CONFIGS,
     DEFAULT_PROVIDER_CONFIG,
@@ -117,6 +118,7 @@ class ProviderConfigResponse(BaseModel):
     openai_vision_model: str
     openai_embedding_model: str
     anthropic_vision_model: str
+    fal_vision_model: str
     max_tokens_tagging: int
     max_tokens_description: int
     max_tokens_summarization: int
@@ -130,6 +132,7 @@ class ProviderConfigUpdateRequest(BaseModel):
     openai_vision_model: str | None = None
     openai_embedding_model: str | None = None
     anthropic_vision_model: str | None = None
+    fal_vision_model: str | None = None
     max_tokens_tagging: int | None = None
     max_tokens_description: int | None = None
     max_tokens_summarization: int | None = None
@@ -536,11 +539,19 @@ def _get_anthropic_models() -> list[ProviderModelInfo]:
 
 
 def _get_fal_models() -> list[ProviderModelInfo]:
-    """Return supported fal.ai endpoints."""
+    """Return supported fal.ai endpoints and OpenRouter vision models."""
     return [
+        # OpenRouter vision models
+        ProviderModelInfo(id="x-ai/grok-4-fast", name="Grok 4 Fast", capabilities=["vision", "chat"]),
+        ProviderModelInfo(id="qwen/qwen3-vl-235b-a22b-instruct", name="Qwen3 VL 235B", capabilities=["vision", "chat"]),
+        ProviderModelInfo(id="google/gemini-2.5-flash", name="Gemini 2.5 Flash", capabilities=["vision", "chat"]),
+        ProviderModelInfo(id="anthropic/claude-opus-4.5", name="Claude Opus 4.5 (via fal)", capabilities=["vision", "chat"]),
+        # Generation/training endpoints
         ProviderModelInfo(id="fal-ai/flux/dev", name="Flux.1 Dev", capabilities=["generation"]),
         ProviderModelInfo(id="fal-ai/flux-lora", name="Flux LoRA", capabilities=["generation", "lora"]),
         ProviderModelInfo(id="fal-ai/flux-lora-fast-training", name="Flux LoRA Fast Training", capabilities=["training"]),
+        # Edit endpoints
+        ProviderModelInfo(id="qwen-image-max-edit", name="Qwen Image Max Edit", capabilities=["edit"]),
     ]
 
 
@@ -695,3 +706,51 @@ async def reset_training_config(base_model: str | None = None, db: Session = Dep
         return DEFAULT_TRAINING_CONFIGS.get(base_model, DEFAULT_TRAINING_CONFIG)
     service.delete_setting("training_config")
     return DEFAULT_TRAINING_CONFIG
+
+
+# --- Edit config endpoints ---
+
+
+class EditConfigResponse(BaseModel):
+    """Current edit configuration."""
+
+    image_size: str | dict = "square_hd"
+    num_images: int = 1
+    output_format: str = "png"
+    enable_prompt_expansion: bool = True
+    enable_safety_checker: bool = True
+
+
+class EditConfigUpdateRequest(BaseModel):
+    """Partial update for edit configuration."""
+
+    image_size: str | dict | None = None
+    num_images: int | None = None
+    output_format: str | None = None
+    enable_prompt_expansion: bool | None = None
+    enable_safety_checker: bool | None = None
+
+
+@router.get("/edit", response_model=EditConfigResponse)
+async def get_edit_config(edit_model: str = "qwen-image-max-edit", db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Get current edit configuration for a specific edit model."""
+    service = get_settings_service(db, current_user.id)
+    return service.get_edit_config(edit_model)
+
+
+@router.put("/edit", response_model=EditConfigResponse)
+async def update_edit_config(
+    request: EditConfigUpdateRequest, edit_model: str = "qwen-image-max-edit", db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
+):
+    """Update edit configuration for a specific edit model."""
+    service = get_settings_service(db, current_user.id)
+    update = {k: v for k, v in request.model_dump().items() if v is not None}
+    return service.set_edit_config(update, edit_model)
+
+
+@router.post("/edit/reset", response_model=EditConfigResponse)
+async def reset_edit_config(edit_model: str = "qwen-image-max-edit", db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Reset edit configuration to defaults."""
+    service = get_settings_service(db, current_user.id)
+    service.delete_setting(f"edit_config:{edit_model}")
+    return DEFAULT_EDIT_CONFIGS.get(edit_model, {})

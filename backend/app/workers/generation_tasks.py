@@ -17,7 +17,7 @@ from app.models.generated_image import GeneratedImage, GenerationStatus
 from app.models.lora_evaluation import EvaluationStatus
 from app.models.lora_model import LoraModelStatus
 from app.models.pipeline_log import LogCategory, LogLevel
-from app.providers import get_describer, get_embedder, get_evaluator, get_generator, get_trainer
+from app.providers import get_describer, get_editor, get_embedder, get_evaluator, get_generator, get_trainer
 from app.providers.fal_provider import GenerationCancelledError
 from app.services.evaluation_service import get_evaluation_service
 from app.services.generation_service import get_generation_service
@@ -750,6 +750,298 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
             message=f"Task batch_generate failed: {err_msg}",
             level=LogLevel.ERROR,
             task_name="batch_generate",
+            job_id=job_id,
+            duration_ms=round(elapsed, 1),
+            extra={"error": err_msg},
+            user_id=user_id,
+        )
+        if job_id:
+            job = db.query(Job).filter(Job.id == job_id).first()
+            if job:
+                job.status = JobStatus.FAILED
+                job.error_message = err_msg
+                db.commit()
+        raise
+    finally:
+        db.close()
+
+
+def _to_data_uri(image_data: bytes, mime_type: str = "image/jpeg") -> str:
+    """Convert image bytes to a data URI."""
+    b64 = base64.b64encode(image_data).decode("utf-8")
+    return f"data:{mime_type};base64,{b64}"
+
+
+def _resolve_edit_sources(db: Session, gen_params: dict, user_id: int) -> list[str]:
+    """Resolve source image references to data URIs for the edit provider."""
+    sources = gen_params.get("sources", {})
+    data_uris: list[str] = []
+
+    # Gallery images
+    for img_id in sources.get("image_ids", []):
+        image_service = get_image_service(db, user_id)
+        image = image_service.get_image(img_id)
+        if not image:
+            raise Exception(f"Source image {img_id} not found")
+        image_data = _run_async(image_service.get_image_data(img_id))
+        if not image_data:
+            raise Exception(f"Failed to load image data for {img_id}")
+        data_uris.append(_to_data_uri(image_data, image.mime_type or "image/jpeg"))
+
+    # Generated images
+    for gen_id in sources.get("generated_ids", []):
+        gen_service = get_generation_service(db, user_id)
+        gen_data = _run_async(gen_service.get_generated_image_data(gen_id))
+        if not gen_data:
+            raise Exception(f"Failed to load generated image data for {gen_id}")
+        gen = gen_service.get_generated_image(gen_id)
+        mime = gen.mime_type if gen else "image/png"
+        data_uris.append(_to_data_uri(gen_data, mime or "image/png"))
+
+    # Uploaded source images
+    if sources.get("upload_keys"):
+        from app.services.storage import get_storage_service
+        storage = get_storage_service()
+        for key in sources["upload_keys"]:
+            file_data = _run_async(storage.get_generated_image(key))
+            if not file_data:
+                raise Exception(f"Failed to load uploaded source {key}")
+            ext = key.rsplit(".", 1)[-1] if "." in key else "png"
+            mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif"}
+            data_uris.append(_to_data_uri(file_data, mime_map.get(ext, "image/png")))
+
+    return data_uris
+
+
+@celery_app.task(bind=True)
+def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id: int | None = None) -> dict:
+    """Edit an image via fal.ai."""
+    write_log(
+        category=LogCategory.TASK,
+        message=f"Task edit_image started for generated_image {generated_image_id}",
+        task_name="edit_image",
+        job_id=job_id,
+        user_id=user_id,
+    )
+    task_start = time.monotonic()
+    db = _get_db()
+    try:
+        _update_job_status(db, job_id, JobStatus.RUNNING)
+
+        gen_service = get_generation_service(db, user_id)
+        gen = gen_service.get_generated_image(generated_image_id)
+        if not gen:
+            return {"status": "error", "message": "Generated image record not found"}
+
+        gen.status = GenerationStatus.GENERATING
+        db.commit()
+
+        params = gen.generation_params or {}
+        edit_model = params.get("edit_model", "qwen-image-max-edit")
+
+        # Resolve source images to data URIs
+        image_urls = _resolve_edit_sources(db, params, user_id)
+        if not image_urls:
+            raise Exception("No source images could be resolved")
+
+        # Build cancel check
+        def _is_cancelled() -> bool:
+            if not job_id:
+                return False
+            try:
+                db.expire_all()
+                job = db.query(Job).filter(Job.id == job_id).first()
+                return job is not None and job.status == JobStatus.CANCELLED
+            except Exception:
+                return False
+
+        # Build edit kwargs
+        edit_kwargs = {
+            "image_urls": image_urls,
+            "prompt": gen.prompt,
+            "negative_prompt": gen.negative_prompt,
+            "num_images": 1,
+            "output_format": params.get("output_format", "png"),
+            "enable_prompt_expansion": params.get("enable_prompt_expansion", True),
+            "enable_safety_checker": params.get("enable_safety_checker", True),
+            "cancel_check": _is_cancelled,
+        }
+        if "image_size" in params:
+            edit_kwargs["image_size"] = params["image_size"]
+        if "seed" in params and params["seed"] is not None:
+            edit_kwargs["seed"] = params["seed"]
+
+        editor = get_editor(db=db, edit_model=edit_model, user_id=user_id)
+        result = _run_async(editor.edit(**edit_kwargs))
+
+        # Save first output image
+        if not result.images:
+            raise Exception("No images returned from edit provider")
+
+        _run_async(
+            gen_service.save_generated_result(
+                generated_image_id=generated_image_id,
+                image_data=result.images[0],
+                width=result.widths[0],
+                height=result.heights[0],
+                seed=result.seed,
+                provider_metadata=result.metadata,
+            )
+        )
+
+        _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
+
+        elapsed = (time.monotonic() - task_start) * 1000
+        write_log(
+            category=LogCategory.TASK,
+            message=f"Task edit_image completed for generated_image {generated_image_id} in {elapsed:.0f}ms",
+            task_name="edit_image",
+            job_id=job_id,
+            duration_ms=round(elapsed, 1),
+            user_id=user_id,
+        )
+        return {"status": "success", "generated_image_id": generated_image_id}
+
+    except GenerationCancelledError:
+        elapsed = (time.monotonic() - task_start) * 1000
+        logger.info(f"Edit cancelled for generated_image {generated_image_id}")
+        write_log(
+            category=LogCategory.TASK,
+            message=f"Task edit_image cancelled for generated_image {generated_image_id}",
+            task_name="edit_image",
+            job_id=job_id,
+            duration_ms=round(elapsed, 1),
+            user_id=user_id,
+        )
+        gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
+        if gen and gen.status != GenerationStatus.FAILED:
+            gen.status = GenerationStatus.FAILED
+            gen.error_message = "Cancelled by user"
+            db.commit()
+        return {"status": "cancelled", "generated_image_id": generated_image_id}
+    except Exception as e:
+        elapsed = (time.monotonic() - task_start) * 1000
+        err_msg = _unwrap_error(e)
+        logger.error(f"Failed to edit image {generated_image_id}: {err_msg}")
+        write_log(
+            category=LogCategory.TASK,
+            message=f"Task edit_image failed for generated_image {generated_image_id}: {err_msg}",
+            level=LogLevel.ERROR,
+            task_name="edit_image",
+            job_id=job_id,
+            duration_ms=round(elapsed, 1),
+            extra={"error": err_msg},
+            user_id=user_id,
+        )
+        gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
+        if gen:
+            gen.status = GenerationStatus.FAILED
+            gen.error_message = err_msg
+            db.commit()
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True)
+def batch_edit(self, generated_image_ids: list[int], job_id: int | None = None, user_id: int | None = None) -> dict:
+    """Edit multiple images. Dispatches individual edit_image tasks and polls for completion."""
+    write_log(
+        category=LogCategory.TASK,
+        message=f"Task batch_edit started ({len(generated_image_ids)} images)",
+        task_name="batch_edit",
+        job_id=job_id,
+        user_id=user_id,
+    )
+    task_start = time.monotonic()
+    db = _get_db()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first() if job_id else None
+
+        if job and job.status == JobStatus.CANCELLED:
+            _mark_generated_images_cancelled(db, generated_image_ids)
+            return {"status": "cancelled", "total": len(generated_image_ids)}
+
+        if job:
+            job.status = JobStatus.RUNNING
+            job.started_at = datetime.utcnow()
+            job.total_items = len(generated_image_ids)
+            db.commit()
+
+        # Dispatch individual tasks
+        for gen_id in generated_image_ids:
+            edit_image.delay(gen_id, user_id=user_id)
+
+        # Poll for completion
+        poll_interval = 5
+        while True:
+            db.expire_all()
+            if job_id:
+                job = db.query(Job).filter(Job.id == job_id).first()
+                if job and job.status == JobStatus.CANCELLED:
+                    _mark_generated_images_cancelled(db, generated_image_ids)
+                    return {"status": "cancelled", "total": len(generated_image_ids)}
+
+            done_count = (
+                db.query(GeneratedImage)
+                .filter(
+                    GeneratedImage.id.in_(generated_image_ids),
+                    GeneratedImage.status.in_([GenerationStatus.COMPLETED, GenerationStatus.FAILED]),
+                )
+                .count()
+            )
+
+            if job:
+                job.progress = done_count
+                db.commit()
+
+            if done_count >= len(generated_image_ids):
+                break
+
+            time.sleep(poll_interval)
+
+        # Count outcomes
+        failed_count = (
+            db.query(GeneratedImage)
+            .filter(
+                GeneratedImage.id.in_(generated_image_ids),
+                GeneratedImage.status == GenerationStatus.FAILED,
+            )
+            .count()
+        )
+        succeeded = len(generated_image_ids) - failed_count
+
+        if job:
+            job.status = JobStatus.COMPLETED
+            job.completed_at = datetime.utcnow()
+            job.result = {
+                "total": len(generated_image_ids),
+                "succeeded": succeeded,
+                "failed": failed_count,
+            }
+            db.commit()
+
+        elapsed = (time.monotonic() - task_start) * 1000
+        write_log(
+            category=LogCategory.TASK,
+            message=f"Task batch_edit completed in {elapsed:.0f}ms ({succeeded} succeeded, {failed_count} failed)",
+            task_name="batch_edit",
+            job_id=job_id,
+            duration_ms=round(elapsed, 1),
+            user_id=user_id,
+        )
+        return {"status": "success", "total": len(generated_image_ids), "succeeded": succeeded, "failed": failed_count}
+
+    except Exception as e:
+        elapsed = (time.monotonic() - task_start) * 1000
+        err_msg = _unwrap_error(e)
+        logger.error(f"Batch edit failed: {err_msg}")
+        write_log(
+            category=LogCategory.TASK,
+            message=f"Task batch_edit failed: {err_msg}",
+            level=LogLevel.ERROR,
+            task_name="batch_edit",
             job_id=job_id,
             duration_ms=round(elapsed, 1),
             extra={"error": err_msg},

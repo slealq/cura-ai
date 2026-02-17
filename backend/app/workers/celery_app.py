@@ -50,6 +50,7 @@ celery_app.conf.update(
         "app.workers.tasks.describe_image": {"rate_limit": "30/m"},
         "app.workers.tasks.embed_image": {"rate_limit": "60/m"},
         "app.workers.generation_tasks.generate_image": {"rate_limit": "20/m"},
+        "app.workers.generation_tasks.edit_image": {"rate_limit": "20/m"},
     },
 
     # Routing
@@ -61,6 +62,8 @@ celery_app.conf.update(
         "app.workers.generation_tasks.batch_generate": {"queue": "generation"},
         "app.workers.generation_tasks.evaluate_lora": {"queue": "generation"},
         "app.workers.generation_tasks.download_lora_weights": {"queue": "generation"},
+        "app.workers.generation_tasks.edit_image": {"queue": "generation"},
+        "app.workers.generation_tasks.batch_edit": {"queue": "generation"},
     },
 
     # SSL for Azure Redis TLS (no-op when using local redis://)
