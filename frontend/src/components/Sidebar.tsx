@@ -39,7 +39,7 @@ const BADGE_COLORS: Record<string, { bg: string; text: string; border: string; d
 const navigation = [
   { name: 'Upload', href: '/upload', icon: Upload },
   { name: 'Folders', href: '/images', icon: FolderOpen },
-  { name: 'Clusters', href: '/', icon: LayoutGrid },
+  { name: 'Clusters', href: '/clusters', icon: LayoutGrid },
   { name: 'Models', href: '/models', icon: Box },
   { name: 'Vision', href: '/vision', icon: Eye },
   { name: 'Generate', href: '/generate', icon: Sparkles },
@@ -56,7 +56,7 @@ export default function Sidebar() {
   return (
     <aside className="w-64 bg-card border-r border-border flex flex-col">
       <div className="p-6 border-b border-border">
-        <Link href="/" className="flex items-center gap-2">
+        <Link href="/generate" className="flex items-center gap-2">
           <Folder className="h-8 w-8 text-primary" />
           <div>
             <h1 className="font-semibold text-lg">Cura.ai</h1>
