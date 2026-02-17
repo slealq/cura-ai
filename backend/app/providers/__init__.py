@@ -90,6 +90,7 @@ def get_tagger(
     provider: Literal["openai", "anthropic", "fal"] | None = None,
     db: Session | None = None,
     user_id: int | None = None,
+    model: str | None = None,
 ) -> BaseTagger:
     """Get tagger instance for the specified provider."""
     keys, config = _resolve_config(db, user_id)
@@ -98,19 +99,19 @@ def get_tagger(
     if provider == "openai":
         return OpenAITagger(
             api_key=keys.get("openai"),
-            model=config.get("openai_vision_model"),
+            model=model or config.get("openai_vision_model"),
             max_tokens=max_tokens,
         )
     elif provider == "anthropic":
         return AnthropicTagger(
             api_key=keys.get("anthropic"),
-            model=config.get("anthropic_vision_model"),
+            model=model or config.get("anthropic_vision_model"),
             max_tokens=max_tokens,
         )
     elif provider == "fal":
         return FalVisionTagger(
             api_key=keys.get("fal"),
-            model=config.get("fal_vision_model"),
+            model=model or config.get("fal_vision_model"),
             max_tokens=max_tokens,
         )
     else:
@@ -121,6 +122,7 @@ def get_describer(
     provider: Literal["openai", "anthropic", "fal"] | None = None,
     db: Session | None = None,
     user_id: int | None = None,
+    model: str | None = None,
 ) -> BaseDescriber:
     """Get describer instance for the specified provider."""
     keys, config = _resolve_config(db, user_id)
@@ -129,19 +131,19 @@ def get_describer(
     if provider == "openai":
         return OpenAIDescriber(
             api_key=keys.get("openai"),
-            model=config.get("openai_vision_model"),
+            model=model or config.get("openai_vision_model"),
             max_tokens=max_tokens,
         )
     elif provider == "anthropic":
         return AnthropicDescriber(
             api_key=keys.get("anthropic"),
-            model=config.get("anthropic_vision_model"),
+            model=model or config.get("anthropic_vision_model"),
             max_tokens=max_tokens,
         )
     elif provider == "fal":
         return FalVisionDescriber(
             api_key=keys.get("fal"),
-            model=config.get("fal_vision_model"),
+            model=model or config.get("fal_vision_model"),
             max_tokens=max_tokens,
         )
     else:

@@ -1019,6 +1019,60 @@ export const editApi = {
   },
 };
 
+// Vision API
+export const visionApi = {
+  analyze: async (params: {
+    source_image_id?: number;
+    source_generated_id?: number;
+    source_upload_key?: string;
+    provider: string;
+    model?: string;
+    mode: 'tag' | 'describe' | 'custom';
+    custom_prompt?: string;
+    tag_prompt?: string;
+    description_prompt?: string;
+  }): Promise<{ id: number; mode: string; tags?: string[]; description?: string; model: string; duration_ms?: number }> => {
+    const { data } = await api.post('/vision/analyze', params);
+    return data;
+  },
+
+  listResults: async (skip = 0, limit = 50): Promise<{
+    items: Array<{
+      id: number;
+      mode: string;
+      provider: string;
+      model: string;
+      prompt_text?: string;
+      result_tags?: string[];
+      result_text?: string;
+      duration_ms?: number;
+      source_image_id?: number;
+      source_generated_id?: number;
+      source_object_key?: string;
+      created_at: string;
+    }>;
+    total: number;
+    skip: number;
+    limit: number;
+  }> => {
+    const { data } = await api.get('/vision/results', { params: { skip, limit } });
+    return data;
+  },
+
+  deleteResult: async (id: number): Promise<void> => {
+    await api.delete(`/vision/results/${id}`);
+  },
+
+  uploadSource: async (file: File): Promise<{ object_key: string }> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const { data } = await api.post('/vision/upload-source', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return data;
+  },
+};
+
 // Logs API
 export const logsApi = {
   list: async (params?: {

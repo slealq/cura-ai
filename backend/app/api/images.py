@@ -209,7 +209,9 @@ async def upload_images_batch(
 
         # Check if job is done (e.g. all items in this chunk were duplicates/failures
         # and no Celery tasks remain from earlier chunks)
-        if job.progress >= job.total_items:
+        if job.progress >= job.total_items and job.status not in (
+            JobStatus.COMPLETED, JobStatus.FAILED,
+        ):
             job.status = JobStatus.COMPLETED
             job.completed_at = datetime.utcnow()
             db.commit()

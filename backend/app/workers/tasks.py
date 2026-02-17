@@ -114,22 +114,48 @@ def _assign_folder_on_completion(db: Session, job: Job):
     Reads folder_id / new_folder_name from job.parameters and all_upload_ids
     from job.result. This ensures folders only appear in the UI once all
     images have thumbnails generated.
+
+    Idempotent: safe to call multiple times (uses get-or-create for folder).
     """
     params = job.parameters or {}
     folder_id = params.get("folder_id")
     new_folder_name = params.get("new_folder_name")
-    all_upload_ids = (job.result or {}).get("all_upload_ids", [])
+    all_upload_ids = list(set((job.result or {}).get("all_upload_ids", [])))
 
     if not (folder_id or new_folder_name) or not all_upload_ids:
         return
 
     try:
+        from app.models.folder import Folder
         from app.services.folder_service import get_folder_service
         folder_service = get_folder_service(db, job.user_id)
 
         if new_folder_name:
-            folder = folder_service.create_folder(new_folder_name)
-            folder_id = folder.id
+            # Get-or-create: look up existing folder first to handle race conditions
+            # where both API and Celery worker trigger this concurrently.
+            existing = (
+                db.query(Folder)
+                .filter(Folder.name == new_folder_name, Folder.user_id == job.user_id)
+                .first()
+            )
+            if existing:
+                folder_id = existing.id
+            else:
+                try:
+                    folder = folder_service.create_folder(new_folder_name)
+                    folder_id = folder.id
+                except Exception:
+                    # Another caller may have created it between our check and insert
+                    db.rollback()
+                    existing = (
+                        db.query(Folder)
+                        .filter(Folder.name == new_folder_name, Folder.user_id == job.user_id)
+                        .first()
+                    )
+                    if existing:
+                        folder_id = existing.id
+                    else:
+                        raise
 
         if folder_id:
             folder_service.add_images_to_folder(folder_id, all_upload_ids)
@@ -138,6 +164,10 @@ def _assign_folder_on_completion(db: Session, job: Job):
             logger.info(f"Deferred folder assignment: added {len(all_upload_ids)} images to folder {folder_id} for job {job.id}")
     except Exception as e:
         logger.error(f"Failed deferred folder assignment for job {job.id}: {e}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
 
 def _finish_ingest_job_item(db: Session, job_id: int | None, *, failed: bool):
@@ -158,32 +188,41 @@ def _finish_ingest_job_item(db: Session, job_id: int | None, *, failed: bool):
         db.commit()
 
         job = db.query(Job).filter(Job.id == job_id).first()
-        if job and job.total_items and job.progress >= job.total_items:
-            # Count how many images from this job actually failed
-            image_ids = (job.result or {}).get("image_ids", [])
-            n_failed = 0
-            if image_ids:
-                n_failed = (
-                    db.query(Image)
-                    .filter(Image.id.in_(image_ids), Image.status == ImageStatus.FAILED)
-                    .count()
-                )
+        if not job or not job.total_items or job.progress < job.total_items:
+            return
 
-            job.completed_at = datetime.utcnow()
-            if n_failed >= job.total_items:
-                job.status = JobStatus.FAILED
-                job.error_message = f"All {n_failed} items failed"
-            elif n_failed > 0:
-                job.status = JobStatus.COMPLETED
-                job.error_message = f"{n_failed}/{job.total_items} items failed"
-            else:
-                job.status = JobStatus.COMPLETED
-            db.commit()
-
-            # Deferred folder assignment — only after all images are ingested
+        # Skip if job already completed (API path may have completed it first)
+        if job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
+            # Job already finalized — still try folder assignment in case it
+            # was skipped or failed on the first attempt (idempotent).
             _assign_folder_on_completion(db, job)
-    except Exception:
-        pass
+            return
+
+        # Count how many images from this job actually failed
+        image_ids = (job.result or {}).get("image_ids", [])
+        n_failed = 0
+        if image_ids:
+            n_failed = (
+                db.query(Image)
+                .filter(Image.id.in_(image_ids), Image.status == ImageStatus.FAILED)
+                .count()
+            )
+
+        job.completed_at = datetime.utcnow()
+        if n_failed >= job.total_items:
+            job.status = JobStatus.FAILED
+            job.error_message = f"All {n_failed} items failed"
+        elif n_failed > 0:
+            job.status = JobStatus.COMPLETED
+            job.error_message = f"{n_failed}/{job.total_items} items failed"
+        else:
+            job.status = JobStatus.COMPLETED
+        db.commit()
+
+        # Deferred folder assignment — only after all images are ingested
+        _assign_folder_on_completion(db, job)
+    except Exception as e:
+        logger.error(f"Failed to finalize ingest job {job_id}: {e}")
 
 
 @celery_app.task(bind=True)

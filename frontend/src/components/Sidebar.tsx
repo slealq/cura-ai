@@ -12,6 +12,7 @@ import {
   Bug,
   Sparkles,
   Pencil,
+  Eye,
   Box,
   LogOut,
 } from 'lucide-react';
@@ -40,6 +41,7 @@ const navigation = [
   { name: 'Folders', href: '/images', icon: FolderOpen },
   { name: 'Clusters', href: '/', icon: LayoutGrid },
   { name: 'Models', href: '/models', icon: Box },
+  { name: 'Vision', href: '/vision', icon: Eye },
   { name: 'Generate', href: '/generate', icon: Sparkles },
   { name: 'Edit', href: '/edit', icon: Pencil },
   { name: 'Jobs', href: '/jobs', icon: Activity },

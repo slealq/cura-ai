@@ -11,6 +11,7 @@ from app.api.jobs import router as jobs_router
 from app.api.logs import router as logs_router
 from app.api.search import router as search_router
 from app.api.settings import router as settings_router
+from app.api.vision import router as vision_router
 
 api_router = APIRouter()
 
@@ -24,3 +25,4 @@ api_router.include_router(logs_router)
 api_router.include_router(settings_router)
 api_router.include_router(generation_router)
 api_router.include_router(edit_router)
+api_router.include_router(vision_router)
