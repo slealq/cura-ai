@@ -86,9 +86,13 @@ celery_app.conf.update(
 
 
 @worker_ready.connect
-def recover_stuck_training_jobs(sender, **kwargs):
-    """On worker startup, re-dispatch polling for LoRA models stuck in TRAINING with a request_id."""
-    # Only run on the generation queue worker
+def log_stuck_training_jobs(sender, **kwargs):
+    """On worker startup, log any LoRA models stuck in TRAINING status.
+
+    Training is expensive and must only be triggered by explicit user action.
+    Stuck models should be recovered via the /lora/{id}/recover API endpoint.
+    We intentionally do NOT auto-dispatch training tasks on worker restart.
+    """
     queues = [q.name for q in sender.task_consumer.queues] if hasattr(sender, 'task_consumer') else []
     if queues and "generation" not in queues:
         return
@@ -105,22 +109,17 @@ def recover_stuck_training_jobs(sender, **kwargs):
         )
         for lora in stuck:
             request_id = (lora.provider_metadata or {}).get("request_id")
-            if not request_id:
-                logger.warning(
-                    f"LoRA {lora.id} stuck in TRAINING but has no request_id — cannot recover automatically"
-                )
-                continue
-
-            logger.info(
-                f"Recovering stuck LoRA training: id={lora.id} name={lora.name!r} request_id={request_id}"
+            logger.warning(
+                f"LoRA {lora.id} ({lora.name!r}) stuck in TRAINING "
+                f"(request_id={request_id or 'none'}). "
+                f"Use POST /generation/lora/{lora.id}/recover to resume."
             )
-            # Re-dispatch train_lora which will detect TRAINING + request_id and resume polling
-            from app.workers.generation_tasks import train_lora
-            train_lora.delay(lora.id, lora.job_id, lora.user_id)
-
         if stuck:
-            logger.info(f"Recovery: re-dispatched {len(stuck)} stuck LoRA training job(s)")
+            logger.warning(
+                f"Found {len(stuck)} stuck LoRA training job(s). "
+                f"They will NOT be auto-recovered — use the /recover endpoint."
+            )
     except Exception as e:
-        logger.error(f"Failed to recover stuck training jobs on startup: {e}")
+        logger.error(f"Failed to check stuck training jobs on startup: {e}")
     finally:
         db.close()

@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, Suspense } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { generationApi, settingsApi } from '@/lib/api';
-import { Loader2, Sparkles, ChevronDown, ChevronUp, X, KeyRound } from 'lucide-react';
+import { Loader2, Sparkles, ChevronDown, ChevronUp, X, KeyRound, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -41,14 +41,41 @@ function GeneratePageInner() {
   const [negativePrompt, setNegativePrompt] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [baseModel, setBaseModel] = useState('flux-dev');
-  const [loraId, setLoraId] = useState<number | undefined>(undefined);
-  const [loraScale, setLoraScale] = useState(1.0);
+  const [loraSelections, setLoraSelections] = useState<Array<{ id: number; scale: number }>>([]);
   const [width, setWidth] = useState(1024);
   const [height, setHeight] = useState(1024);
   const [steps, setSteps] = useState(28);
   const [guidance, setGuidance] = useState(3.5);
   const [seed, setSeed] = useState<string>('');
   const [numImages, setNumImages] = useState(1);
+
+  // Multi-LoRA helpers
+  const addLora = () => {
+    if (loraSelections.length >= 2) return;
+    // Pick the first available LoRA not already selected
+    const usedIds = new Set(loraSelections.map((s) => s.id));
+    const firstAvailable = loraList?.items.find((l) => !usedIds.has(l.id));
+    if (firstAvailable) {
+      setLoraSelections([...loraSelections, { id: firstAvailable.id, scale: 1.0 }]);
+    }
+  };
+  const removeLora = (index: number) => {
+    setLoraSelections(loraSelections.filter((_, i) => i !== index));
+  };
+  const updateLoraId = (index: number, id: number) => {
+    const updated = [...loraSelections];
+    updated[index] = { ...updated[index], id };
+    setLoraSelections(updated);
+  };
+  const updateLoraScale = (index: number, scale: number) => {
+    const updated = [...loraSelections];
+    updated[index] = { ...updated[index], scale };
+    setLoraSelections(updated);
+  };
+  const getAvailableLorasForSlot = (slotIndex: number) => {
+    const usedIds = new Set(loraSelections.filter((_, i) => i !== slotIndex).map((s) => s.id));
+    return (loraList?.items || []).filter((l) => !usedIds.has(l.id));
+  };
 
   // Full-size modal — store only the ID so the modal always uses fresh polled data
   const [selectedImageId, setSelectedImageId] = useState<number | null>(null);
@@ -82,7 +109,7 @@ function GeneratePageInner() {
       const parsed = parseInt(loraParam, 10);
       if (!isNaN(parsed)) {
         hasAppliedUrlParams.current = true;
-        setLoraId(parsed);
+        setLoraSelections([{ id: parsed, scale: 1.0 }]);
         // Fetch the LoRA to sync baseModel
         generationApi.getLora(parsed).then((lora) => {
           const modelEntry = BASE_MODELS.find((m) => m.value === lora.base_model);
@@ -153,8 +180,9 @@ function GeneratePageInner() {
     generateMutation.mutate({
       prompt: prompt.trim(),
       negative_prompt: negativePrompt.trim() || undefined,
-      lora_model_id: loraId,
-      lora_scale: loraId ? loraScale : undefined,
+      loras: loraSelections.length > 0
+        ? loraSelections.map((s) => ({ lora_model_id: s.id, lora_scale: s.scale }))
+        : undefined,
       base_model: baseModel,
       width,
       height,
@@ -233,7 +261,7 @@ function GeneratePageInner() {
                   key={m.value}
                   onClick={() => {
                     setBaseModel(m.value);
-                    setLoraId(undefined);
+                    setLoraSelections([]);
                     setGuidance(m.defaultGuidance);
                   }}
                   className={cn(
@@ -249,39 +277,61 @@ function GeneratePageInner() {
             </div>
           </div>
 
-          {/* LoRA */}
-          <div className="min-w-[200px]">
-            <label className="block text-xs text-muted-foreground mb-1">LoRA Model</label>
-            <select
-              value={loraId ?? ''}
-              onChange={(e) => setLoraId(e.target.value ? parseInt(e.target.value) : undefined)}
-              className="w-full px-3 py-2 border border-border rounded-lg text-sm"
-            >
-              <option value="">No LoRA</option>
-              {loraList?.items.map((lora) => (
-                <option key={lora.id} value={lora.id}>
-                  {lora.trigger_word ? `${lora.name} (${lora.trigger_word})` : lora.name}
-                </option>
-              ))}
-            </select>
+          {/* LoRA selections (max 2) */}
+          <div className="flex flex-wrap gap-3 items-end">
+            {loraSelections.map((sel, idx) => {
+              const available = getAvailableLorasForSlot(idx);
+              return (
+                <div key={idx} className="flex items-end gap-2">
+                  <div className="min-w-[180px]">
+                    <label className="block text-xs text-muted-foreground mb-1">
+                      LoRA {loraSelections.length > 1 ? idx + 1 : ''}
+                    </label>
+                    <select
+                      value={sel.id}
+                      onChange={(e) => updateLoraId(idx, parseInt(e.target.value))}
+                      className="w-full px-3 py-2 border border-border rounded-lg text-sm"
+                    >
+                      {available.map((lora) => (
+                        <option key={lora.id} value={lora.id}>
+                          {lora.trigger_word ? `${lora.name} (${lora.trigger_word})` : lora.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="w-28">
+                    <label className="block text-xs text-muted-foreground mb-1">
+                      Scale: {sel.scale.toFixed(1)}
+                    </label>
+                    <input
+                      type="range"
+                      min={0}
+                      max={20}
+                      value={Math.round(sel.scale * 10)}
+                      onChange={(e) => updateLoraScale(idx, parseInt(e.target.value) / 10)}
+                      className="w-full"
+                    />
+                  </div>
+                  <button
+                    onClick={() => removeLora(idx)}
+                    className="p-2 text-muted-foreground hover:text-red-500 transition-colors"
+                    title="Remove LoRA"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              );
+            })}
+            {loraSelections.length < 2 && (loraList?.items.length ?? 0) > loraSelections.length && (
+              <button
+                onClick={addLora}
+                className="flex items-center gap-1 px-3 py-2 text-sm border border-dashed border-border rounded-lg text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                {loraSelections.length === 0 ? 'Add LoRA' : 'Add 2nd LoRA'}
+              </button>
+            )}
           </div>
-
-          {/* LoRA scale */}
-          {loraId && (
-            <div className="w-32">
-              <label className="block text-xs text-muted-foreground mb-1">
-                LoRA Scale: {loraScale.toFixed(1)}
-              </label>
-              <input
-                type="range"
-                min={0}
-                max={20}
-                value={Math.round(loraScale * 10)}
-                onChange={(e) => setLoraScale(parseInt(e.target.value) / 10)}
-                className="w-full"
-              />
-            </div>
-          )}
 
           {/* Num images */}
           <div className="w-24">
@@ -487,14 +537,29 @@ function GeneratePageInner() {
                     {selectedImage.width && selectedImage.height && (
                       <span><span className="font-medium">Size:</span> {selectedImage.width}x{selectedImage.height}</span>
                     )}
-                    {selectedImage.lora_model_name && selectedImage.lora_model_id && (
+                    {selectedImage.loras && selectedImage.loras.length > 0 ? (
+                      <span>
+                        <span className="font-medium">LoRA{selectedImage.loras.length > 1 ? 's' : ''}:</span>{' '}
+                        {selectedImage.loras.map((l, i) => (
+                          <span key={l.lora_model_id}>
+                            {i > 0 && ', '}
+                            <Link href="/models" className="text-primary hover:underline" onClick={() => setSelectedImageId(null)}>
+                              {l.lora_model_name}
+                            </Link>
+                            {selectedImage.loras.length > 1 && (
+                              <span className="text-muted-foreground text-xs ml-0.5">({l.lora_scale.toFixed(1)})</span>
+                            )}
+                          </span>
+                        ))}
+                      </span>
+                    ) : selectedImage.lora_model_name && selectedImage.lora_model_id ? (
                       <span>
                         <span className="font-medium">LoRA:</span>{' '}
                         <Link href="/models" className="text-primary hover:underline" onClick={() => setSelectedImageId(null)}>
                           {selectedImage.lora_model_name}
                         </Link>
                       </span>
-                    )}
+                    ) : null}
                     {selectedImage.generation_params && (
                       <>
                         <span><span className="font-medium">Steps:</span> {(selectedImage.generation_params as Record<string, unknown>).num_inference_steps as number}</span>

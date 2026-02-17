@@ -90,14 +90,22 @@ export default function GeneratedImageCard({
           </button>
         )}
 
-        {/* LoRA badge */}
-        {image.lora_model_name && (
+        {/* LoRA badge(s) */}
+        {image.loras && image.loras.length > 0 ? (
+          <div className="absolute top-2 left-2 flex flex-col gap-0.5">
+            {image.loras.map((l) => (
+              <span key={l.lora_model_id} className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300">
+                {l.lora_model_name}
+              </span>
+            ))}
+          </div>
+        ) : image.lora_model_name ? (
           <div className="absolute top-2 left-2">
             <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300">
               {image.lora_model_name}
             </span>
           </div>
-        )}
+        ) : null}
       </div>
 
       {/* Model badge */}

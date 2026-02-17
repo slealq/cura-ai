@@ -275,6 +275,12 @@ export interface LoraListResponse {
   limit: number;
 }
 
+export interface LoraUsed {
+  lora_model_id: number;
+  lora_model_name: string;
+  lora_scale: number;
+}
+
 export interface GeneratedImage {
   id: number;
   prompt: string;
@@ -284,6 +290,7 @@ export interface GeneratedImage {
   lora_model_id: number | null;
   lora_model_name: string | null;
   lora_scale: number | null;
+  loras: LoraUsed[];
   generation_params: Record<string, unknown> | null;
   status: string;
   error_message: string | null;

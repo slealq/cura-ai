@@ -851,6 +851,7 @@ export const generationApi = {
     negative_prompt?: string;
     lora_model_id?: number;
     lora_scale?: number;
+    loras?: Array<{ lora_model_id: number; lora_scale: number }>;
     base_model?: string;
     width?: number;
     height?: number;
