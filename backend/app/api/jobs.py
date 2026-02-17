@@ -107,10 +107,12 @@ async def cancel_job(job_id: int, db: Session = Depends(get_db), current_user: U
     if job.status in [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]:
         raise HTTPException(status_code=400, detail="Job cannot be cancelled")
 
-    # Cancel Celery task if possible
+    # Revoke Celery task (prevents re-delivery of pending tasks).
+    # For running generation tasks, the actual cancellation happens via
+    # the cancel_check callback that polls Job.status in the DB.
     if job.celery_task_id:
         from app.workers.celery_app import celery_app
-        celery_app.control.revoke(job.celery_task_id, terminate=True)
+        celery_app.control.revoke(job.celery_task_id)
 
     job.status = JobStatus.CANCELLED
 

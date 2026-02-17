@@ -1,16 +1,22 @@
 """fal.ai provider for LoRA training and image generation."""
 import logging
 import time
+from collections.abc import Callable
 from typing import Any
 
 import fal_client
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 
 from app.core.config import get_settings
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers.base import BaseGenerator, BaseTrainer, GenerationResult, TrainingResult
 from app.services.log_service import write_log
+
+
+class GenerationCancelledError(Exception):
+    """Raised when a generation task is cancelled during polling."""
+    pass
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -204,7 +210,8 @@ class FalGenerator(BaseGenerator):
         self.config = FAL_MODEL_CONFIG.get(base_model, FAL_MODEL_CONFIG["flux-dev"])
         self.base_model = base_model
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30),
+           retry=retry_if_not_exception_type(GenerationCancelledError))
     async def generate(
         self,
         prompt: str,
@@ -215,9 +222,16 @@ class FalGenerator(BaseGenerator):
         guidance_scale: float = 3.5,
         seed: int | None = None,
         loras: list[dict] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> GenerationResult:
-        """Generate an image via fal.ai."""
+        """Generate an image via fal.ai.
+
+        Uses submit + manual polling instead of subscribe, so that
+        cancel_check can be evaluated between polls and the remote
+        fal.ai request cancelled promptly.
+        """
         task_start = time.monotonic()
+        poll_interval = 2.0  # seconds between status polls
 
         # Choose endpoint based on LoRA
         if loras:
@@ -245,12 +259,29 @@ class FalGenerator(BaseGenerator):
         if seed is not None:
             arguments["seed"] = seed
 
+        request_id = None
         try:
-            result = fal_client.subscribe(
-                endpoint,
-                arguments=arguments,
-                with_logs=False,
-            )
+            # Submit (non-blocking) instead of subscribe (blocking)
+            handle = fal_client.submit(endpoint, arguments=arguments)
+            request_id = handle.request_id
+
+            # Poll for completion with cancellation checks
+            from fal_client.client import Completed
+            while True:
+                if cancel_check and cancel_check():
+                    logger.info(f"Generation cancelled during polling (request_id={request_id})")
+                    try:
+                        fal_client.cancel(endpoint, request_id)
+                    except Exception:
+                        pass  # best-effort remote cancel
+                    raise GenerationCancelledError(f"Generation cancelled (request_id={request_id})")
+
+                status = handle.status(with_logs=False)
+                if isinstance(status, Completed):
+                    break
+                time.sleep(poll_interval)
+
+            result = handle.get()
 
             # Extract image URL and download
             images = result.get("images", [])
@@ -278,7 +309,7 @@ class FalGenerator(BaseGenerator):
                 operation="generate",
                 duration_ms=round(elapsed, 1),
                 success=True,
-                extra={"seed": result_seed, "lora_count": len(loras) if loras else 0, "base_model": self.base_model},
+                extra={"seed": result_seed, "lora_count": len(loras) if loras else 0, "base_model": self.base_model, "request_id": request_id},
             )
 
             return GenerationResult(
@@ -289,10 +320,13 @@ class FalGenerator(BaseGenerator):
                 provider="fal",
                 metadata={
                     "endpoint": endpoint,
+                    "request_id": request_id,
                     "has_nsfw_concepts": result.get("has_nsfw_concepts", []),
                 },
             )
 
+        except GenerationCancelledError:
+            raise
         except Exception as e:
             elapsed = (time.monotonic() - task_start) * 1000
             write_log(
@@ -304,7 +338,7 @@ class FalGenerator(BaseGenerator):
                 operation="generate",
                 duration_ms=round(elapsed, 1),
                 success=False,
-                extra={"error": str(e)},
+                extra={"error": str(e), "request_id": request_id},
             )
             raise
 

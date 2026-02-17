@@ -18,6 +18,7 @@ from app.models.lora_evaluation import EvaluationStatus
 from app.models.lora_model import LoraModelStatus
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers import get_describer, get_embedder, get_evaluator, get_generator, get_trainer
+from app.providers.fal_provider import GenerationCancelledError
 from app.services.evaluation_service import get_evaluation_service
 from app.services.generation_service import get_generation_service
 from app.services.image_service import get_image_service
@@ -538,6 +539,17 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
             if lora and lora.lora_url:
                 loras_for_provider = [{"path": lora.lora_url, "scale": gen.lora_scale or 1.0}]
 
+        # Build cancel check: returns True when the Job has been cancelled
+        def _is_cancelled() -> bool:
+            if not job_id:
+                return False
+            try:
+                db.expire_all()
+                job = db.query(Job).filter(Job.id == job_id).first()
+                return job is not None and job.status == JobStatus.CANCELLED
+            except Exception:
+                return False
+
         # Generate
         generator = get_generator(gen.generation_provider, db=db, base_model=gen.base_model, user_id=user_id)
         result = _run_async(
@@ -550,6 +562,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
                 guidance_scale=params.get("guidance_scale", 3.5),
                 seed=params.get("seed"),
                 loras=loras_for_provider,
+                cancel_check=_is_cancelled,
             )
         )
 
@@ -578,6 +591,24 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
         )
         return {"status": "success", "generated_image_id": generated_image_id}
 
+    except GenerationCancelledError:
+        elapsed = (time.monotonic() - task_start) * 1000
+        logger.info(f"Generation cancelled for generated_image {generated_image_id}")
+        write_log(
+            category=LogCategory.TASK,
+            message=f"Task generate_image cancelled for generated_image {generated_image_id}",
+            task_name="generate_image",
+            job_id=job_id,
+            duration_ms=round(elapsed, 1),
+            user_id=user_id,
+        )
+        # Mark as failed (job is already CANCELLED by the API)
+        gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
+        if gen and gen.status != GenerationStatus.FAILED:
+            gen.status = GenerationStatus.FAILED
+            gen.error_message = "Cancelled by user"
+            db.commit()
+        return {"status": "cancelled", "generated_image_id": generated_image_id}
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
