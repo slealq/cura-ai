@@ -20,8 +20,38 @@ const SIZE_PRESETS = [
 ];
 
 const BASE_MODELS = [
-  { value: 'flux-dev', label: 'Flux', defaultGuidance: 3.5 },
-  { value: 'qwen-2.5', label: 'Qwen 2.5', defaultGuidance: 4.0 },
+  { value: 'flux-dev', label: 'Flux', defaultGuidance: 3.5, hasLora: true, hasStepsGuidance: true, hasWidthHeight: true, usesResolutionAspect: false, hasSafetyTolerance: false, hasWebSearch: false, maxImages: 8 },
+  { value: 'qwen-2.5', label: 'Qwen 2.5', defaultGuidance: 4.0, hasLora: true, hasStepsGuidance: true, hasWidthHeight: true, usesResolutionAspect: false, hasSafetyTolerance: false, hasWebSearch: false, maxImages: 8 },
+  { value: 'nano-banana-pro', label: 'Nano Banana Pro', defaultGuidance: 0, hasLora: false, hasStepsGuidance: false, hasWidthHeight: false, usesResolutionAspect: true, hasSafetyTolerance: true, hasWebSearch: true, maxImages: 4 },
+];
+
+const RESOLUTIONS = [
+  { value: '1K', label: '1K' },
+  { value: '2K', label: '2K' },
+  { value: '4K', label: '4K' },
+];
+
+const ASPECT_RATIOS = [
+  { value: '1:1', label: '1:1' },
+  { value: '16:9', label: '16:9' },
+  { value: '9:16', label: '9:16' },
+  { value: '4:3', label: '4:3' },
+  { value: '3:4', label: '3:4' },
+  { value: '3:2', label: '3:2' },
+  { value: '2:3', label: '2:3' },
+  { value: '21:9', label: '21:9' },
+  { value: '7:4', label: '7:4' },
+  { value: '4:7', label: '4:7' },
+  { value: '5:4', label: '5:4' },
+];
+
+const SAFETY_LEVELS = [
+  { value: '1', label: '1 (Strictest)' },
+  { value: '2', label: '2' },
+  { value: '3', label: '3' },
+  { value: '4', label: '4 (Default)' },
+  { value: '5', label: '5' },
+  { value: '6', label: '6 (Most Permissive)' },
 ];
 
 export default function GeneratePage() {
@@ -48,6 +78,13 @@ function GeneratePageInner() {
   const [guidance, setGuidance] = useState(3.5);
   const [seed, setSeed] = useState<string>('');
   const [numImages, setNumImages] = useState(1);
+  const [resolution, setResolution] = useState('1K');
+  const [aspectRatio, setAspectRatio] = useState('1:1');
+  const [safetyTolerance, setSafetyTolerance] = useState('4');
+  const [enableWebSearch, setEnableWebSearch] = useState(false);
+
+  // Current model capabilities
+  const modelCaps = BASE_MODELS.find((m) => m.value === baseModel) || BASE_MODELS[0];
 
   // Multi-LoRA helpers
   const addLora = () => {
@@ -177,20 +214,40 @@ function GeneratePageInner() {
       toast.error('Please enter a prompt');
       return;
     }
-    generateMutation.mutate({
+
+    const params: Parameters<typeof generationApi.generate>[0] = {
       prompt: prompt.trim(),
-      negative_prompt: negativePrompt.trim() || undefined,
-      loras: loraSelections.length > 0
-        ? loraSelections.map((s) => ({ lora_model_id: s.id, lora_scale: s.scale }))
-        : undefined,
       base_model: baseModel,
-      width,
-      height,
-      num_inference_steps: steps,
-      guidance_scale: guidance,
-      seed: seed ? parseInt(seed) : undefined,
       num_images: numImages,
-    });
+    };
+
+    if (negativePrompt.trim()) params.negative_prompt = negativePrompt.trim();
+    if (seed) params.seed = parseInt(seed);
+
+    if (modelCaps.hasLora && loraSelections.length > 0) {
+      params.loras = loraSelections.map((s) => ({ lora_model_id: s.id, lora_scale: s.scale }));
+    }
+
+    if (modelCaps.hasWidthHeight) {
+      params.width = width;
+      params.height = height;
+    }
+    if (modelCaps.hasStepsGuidance) {
+      params.num_inference_steps = steps;
+      params.guidance_scale = guidance;
+    }
+    if (modelCaps.usesResolutionAspect) {
+      params.resolution = resolution;
+      params.aspect_ratio = aspectRatio;
+    }
+    if (modelCaps.hasSafetyTolerance) {
+      params.safety_tolerance = safetyTolerance;
+    }
+    if (modelCaps.hasWebSearch) {
+      params.enable_web_search = enableWebSearch;
+    }
+
+    generateMutation.mutate(params);
   };
 
   const handleSizePreset = (w: number, h: number) => {
@@ -263,6 +320,7 @@ function GeneratePageInner() {
                     setBaseModel(m.value);
                     setLoraSelections([]);
                     setGuidance(m.defaultGuidance);
+                    if (numImages > m.maxImages) setNumImages(m.maxImages);
                   }}
                   className={cn(
                     'px-3 py-2 text-sm font-medium transition-colors',
@@ -277,61 +335,63 @@ function GeneratePageInner() {
             </div>
           </div>
 
-          {/* LoRA selections (max 2) */}
-          <div className="flex flex-wrap gap-3 items-end">
-            {loraSelections.map((sel, idx) => {
-              const available = getAvailableLorasForSlot(idx);
-              return (
-                <div key={idx} className="flex items-end gap-2">
-                  <div className="min-w-[180px]">
-                    <label className="block text-xs text-muted-foreground mb-1">
-                      LoRA {loraSelections.length > 1 ? idx + 1 : ''}
-                    </label>
-                    <select
-                      value={sel.id}
-                      onChange={(e) => updateLoraId(idx, parseInt(e.target.value))}
-                      className="w-full px-3 py-2 border border-border rounded-lg text-sm"
+          {/* LoRA selections (max 2) — only for models that support LoRA */}
+          {modelCaps.hasLora && (
+            <div className="flex flex-wrap gap-3 items-end">
+              {loraSelections.map((sel, idx) => {
+                const available = getAvailableLorasForSlot(idx);
+                return (
+                  <div key={idx} className="flex items-end gap-2">
+                    <div className="min-w-[180px]">
+                      <label className="block text-xs text-muted-foreground mb-1">
+                        LoRA {loraSelections.length > 1 ? idx + 1 : ''}
+                      </label>
+                      <select
+                        value={sel.id}
+                        onChange={(e) => updateLoraId(idx, parseInt(e.target.value))}
+                        className="w-full px-3 py-2 border border-border rounded-lg text-sm"
+                      >
+                        {available.map((lora) => (
+                          <option key={lora.id} value={lora.id}>
+                            {lora.trigger_word ? `${lora.name} (${lora.trigger_word})` : lora.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="w-28">
+                      <label className="block text-xs text-muted-foreground mb-1">
+                        Scale: {sel.scale.toFixed(1)}
+                      </label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={20}
+                        value={Math.round(sel.scale * 10)}
+                        onChange={(e) => updateLoraScale(idx, parseInt(e.target.value) / 10)}
+                        className="w-full"
+                      />
+                    </div>
+                    <button
+                      onClick={() => removeLora(idx)}
+                      className="p-2 text-muted-foreground hover:text-red-500 transition-colors"
+                      title="Remove LoRA"
                     >
-                      {available.map((lora) => (
-                        <option key={lora.id} value={lora.id}>
-                          {lora.trigger_word ? `${lora.name} (${lora.trigger_word})` : lora.name}
-                        </option>
-                      ))}
-                    </select>
+                      <Trash2 className="h-4 w-4" />
+                    </button>
                   </div>
-                  <div className="w-28">
-                    <label className="block text-xs text-muted-foreground mb-1">
-                      Scale: {sel.scale.toFixed(1)}
-                    </label>
-                    <input
-                      type="range"
-                      min={0}
-                      max={20}
-                      value={Math.round(sel.scale * 10)}
-                      onChange={(e) => updateLoraScale(idx, parseInt(e.target.value) / 10)}
-                      className="w-full"
-                    />
-                  </div>
-                  <button
-                    onClick={() => removeLora(idx)}
-                    className="p-2 text-muted-foreground hover:text-red-500 transition-colors"
-                    title="Remove LoRA"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
-              );
-            })}
-            {loraSelections.length < 2 && (loraList?.items.length ?? 0) > loraSelections.length && (
-              <button
-                onClick={addLora}
-                className="flex items-center gap-1 px-3 py-2 text-sm border border-dashed border-border rounded-lg text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                {loraSelections.length === 0 ? 'Add LoRA' : 'Add 2nd LoRA'}
-              </button>
-            )}
-          </div>
+                );
+              })}
+              {loraSelections.length < 2 && (loraList?.items.length ?? 0) > loraSelections.length && (
+                <button
+                  onClick={addLora}
+                  className="flex items-center gap-1 px-3 py-2 text-sm border border-dashed border-border rounded-lg text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  {loraSelections.length === 0 ? 'Add LoRA' : 'Add 2nd LoRA'}
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Num images */}
           <div className="w-24">
@@ -341,7 +401,7 @@ function GeneratePageInner() {
               onChange={(e) => setNumImages(parseInt(e.target.value))}
               className="w-full px-3 py-2 border border-border rounded-lg text-sm"
             >
-              {[1, 2, 4, 8].map((n) => (
+              {[1, 2, 4, 8].filter((n) => n <= modelCaps.maxImages).map((n) => (
                 <option key={n} value={n}>{n}</option>
               ))}
             </select>
@@ -386,57 +446,133 @@ function GeneratePageInner() {
               />
             </div>
 
-            {/* Size presets */}
-            <div>
-              <label className="block text-xs text-muted-foreground mb-1">Size</label>
-              <div className="flex flex-wrap gap-2">
-                {SIZE_PRESETS.map((preset) => (
-                  <button
-                    key={preset.label}
-                    onClick={() => handleSizePreset(preset.w, preset.h)}
-                    className={cn(
-                      'px-3 py-1.5 text-xs border rounded-lg transition-colors',
-                      width === preset.w && height === preset.h
-                        ? 'border-primary bg-primary/5 text-primary'
-                        : 'border-border hover:bg-muted'
-                    )}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
+            {/* Size presets (width/height models) */}
+            {modelCaps.hasWidthHeight && (
+              <div>
+                <label className="block text-xs text-muted-foreground mb-1">Size</label>
+                <div className="flex flex-wrap gap-2">
+                  {SIZE_PRESETS.map((preset) => (
+                    <button
+                      key={preset.label}
+                      onClick={() => handleSizePreset(preset.w, preset.h)}
+                      className={cn(
+                        'px-3 py-1.5 text-xs border rounded-lg transition-colors',
+                        width === preset.w && height === preset.h
+                          ? 'border-primary bg-primary/5 text-primary'
+                          : 'border-border hover:bg-muted'
+                      )}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
+
+            {/* Resolution + Aspect Ratio (resolution/aspect models) */}
+            {modelCaps.usesResolutionAspect && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">Resolution</label>
+                  <div className="flex gap-2">
+                    {RESOLUTIONS.map((r) => (
+                      <button
+                        key={r.value}
+                        onClick={() => setResolution(r.value)}
+                        className={cn(
+                          'px-4 py-1.5 text-xs border rounded-lg transition-colors',
+                          resolution === r.value
+                            ? 'border-primary bg-primary/5 text-primary'
+                            : 'border-border hover:bg-muted'
+                        )}
+                      >
+                        {r.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">Aspect Ratio</label>
+                  <select
+                    value={aspectRatio}
+                    onChange={(e) => setAspectRatio(e.target.value)}
+                    className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
+                  >
+                    {ASPECT_RATIOS.map((ar) => (
+                      <option key={ar.value} value={ar.value}>{ar.label}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {/* Safety Tolerance + Web Search */}
+            {(modelCaps.hasSafetyTolerance || modelCaps.hasWebSearch) && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {modelCaps.hasSafetyTolerance && (
+                  <div>
+                    <label className="block text-xs text-muted-foreground mb-1">Safety Tolerance</label>
+                    <select
+                      value={safetyTolerance}
+                      onChange={(e) => setSafetyTolerance(e.target.value)}
+                      className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
+                    >
+                      {SAFETY_LEVELS.map((s) => (
+                        <option key={s.value} value={s.value}>{s.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {modelCaps.hasWebSearch && (
+                  <div className="flex items-end pb-1">
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={enableWebSearch}
+                        onChange={(e) => setEnableWebSearch(e.target.checked)}
+                        className="rounded"
+                      />
+                      Enable web search
+                    </label>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {/* Steps */}
-              <div>
-                <label className="block text-xs text-muted-foreground mb-1">
-                  Steps: {steps}
-                </label>
-                <input
-                  type="range"
-                  min={1}
-                  max={50}
-                  value={steps}
-                  onChange={(e) => setSteps(parseInt(e.target.value))}
-                  className="w-full"
-                />
-              </div>
+              {modelCaps.hasStepsGuidance && (
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">
+                    Steps: {steps}
+                  </label>
+                  <input
+                    type="range"
+                    min={1}
+                    max={50}
+                    value={steps}
+                    onChange={(e) => setSteps(parseInt(e.target.value))}
+                    className="w-full"
+                  />
+                </div>
+              )}
 
               {/* Guidance */}
-              <div>
-                <label className="block text-xs text-muted-foreground mb-1">
-                  Guidance: {guidance.toFixed(1)}
-                </label>
-                <input
-                  type="range"
-                  min={0}
-                  max={200}
-                  value={Math.round(guidance * 10)}
-                  onChange={(e) => setGuidance(parseInt(e.target.value) / 10)}
-                  className="w-full"
-                />
-              </div>
+              {modelCaps.hasStepsGuidance && (
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">
+                    Guidance: {guidance.toFixed(1)}
+                  </label>
+                  <input
+                    type="range"
+                    min={0}
+                    max={200}
+                    value={Math.round(guidance * 10)}
+                    onChange={(e) => setGuidance(parseInt(e.target.value) / 10)}
+                    className="w-full"
+                  />
+                </div>
+              )}
 
               {/* Seed */}
               <div>
@@ -560,15 +696,34 @@ function GeneratePageInner() {
                         </Link>
                       </span>
                     ) : null}
-                    {selectedImage.generation_params && (
-                      <>
-                        <span><span className="font-medium">Steps:</span> {(selectedImage.generation_params as Record<string, unknown>).num_inference_steps as number}</span>
-                        <span><span className="font-medium">Guidance:</span> {(selectedImage.generation_params as Record<string, unknown>).guidance_scale as number}</span>
-                        {(selectedImage.generation_params as Record<string, unknown>).actual_seed && (
-                          <span><span className="font-medium">Seed:</span> {(selectedImage.generation_params as Record<string, unknown>).actual_seed as number}</span>
-                        )}
-                      </>
-                    )}
+                    {selectedImage.generation_params && (() => {
+                      const gp = selectedImage.generation_params as Record<string, unknown>;
+                      return (
+                        <>
+                          {gp.num_inference_steps != null && (
+                            <span><span className="font-medium">Steps:</span> {gp.num_inference_steps as number}</span>
+                          )}
+                          {gp.guidance_scale != null && (
+                            <span><span className="font-medium">Guidance:</span> {gp.guidance_scale as number}</span>
+                          )}
+                          {gp.resolution != null && (
+                            <span><span className="font-medium">Resolution:</span> {String(gp.resolution)}</span>
+                          )}
+                          {gp.aspect_ratio != null && (
+                            <span><span className="font-medium">Aspect Ratio:</span> {String(gp.aspect_ratio)}</span>
+                          )}
+                          {gp.safety_tolerance != null && (
+                            <span><span className="font-medium">Safety:</span> {String(gp.safety_tolerance)}</span>
+                          )}
+                          {gp.enable_web_search != null && (
+                            <span><span className="font-medium">Web Search:</span> {gp.enable_web_search ? 'On' : 'Off'}</span>
+                          )}
+                          {gp.actual_seed != null && (
+                            <span><span className="font-medium">Seed:</span> {gp.actual_seed as number}</span>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>

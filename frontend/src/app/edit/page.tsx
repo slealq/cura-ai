@@ -23,6 +23,9 @@ const EDIT_MODELS = [
   { value: 'qwen-image-max-edit', label: 'Qwen Image Max Edit' },
   { value: 'kling-image', label: 'Kling Image' },
   { value: 'wan-25', label: 'Wan 2.5' },
+  { value: 'grok-imagine', label: 'Grok Imagine' },
+  { value: 'nano-banana-pro-edit', label: 'Nano Banana Pro Edit' },
+  { value: 'face-swap', label: 'Face Swap' },
 ];
 
 const KLING_RESOLUTIONS = [
@@ -43,12 +46,46 @@ const KLING_ASPECT_RATIOS = [
   { value: '21:9', label: '21:9' },
 ];
 
+const NANO_ASPECT_RATIOS = [
+  { value: '1:1', label: '1:1' },
+  { value: '16:9', label: '16:9' },
+  { value: '9:16', label: '9:16' },
+  { value: '4:3', label: '4:3' },
+  { value: '3:4', label: '3:4' },
+  { value: '3:2', label: '3:2' },
+  { value: '2:3', label: '2:3' },
+  { value: '21:9', label: '21:9' },
+  { value: '7:4', label: '7:4' },
+  { value: '4:7', label: '4:7' },
+  { value: '5:4', label: '5:4' },
+];
+
+const SAFETY_LEVELS = [
+  { value: '1', label: '1 (Strictest)' },
+  { value: '2', label: '2' },
+  { value: '3', label: '3' },
+  { value: '4', label: '4 (Default)' },
+  { value: '5', label: '5' },
+  { value: '6', label: '6 (Most Permissive)' },
+];
+
 interface SourceImage {
   type: 'gallery' | 'generated' | 'upload';
   id?: number;
   key?: string;
   previewUrl?: string;
   name?: string;
+}
+
+function formatDuration(createdAt: string, completedAt: string | null): string | null {
+  if (!completedAt) return null;
+  const ms = new Date(completedAt).getTime() - new Date(createdAt).getTime();
+  if (ms < 0) return null;
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${minutes}m ${secs}s`;
 }
 
 export default function EditPage() {
@@ -71,14 +108,23 @@ export default function EditPage() {
   // Kling-specific state
   const [resolution, setResolution] = useState('1K');
   const [aspectRatio, setAspectRatio] = useState('auto');
+  // Nano Banana Pro state
+  const [safetyTolerance, setSafetyTolerance] = useState('4');
+  const [enableWebSearch, setEnableWebSearch] = useState(false);
+  // Face swap state
+  const [enableOcclusionPrevention, setEnableOcclusionPrevention] = useState(false);
 
   const isKling = editModel === 'kling-image';
+  const isFaceSwap = editModel === 'face-swap';
 
   // Model capability flags
-  const MODEL_CAPS: Record<string, { maxSources: number; maxImages: number; hasNegativePrompt: boolean; hasPromptExpansion: boolean; hasSafetyChecker: boolean; usesResolution: boolean; maxPromptLen: number }> = {
-    'qwen-image-max-edit': { maxSources: 3, maxImages: 6, hasNegativePrompt: true, hasPromptExpansion: true, hasSafetyChecker: true, usesResolution: false, maxPromptLen: 800 },
-    'kling-image': { maxSources: 10, maxImages: 9, hasNegativePrompt: false, hasPromptExpansion: false, hasSafetyChecker: false, usesResolution: true, maxPromptLen: 2500 },
-    'wan-25': { maxSources: 2, maxImages: 4, hasNegativePrompt: true, hasPromptExpansion: false, hasSafetyChecker: true, usesResolution: false, maxPromptLen: 2000 },
+  const MODEL_CAPS: Record<string, { maxSources: number; maxImages: number; hasNegativePrompt: boolean; hasPromptExpansion: boolean; hasSafetyChecker: boolean; usesResolution: boolean; hasImageSize: boolean; hasSeed: boolean; maxPromptLen: number; hasSafetyTolerance: boolean; hasWebSearch: boolean }> = {
+    'qwen-image-max-edit': { maxSources: 3, maxImages: 6, hasNegativePrompt: true, hasPromptExpansion: true, hasSafetyChecker: true, usesResolution: false, hasImageSize: true, hasSeed: true, maxPromptLen: 800, hasSafetyTolerance: false, hasWebSearch: false },
+    'kling-image': { maxSources: 10, maxImages: 9, hasNegativePrompt: false, hasPromptExpansion: false, hasSafetyChecker: false, usesResolution: true, hasImageSize: false, hasSeed: true, maxPromptLen: 2500, hasSafetyTolerance: false, hasWebSearch: false },
+    'wan-25': { maxSources: 2, maxImages: 4, hasNegativePrompt: true, hasPromptExpansion: false, hasSafetyChecker: true, usesResolution: false, hasImageSize: true, hasSeed: true, maxPromptLen: 2000, hasSafetyTolerance: false, hasWebSearch: false },
+    'grok-imagine': { maxSources: 1, maxImages: 4, hasNegativePrompt: false, hasPromptExpansion: false, hasSafetyChecker: false, usesResolution: false, hasImageSize: false, hasSeed: false, maxPromptLen: 8000, hasSafetyTolerance: false, hasWebSearch: false },
+    'nano-banana-pro-edit': { maxSources: 14, maxImages: 4, hasNegativePrompt: false, hasPromptExpansion: false, hasSafetyChecker: false, usesResolution: true, hasImageSize: false, hasSeed: true, maxPromptLen: 50000, hasSafetyTolerance: true, hasWebSearch: true },
+    'face-swap': { maxSources: 2, maxImages: 1, hasNegativePrompt: false, hasPromptExpansion: false, hasSafetyChecker: false, usesResolution: false, hasImageSize: false, hasSeed: false, maxPromptLen: 0, hasSafetyTolerance: false, hasWebSearch: false },
   };
   const caps = MODEL_CAPS[editModel] || MODEL_CAPS['qwen-image-max-edit'];
 
@@ -129,40 +175,61 @@ export default function EditPage() {
   });
 
   const handleEdit = () => {
-    if (!prompt.trim()) {
-      toast.error('Please enter a prompt');
-      return;
-    }
-    if (sources.length === 0) {
-      toast.error('Please add at least one source image');
-      return;
+    if (isFaceSwap) {
+      if (sources.length !== 2) {
+        toast.error('Face swap requires exactly 2 images: source face and target image');
+        return;
+      }
+    } else {
+      if (!prompt.trim()) {
+        toast.error('Please enter a prompt');
+        return;
+      }
+      if (sources.length === 0) {
+        toast.error('Please add at least one source image');
+        return;
+      }
     }
 
     const params: Parameters<typeof editApi.edit>[0] = {
-      prompt: prompt.trim(),
       edit_model: editModel,
-      num_images: numImages,
-      output_format: outputFormat,
+      num_images: isFaceSwap ? 1 : numImages,
     };
 
-    if (caps.usesResolution) {
-      params.resolution = resolution;
-      params.aspect_ratio = aspectRatio;
-    } else {
-      if (useCustomSize) {
-        params.image_size = { width: customWidth, height: customHeight };
-      } else {
-        params.image_size = imageSize;
+    if (isFaceSwap) {
+      if (enableOcclusionPrevention) {
+        params.enable_occlusion_prevention = true;
       }
-    }
-    if (caps.hasNegativePrompt && negativePrompt.trim()) {
-      params.negative_prompt = negativePrompt.trim();
-    }
-    if (caps.hasPromptExpansion) {
-      params.enable_prompt_expansion = enablePromptExpansion;
-    }
-    if (caps.hasSafetyChecker) {
-      params.enable_safety_checker = enableSafetyChecker;
+    } else {
+      params.prompt = prompt.trim();
+      params.output_format = outputFormat;
+
+      if (caps.usesResolution) {
+        params.resolution = resolution;
+        params.aspect_ratio = aspectRatio;
+      } else if (caps.hasImageSize) {
+        if (useCustomSize) {
+          params.image_size = { width: customWidth, height: customHeight };
+        } else {
+          params.image_size = imageSize;
+        }
+      }
+      if (caps.hasNegativePrompt && negativePrompt.trim()) {
+        params.negative_prompt = negativePrompt.trim();
+      }
+      if (caps.hasPromptExpansion) {
+        params.enable_prompt_expansion = enablePromptExpansion;
+      }
+      if (caps.hasSafetyChecker) {
+        params.enable_safety_checker = enableSafetyChecker;
+      }
+      if (caps.hasSafetyTolerance) {
+        params.safety_tolerance = safetyTolerance;
+      }
+      if (caps.hasWebSearch) {
+        params.enable_web_search = enableWebSearch;
+      }
+      if (caps.hasSeed && seed) params.seed = parseInt(seed);
     }
 
     // Collect source IDs by type
@@ -173,8 +240,6 @@ export default function EditPage() {
     if (galleryIds.length > 0) params.source_image_ids = galleryIds;
     if (generatedIds.length > 0) params.source_generated_ids = generatedIds;
     if (uploadKeys.length > 0) params.source_upload_keys = uploadKeys;
-
-    if (seed) params.seed = parseInt(seed);
 
     editMutation.mutate(params);
   };
@@ -295,7 +360,9 @@ export default function EditPage() {
       >
         {/* Source Images */}
         <div>
-          <label className="block text-sm font-medium mb-2">Source Images</label>
+          <label className="block text-sm font-medium mb-2">
+            {isFaceSwap ? 'Face Swap Images' : 'Source Images'}
+          </label>
           <div className="flex flex-wrap gap-3 items-start">
             {/* Existing source previews */}
             {sources.map((src, idx) => (
@@ -316,7 +383,9 @@ export default function EditPage() {
                   <X className="h-3.5 w-3.5" />
                 </button>
                 <span className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-[10px] text-center py-0.5 rounded-b-lg">
-                  {src.type === 'gallery' ? `#${src.id}` : src.type === 'generated' ? `Gen #${src.id}` : src.name?.slice(0, 12) || 'Upload'}
+                  {isFaceSwap
+                    ? (idx === 0 ? 'Source Face' : 'Target')
+                    : src.type === 'gallery' ? `#${src.id}` : src.type === 'generated' ? `Gen #${src.id}` : src.name?.slice(0, 12) || 'Upload'}
                 </span>
               </div>
             ))}
@@ -359,34 +428,55 @@ export default function EditPage() {
             )}
           </div>
           <p className="text-xs text-muted-foreground mt-1">
-            Add 1-{maxSources} source images. Drag &amp; drop, paste, upload, or browse gallery/generated.
-            {isKling && ' Reference images in your prompt using @Image1, @Image2, etc.'}
-            {editModel === 'wan-25' && ' Max 2 source images (1 for single edit, 2 for multi-reference).'}
+            {isFaceSwap
+              ? 'Add exactly 2 images: first the source face, then the target image to swap the face onto.'
+              : <>
+                  Add 1-{maxSources} source images. Drag &amp; drop, paste, upload, or browse gallery/generated.
+                  {isKling && ' Reference images in your prompt using @Image1, @Image2, etc.'}
+                  {editModel === 'wan-25' && ' Max 2 source images (1 for single edit, 2 for multi-reference).'}
+                </>
+            }
           </p>
         </div>
 
-        {/* Prompt */}
-        <div>
-          <label className="block text-sm font-medium mb-1">
-            Prompt
-            <span className="text-muted-foreground font-normal ml-2">
-              {prompt.length}/{caps.maxPromptLen}
-            </span>
+        {/* Prompt (hidden for face swap) */}
+        {!isFaceSwap && (
+          <div>
+            <label className="block text-sm font-medium mb-1">
+              Prompt
+              <span className="text-muted-foreground font-normal ml-2">
+                {prompt.length}/{caps.maxPromptLen}
+              </span>
+            </label>
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value.slice(0, caps.maxPromptLen))}
+              placeholder={isKling
+                ? "Use @Image1 to reference your source image. e.g. 'Transform @Image1 into a watercolor painting'"
+                : "Describe how you want to edit the image..."}
+              className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-y min-h-[80px]"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  handleEdit();
+                }
+              }}
+            />
+          </div>
+        )}
+
+        {/* Face swap occlusion toggle */}
+        {isFaceSwap && (
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={enableOcclusionPrevention}
+              onChange={(e) => setEnableOcclusionPrevention(e.target.checked)}
+              className="rounded"
+            />
+            Occlusion prevention
+            <span className="text-xs text-muted-foreground">(handles faces covered by hands/objects, costs 2x)</span>
           </label>
-          <textarea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value.slice(0, caps.maxPromptLen))}
-            placeholder={isKling
-              ? "Use @Image1 to reference your source image. e.g. 'Transform @Image1 into a watercolor painting'"
-              : "Describe how you want to edit the image..."}
-            className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-y min-h-[80px]"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                handleEdit();
-              }
-            }}
-          />
-        </div>
+        )}
 
         {/* Controls row */}
         <div className="flex flex-wrap gap-4 items-end">
@@ -404,24 +494,26 @@ export default function EditPage() {
             </select>
           </div>
 
-          {/* Num images */}
-          <div className="w-24">
-            <label className="block text-xs text-muted-foreground mb-1">Images</label>
-            <select
-              value={numImages}
-              onChange={(e) => setNumImages(parseInt(e.target.value))}
-              className="w-full px-3 py-2 border border-border rounded-lg text-sm"
-            >
-              {[1, 2, 3, 4, 6, 9].filter((n) => n <= caps.maxImages).map((n) => (
-                <option key={n} value={n}>{n}</option>
-              ))}
-            </select>
-          </div>
+          {/* Num images (hidden for face swap) */}
+          {!isFaceSwap && (
+            <div className="w-24">
+              <label className="block text-xs text-muted-foreground mb-1">Images</label>
+              <select
+                value={numImages}
+                onChange={(e) => setNumImages(parseInt(e.target.value))}
+                className="w-full px-3 py-2 border border-border rounded-lg text-sm"
+              >
+                {[1, 2, 3, 4, 6, 9].filter((n) => n <= caps.maxImages).map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Edit button */}
           <button
             onClick={handleEdit}
-            disabled={editMutation.isPending || !prompt.trim() || sources.length === 0}
+            disabled={editMutation.isPending || (!isFaceSwap && !prompt.trim()) || sources.length === 0 || (isFaceSwap && sources.length !== 2)}
             className="flex items-center gap-2 px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 font-medium"
           >
             {editMutation.isPending ? (
@@ -433,17 +525,19 @@ export default function EditPage() {
           </button>
         </div>
 
-        {/* Advanced toggle */}
-        <button
-          onClick={() => setShowAdvanced(!showAdvanced)}
-          className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
-          {showAdvanced ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-          Advanced Parameters
-        </button>
+        {/* Advanced toggle (hidden for face swap) */}
+        {!isFaceSwap && (
+          <button
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {showAdvanced ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            Advanced Parameters
+          </button>
+        )}
 
         {/* Advanced params */}
-        {showAdvanced && (
+        {!isFaceSwap && showAdvanced && (
           <div className="border border-border rounded-lg p-4 space-y-4">
             {/* Negative prompt */}
             {caps.hasNegativePrompt && (
@@ -488,7 +582,7 @@ export default function EditPage() {
                     onChange={(e) => setAspectRatio(e.target.value)}
                     className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
                   >
-                    {KLING_ASPECT_RATIOS.map((ar) => (
+                    {(editModel === 'nano-banana-pro-edit' ? NANO_ASPECT_RATIOS : KLING_ASPECT_RATIOS).map((ar) => (
                       <option key={ar.value} value={ar.value}>{ar.label}</option>
                     ))}
                   </select>
@@ -497,7 +591,7 @@ export default function EditPage() {
             )}
 
             {/* Size presets (Qwen/Wan) */}
-            {!caps.usesResolution && (
+            {caps.hasImageSize && (
               <div>
                 <label className="block text-xs text-muted-foreground mb-1">Image Size</label>
                 <div className="flex flex-wrap gap-2">
@@ -561,16 +655,18 @@ export default function EditPage() {
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {/* Seed */}
-              <div>
-                <label className="block text-xs text-muted-foreground mb-1">Seed</label>
-                <input
-                  type="text"
-                  value={seed}
-                  onChange={(e) => setSeed(e.target.value.replace(/\D/g, ''))}
-                  placeholder="Random"
-                  className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
-                />
-              </div>
+              {caps.hasSeed && (
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">Seed</label>
+                  <input
+                    type="text"
+                    value={seed}
+                    onChange={(e) => setSeed(e.target.value.replace(/\D/g, ''))}
+                    placeholder="Random"
+                    className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
+                  />
+                </div>
+              )}
 
               {/* Output format */}
               <div>
@@ -614,6 +710,39 @@ export default function EditPage() {
                 )}
               </div>
             )}
+
+            {/* Safety Tolerance + Web Search */}
+            {(caps.hasSafetyTolerance || caps.hasWebSearch) && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {caps.hasSafetyTolerance && (
+                  <div>
+                    <label className="block text-xs text-muted-foreground mb-1">Safety Tolerance</label>
+                    <select
+                      value={safetyTolerance}
+                      onChange={(e) => setSafetyTolerance(e.target.value)}
+                      className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
+                    >
+                      {SAFETY_LEVELS.map((s) => (
+                        <option key={s.value} value={s.value}>{s.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {caps.hasWebSearch && (
+                  <div className="flex items-end pb-1">
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={enableWebSearch}
+                        onChange={(e) => setEnableWebSearch(e.target.checked)}
+                        className="rounded"
+                      />
+                      Enable web search
+                    </label>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </section>
@@ -637,12 +766,20 @@ export default function EditPage() {
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
             {images.map((img) => (
-              <GeneratedImageCard
-                key={img.id}
-                image={img}
-                onClick={() => setSelectedImageId(img.id)}
-                onDelete={(id) => deleteMutation.mutate(id)}
-              />
+              <div key={img.id} className="relative">
+                <GeneratedImageCard
+                  image={img}
+                  onClick={() => setSelectedImageId(img.id)}
+                  onDelete={(id) => deleteMutation.mutate(id)}
+                />
+                {img.status === 'completed' && img.completed_at && (
+                  <div className="absolute bottom-1 right-1 z-10 pointer-events-none">
+                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-black/60 text-white">
+                      {formatDuration(img.created_at, img.completed_at)}
+                    </span>
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         )}
@@ -685,30 +822,108 @@ export default function EditPage() {
                     )}
                   </div>
                 )}
-                <div className="space-y-2 text-sm">
+                <div className="space-y-3 text-sm">
                   <div>
                     <span className="font-medium">Prompt:</span>
                     <p className="text-muted-foreground mt-0.5">{selectedImage.prompt}</p>
                   </div>
                   {selectedImage.negative_prompt && (
                     <div>
-                      <span className="font-medium">Negative:</span>
+                      <span className="font-medium">Negative Prompt:</span>
                       <p className="text-muted-foreground mt-0.5">{selectedImage.negative_prompt}</p>
                     </div>
                   )}
-                  <div className="flex flex-wrap gap-4">
-                    <span><span className="font-medium">Model:</span> {selectedImage.base_model}</span>
-                    {selectedImage.width && selectedImage.height && (
-                      <span><span className="font-medium">Size:</span> {selectedImage.width}x{selectedImage.height}</span>
-                    )}
-                    {selectedImage.generation_params && (
-                      <>
-                        {(selectedImage.generation_params as Record<string, unknown>).actual_seed && (
-                          <span><span className="font-medium">Seed:</span> {(selectedImage.generation_params as Record<string, unknown>).actual_seed as number}</span>
+                  {(() => {
+                    const gp = (selectedImage.generation_params || {}) as Record<string, unknown>;
+                    const duration = formatDuration(selectedImage.created_at, selectedImage.completed_at);
+                    const modelLabel = EDIT_MODELS.find((m) => m.value === selectedImage.base_model)?.label || selectedImage.base_model;
+                    return (
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-2 bg-muted/30 rounded-lg p-3">
+                        <div>
+                          <span className="text-xs text-muted-foreground">Model</span>
+                          <p className="font-medium">{modelLabel}</p>
+                        </div>
+                        {selectedImage.width != null && selectedImage.height != null && (
+                          <div>
+                            <span className="text-xs text-muted-foreground">Output Size</span>
+                            <p className="font-medium">{selectedImage.width} x {selectedImage.height}</p>
+                          </div>
                         )}
-                      </>
-                    )}
-                  </div>
+                        {duration && (
+                          <div>
+                            <span className="text-xs text-muted-foreground">Duration</span>
+                            <p className="font-medium">{duration}</p>
+                          </div>
+                        )}
+                        {gp.actual_seed != null && (
+                          <div>
+                            <span className="text-xs text-muted-foreground">Seed</span>
+                            <p className="font-medium">{String(gp.actual_seed)}</p>
+                          </div>
+                        )}
+                        {typeof gp.image_size === 'string' && (
+                          <div>
+                            <span className="text-xs text-muted-foreground">Size Preset</span>
+                            <p className="font-medium">{SIZE_PRESETS.find((p) => p.value === gp.image_size)?.label || String(gp.image_size)}</p>
+                          </div>
+                        )}
+                        {typeof gp.image_size === 'object' && gp.image_size !== null && (
+                          <div>
+                            <span className="text-xs text-muted-foreground">Requested Size</span>
+                            <p className="font-medium">{(gp.image_size as { width: number; height: number }).width} x {(gp.image_size as { width: number; height: number }).height}</p>
+                          </div>
+                        )}
+                        {'resolution' in gp && gp.resolution != null && (
+                          <div>
+                            <span className="text-xs text-muted-foreground">Resolution</span>
+                            <p className="font-medium">{String(gp.resolution)}</p>
+                          </div>
+                        )}
+                        {'aspect_ratio' in gp && gp.aspect_ratio != null && (
+                          <div>
+                            <span className="text-xs text-muted-foreground">Aspect Ratio</span>
+                            <p className="font-medium">{String(gp.aspect_ratio)}</p>
+                          </div>
+                        )}
+                        {'output_format' in gp && gp.output_format != null && (
+                          <div>
+                            <span className="text-xs text-muted-foreground">Format</span>
+                            <p className="font-medium uppercase">{String(gp.output_format)}</p>
+                          </div>
+                        )}
+                        {'enable_prompt_expansion' in gp && gp.enable_prompt_expansion != null && (
+                          <div>
+                            <span className="text-xs text-muted-foreground">Prompt Expansion</span>
+                            <p className="font-medium">{gp.enable_prompt_expansion ? 'On' : 'Off'}</p>
+                          </div>
+                        )}
+                        {'enable_safety_checker' in gp && gp.enable_safety_checker != null && (
+                          <div>
+                            <span className="text-xs text-muted-foreground">Safety Checker</span>
+                            <p className="font-medium">{gp.enable_safety_checker ? 'On' : 'Off'}</p>
+                          </div>
+                        )}
+                        {'safety_tolerance' in gp && gp.safety_tolerance != null && (
+                          <div>
+                            <span className="text-xs text-muted-foreground">Safety Tolerance</span>
+                            <p className="font-medium">{String(gp.safety_tolerance)}</p>
+                          </div>
+                        )}
+                        {'enable_web_search' in gp && gp.enable_web_search != null && (
+                          <div>
+                            <span className="text-xs text-muted-foreground">Web Search</span>
+                            <p className="font-medium">{gp.enable_web_search ? 'On' : 'Off'}</p>
+                          </div>
+                        )}
+                        {'enable_occlusion_prevention' in gp && gp.enable_occlusion_prevention != null && (
+                          <div>
+                            <span className="text-xs text-muted-foreground">Occlusion Prevention</span>
+                            <p className="font-medium">{gp.enable_occlusion_prevention ? 'On' : 'Off'}</p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             </div>

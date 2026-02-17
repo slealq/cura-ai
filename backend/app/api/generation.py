@@ -80,6 +80,10 @@ class GenerateRequest(BaseModel):
     guidance_scale: float = Field(3.5, ge=0.0, le=20.0)
     seed: int | None = None
     num_images: int = Field(1, ge=1, le=8)
+    resolution: str | None = None
+    aspect_ratio: str | None = None
+    safety_tolerance: str | None = None
+    enable_web_search: bool | None = None
 
     @model_validator(mode="after")
     def normalize_loras(self) -> "GenerateRequest":
@@ -899,6 +903,14 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
         "guidance_scale": request.guidance_scale,
         "seed": request.seed,
     }
+    if request.resolution:
+        gen_params["resolution"] = request.resolution
+    if request.aspect_ratio:
+        gen_params["aspect_ratio"] = request.aspect_ratio
+    if request.safety_tolerance:
+        gen_params["safety_tolerance"] = request.safety_tolerance
+    if request.enable_web_search is not None:
+        gen_params["enable_web_search"] = request.enable_web_search
     if loras_for_params:
         gen_params["loras"] = loras_for_params
 

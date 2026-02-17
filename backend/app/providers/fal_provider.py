@@ -45,6 +45,13 @@ FAL_MODEL_CONFIG = {
         "default_steps": 2000,
         "default_guidance": 4.0,
     },
+    "nano-banana-pro": {
+        "generation_base_endpoint": "fal-ai/nano-banana-pro",
+        "uses_resolution_aspect": True,
+        "supports_lora": False,
+        "supports_steps_guidance": False,
+        "default_safety_tolerance": "4",
+    },
 }
 
 
@@ -223,6 +230,10 @@ class FalGenerator(BaseGenerator):
         seed: int | None = None,
         loras: list[dict] | None = None,
         cancel_check: Callable[[], bool] | None = None,
+        resolution: str | None = None,
+        aspect_ratio: str | None = None,
+        safety_tolerance: str | None = None,
+        enable_web_search: bool | None = None,
     ) -> GenerationResult:
         """Generate an image via fal.ai.
 
@@ -233,10 +244,27 @@ class FalGenerator(BaseGenerator):
         task_start = time.monotonic()
         poll_interval = 2.0  # seconds between status polls
 
-        # Choose endpoint based on LoRA
-        if loras:
-            endpoint = self.config["generation_lora_endpoint"]
+        # Choose endpoint and build arguments based on model capabilities
+        if self.config.get("uses_resolution_aspect"):
+            # Resolution/aspect_ratio model (e.g. nano-banana-pro) — no LoRA, no steps/guidance
+            endpoint = self.config["generation_base_endpoint"]
             arguments: dict[str, Any] = {
+                "prompt": prompt,
+                "output_format": "png",
+            }
+            if resolution:
+                arguments["resolution"] = resolution
+            if aspect_ratio:
+                arguments["aspect_ratio"] = aspect_ratio
+            if safety_tolerance is not None:
+                arguments["safety_tolerance"] = safety_tolerance
+            if enable_web_search is not None:
+                arguments["enable_web_search"] = enable_web_search
+            if seed is not None:
+                arguments["seed"] = seed
+        elif loras:
+            endpoint = self.config["generation_lora_endpoint"]
+            arguments = {
                 "prompt": prompt,
                 "image_size": {"width": width, "height": height},
                 "num_inference_steps": num_inference_steps,
@@ -245,6 +273,8 @@ class FalGenerator(BaseGenerator):
                 "output_format": "png",
                 "enable_safety_checker": False,
             }
+            if seed is not None:
+                arguments["seed"] = seed
         else:
             endpoint = self.config["generation_base_endpoint"]
             arguments = {
@@ -255,9 +285,8 @@ class FalGenerator(BaseGenerator):
                 "output_format": "png",
                 "enable_safety_checker": False,
             }
-
-        if seed is not None:
-            arguments["seed"] = seed
+            if seed is not None:
+                arguments["seed"] = seed
 
         request_id = None
         try:
@@ -375,6 +404,36 @@ FAL_EDIT_MODEL_CONFIG = {
         "max_source_images": 2,
         "max_num_images": 4,
     },
+    "grok-imagine": {
+        "endpoint": "xai/grok-imagine-image/edit",
+        "supports_negative_prompt": False,
+        "supports_prompt_expansion": False,
+        "supports_safety_checker": False,
+        "max_source_images": 1,
+        "max_num_images": 4,
+        "uses_single_image_url": True,
+    },
+    "face-swap": {
+        "endpoint": "half-moon-ai/ai-face-swap/faceswapimage",
+        "supports_negative_prompt": False,
+        "supports_prompt_expansion": False,
+        "supports_safety_checker": False,
+        "max_source_images": 2,
+        "max_num_images": 1,
+        "uses_face_swap": True,
+    },
+    "nano-banana-pro-edit": {
+        "endpoint": "fal-ai/nano-banana-pro/edit",
+        "supports_negative_prompt": False,
+        "supports_prompt_expansion": False,
+        "supports_safety_checker": False,
+        "max_source_images": 14,
+        "max_num_images": 4,
+        "uses_resolution": True,
+        "uses_aspect_ratio": True,
+        "uses_safety_tolerance": True,
+        "uses_web_search": True,
+    },
 }
 
 
@@ -407,31 +466,51 @@ class FalEditor(BaseEditor):
         poll_interval = 2.0
         endpoint = self.config["endpoint"]
 
-        arguments: dict[str, Any] = {
-            "prompt": prompt,
-            "image_urls": image_urls,
-            "num_images": num_images,
-            "output_format": output_format,
-        }
-
-        if self.config.get("uses_resolution"):
-            # Kling-style: resolution + aspect_ratio instead of image_size
-            resolution = kwargs.get("resolution", "1K")
-            arguments["resolution"] = resolution
-            aspect_ratio = kwargs.get("aspect_ratio", "auto")
-            arguments["aspect_ratio"] = aspect_ratio
+        if self.config.get("uses_face_swap"):
+            # Face swap: source_face_url + target_image_url, no prompt/num_images
+            arguments: dict[str, Any] = {
+                "source_face_url": image_urls[0],
+                "target_image_url": image_urls[1] if len(image_urls) > 1 else image_urls[0],
+            }
+            if kwargs.get("enable_occlusion_prevention"):
+                arguments["enable_occlusion_prevention"] = True
         else:
-            # Qwen-style: image_size + safety/expansion toggles
-            arguments["enable_safety_checker"] = enable_safety_checker
-            if self.config["supports_prompt_expansion"]:
-                arguments["enable_prompt_expansion"] = enable_prompt_expansion
-            if negative_prompt and self.config["supports_negative_prompt"]:
-                arguments["negative_prompt"] = negative_prompt
-            if image_size is not None:
-                arguments["image_size"] = image_size
+            arguments = {
+                "prompt": prompt,
+                "num_images": num_images,
+                "output_format": output_format,
+            }
 
-        if seed is not None:
-            arguments["seed"] = seed
+            # Grok uses singular image_url, others use image_urls array
+            if self.config.get("uses_single_image_url"):
+                arguments["image_url"] = image_urls[0]
+            else:
+                arguments["image_urls"] = image_urls
+
+            if self.config.get("uses_resolution"):
+                # Kling-style: resolution + aspect_ratio instead of image_size
+                resolution = kwargs.get("resolution", "1K")
+                arguments["resolution"] = resolution
+                aspect_ratio = kwargs.get("aspect_ratio", "auto")
+                arguments["aspect_ratio"] = aspect_ratio
+            elif not self.config.get("uses_single_image_url"):
+                # Qwen/Wan-style: image_size + safety/expansion toggles
+                if self.config["supports_safety_checker"]:
+                    arguments["enable_safety_checker"] = enable_safety_checker
+                if self.config["supports_prompt_expansion"]:
+                    arguments["enable_prompt_expansion"] = enable_prompt_expansion
+                if negative_prompt and self.config["supports_negative_prompt"]:
+                    arguments["negative_prompt"] = negative_prompt
+                if image_size is not None:
+                    arguments["image_size"] = image_size
+
+            if self.config.get("uses_safety_tolerance") and kwargs.get("safety_tolerance") is not None:
+                arguments["safety_tolerance"] = kwargs["safety_tolerance"]
+            if self.config.get("uses_web_search") and kwargs.get("enable_web_search") is not None:
+                arguments["enable_web_search"] = kwargs["enable_web_search"]
+
+            if seed is not None:
+                arguments["seed"] = seed
 
         request_id = None
         try:
@@ -455,9 +534,16 @@ class FalEditor(BaseEditor):
 
             result = handle.get()
 
-            images_data = result.get("images", [])
-            if not images_data:
-                raise RuntimeError("No images returned from fal.ai edit")
+            # Face swap returns singular "image", others return "images" array
+            if self.config.get("uses_face_swap"):
+                single_image = result.get("image")
+                if not single_image:
+                    raise RuntimeError("No image returned from fal.ai face swap")
+                images_data = [single_image]
+            else:
+                images_data = result.get("images", [])
+                if not images_data:
+                    raise RuntimeError("No images returned from fal.ai edit")
 
             downloaded: list[bytes] = []
             widths: list[int] = []

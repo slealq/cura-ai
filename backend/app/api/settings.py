@@ -550,8 +550,11 @@ def _get_fal_models() -> list[ProviderModelInfo]:
         ProviderModelInfo(id="fal-ai/flux/dev", name="Flux.1 Dev", capabilities=["generation"]),
         ProviderModelInfo(id="fal-ai/flux-lora", name="Flux LoRA", capabilities=["generation", "lora"]),
         ProviderModelInfo(id="fal-ai/flux-lora-fast-training", name="Flux LoRA Fast Training", capabilities=["training"]),
+        # Generation endpoints (no LoRA)
+        ProviderModelInfo(id="fal-ai/nano-banana-pro", name="Nano Banana Pro", capabilities=["generation"]),
         # Edit endpoints
         ProviderModelInfo(id="qwen-image-max-edit", name="Qwen Image Max Edit", capabilities=["edit"]),
+        ProviderModelInfo(id="nano-banana-pro-edit", name="Nano Banana Pro Edit", capabilities=["edit"]),
     ]
 
 

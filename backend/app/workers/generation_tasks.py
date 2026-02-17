@@ -563,6 +563,10 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
                 seed=params.get("seed"),
                 loras=loras_for_provider,
                 cancel_check=_is_cancelled,
+                resolution=params.get("resolution"),
+                aspect_ratio=params.get("aspect_ratio"),
+                safety_tolerance=params.get("safety_tolerance"),
+                enable_web_search=params.get("enable_web_search"),
             )
         )
 
@@ -874,6 +878,12 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
             edit_kwargs["resolution"] = params["resolution"]
         if "aspect_ratio" in params:
             edit_kwargs["aspect_ratio"] = params["aspect_ratio"]
+        if params.get("enable_occlusion_prevention"):
+            edit_kwargs["enable_occlusion_prevention"] = True
+        if "safety_tolerance" in params:
+            edit_kwargs["safety_tolerance"] = params["safety_tolerance"]
+        if "enable_web_search" in params:
+            edit_kwargs["enable_web_search"] = params["enable_web_search"]
 
         editor = get_editor(db=db, edit_model=edit_model, user_id=user_id)
         result = _run_async(editor.edit(**edit_kwargs))

@@ -51,6 +51,14 @@ DEFAULT_EDIT_CONFIGS = {
         "output_format": "png",
         "enable_safety_checker": True,
     },
+    "grok-imagine": {
+        "num_images": 1,
+        "output_format": "jpeg",
+    },
+    "face-swap": {
+        "num_images": 1,
+        "enable_occlusion_prevention": False,
+    },
 }
 
 DEFAULT_BASE_MODEL = "flux-dev"

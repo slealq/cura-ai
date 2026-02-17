@@ -22,7 +22,7 @@ router = APIRouter(prefix="/edit", tags=["edit"])
 class EditImageRequest(BaseModel):
     """Request to edit images."""
 
-    prompt: str = Field(..., min_length=1, max_length=2500)
+    prompt: str = Field("", max_length=8000)
     negative_prompt: str | None = Field(None, max_length=500)
     source_image_ids: list[int] | None = None
     source_generated_ids: list[int] | None = None
@@ -37,6 +37,11 @@ class EditImageRequest(BaseModel):
     # Kling-specific fields
     resolution: str | None = None  # 1K, 2K, 4K
     aspect_ratio: str | None = None  # 16:9, 9:16, 1:1, 4:3, 3:4, 3:2, 2:3, 21:9, auto
+    # Nano Banana Pro fields
+    safety_tolerance: str | None = None
+    enable_web_search: bool | None = None
+    # Face swap fields
+    enable_occlusion_prevention: bool = False
 
 
 class EditImageResponse(BaseModel):
@@ -80,6 +85,16 @@ async def edit_images(
 
     model_config = FAL_EDIT_MODEL_CONFIG[request.edit_model]
 
+    is_face_swap = model_config.get("uses_face_swap", False)
+
+    # Require prompt for non-face-swap models
+    if not is_face_swap and not request.prompt.strip():
+        raise HTTPException(status_code=400, detail="Prompt is required for this model")
+
+    # Default prompt for face-swap display
+    if is_face_swap and not request.prompt.strip():
+        request.prompt = "Face swap"
+
     # Collect and validate source images
     source_count = 0
     source_refs: dict = {}
@@ -104,6 +119,12 @@ async def edit_images(
         raise HTTPException(
             status_code=400,
             detail=f"Maximum {max_sources} source images allowed for {request.edit_model}",
+        )
+
+    if is_face_swap and source_count != 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Face swap requires exactly 2 images: source face and target image",
         )
 
     # Validate gallery image IDs exist
@@ -140,6 +161,12 @@ async def edit_images(
         gen_params["resolution"] = request.resolution
     if request.aspect_ratio is not None:
         gen_params["aspect_ratio"] = request.aspect_ratio
+    if request.safety_tolerance is not None:
+        gen_params["safety_tolerance"] = request.safety_tolerance
+    if request.enable_web_search is not None:
+        gen_params["enable_web_search"] = request.enable_web_search
+    if request.enable_occlusion_prevention:
+        gen_params["enable_occlusion_prevention"] = True
 
     # Create job
     try:

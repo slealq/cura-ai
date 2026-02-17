@@ -882,6 +882,10 @@ export const generationApi = {
     guidance_scale?: number;
     seed?: number;
     num_images?: number;
+    resolution?: string;
+    aspect_ratio?: string;
+    safety_tolerance?: string;
+    enable_web_search?: boolean;
   }): Promise<{ status: string; job_id: number; generated_image_ids: number[] }> => {
     const { data } = await api.post('/generation/generate', params);
     return data;
@@ -958,7 +962,7 @@ export const generationApi = {
 // Edit API
 export const editApi = {
   edit: async (params: {
-    prompt: string;
+    prompt?: string;
     negative_prompt?: string;
     source_image_ids?: number[];
     source_generated_ids?: number[];
@@ -972,6 +976,9 @@ export const editApi = {
     enable_safety_checker?: boolean;
     resolution?: string;
     aspect_ratio?: string;
+    enable_occlusion_prevention?: boolean;
+    safety_tolerance?: string;
+    enable_web_search?: boolean;
   }): Promise<{ status: string; job_id: number; generated_image_ids: number[] }> => {
     const { data } = await api.post('/edit', params);
     return data;
