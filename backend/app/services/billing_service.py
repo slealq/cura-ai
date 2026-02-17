@@ -309,7 +309,7 @@ class BillingService:
         cost_per_input_token: Decimal | None = None,
         cost_per_output_token: Decimal | None = None,
         cost_per_call: Decimal | None = None,
-        platform_markup: Decimal = Decimal("1.0"),
+        platform_markup: Decimal = Decimal("2.0"),
         entry_id: int | None = None,
     ) -> CostCatalog:
         """Create or update a cost catalog entry."""

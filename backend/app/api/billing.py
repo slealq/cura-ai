@@ -54,7 +54,7 @@ class CatalogEntryRequest(BaseModel):
     cost_per_input_token: float | None = 0
     cost_per_output_token: float | None = 0
     cost_per_call: float | None = 0
-    platform_markup: float = 1.0
+    platform_markup: float = 2.0
 
 
 class CatalogEntryResponse(BaseModel):

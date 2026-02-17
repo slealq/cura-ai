@@ -44,7 +44,7 @@ class CostCatalog(Base):
         Numeric(12, 6), nullable=True, default=0
     )
     platform_markup: Mapped[Decimal] = mapped_column(
-        Numeric(5, 4), nullable=False, default=Decimal("1.0")
+        Numeric(5, 4), nullable=False, default=Decimal("2.0")
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(

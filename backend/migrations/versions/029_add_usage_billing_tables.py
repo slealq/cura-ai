@@ -30,7 +30,7 @@ def upgrade() -> None:
         sa.Column("cost_per_input_token", sa.Numeric(20, 12), nullable=True, server_default="0"),
         sa.Column("cost_per_output_token", sa.Numeric(20, 12), nullable=True, server_default="0"),
         sa.Column("cost_per_call", sa.Numeric(12, 6), nullable=True, server_default="0"),
-        sa.Column("platform_markup", sa.Numeric(5, 4), nullable=False, server_default="1.0"),
+        sa.Column("platform_markup", sa.Numeric(5, 4), nullable=False, server_default="2.0"),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
@@ -123,26 +123,26 @@ def upgrade() -> None:
     # --- Seed cost catalog ---
     catalog_entries = [
         # OpenAI GPT-4o operations
-        ("openai", "gpt-4o", "tag", "0.0000025", "0.00001", "0", "1.0"),
-        ("openai", "gpt-4o", "describe", "0.0000025", "0.00001", "0", "1.0"),
-        ("openai", "gpt-4o", "evaluate", "0.0000025", "0.00001", "0", "1.0"),
-        ("openai", "gpt-4o", "evaluate_creative", "0.0000025", "0.00001", "0", "1.0"),
-        ("openai", "gpt-4o", "summarize", "0.0000025", "0.00001", "0", "1.0"),
-        ("openai", "gpt-4o", "summarize_eval", "0.0000025", "0.00001", "0", "1.0"),
-        ("openai", "gpt-4o", "generate_prompts", "0.0000025", "0.00001", "0", "1.0"),
+        ("openai", "gpt-4o", "tag", "0.0000025", "0.00001", "0", "2.0"),
+        ("openai", "gpt-4o", "describe", "0.0000025", "0.00001", "0", "2.0"),
+        ("openai", "gpt-4o", "evaluate", "0.0000025", "0.00001", "0", "2.0"),
+        ("openai", "gpt-4o", "evaluate_creative", "0.0000025", "0.00001", "0", "2.0"),
+        ("openai", "gpt-4o", "summarize", "0.0000025", "0.00001", "0", "2.0"),
+        ("openai", "gpt-4o", "summarize_eval", "0.0000025", "0.00001", "0", "2.0"),
+        ("openai", "gpt-4o", "generate_prompts", "0.0000025", "0.00001", "0", "2.0"),
         # OpenAI embeddings
-        ("openai", "text-embedding-3-small", "embed", "0.00000002", "0", "0", "1.0"),
+        ("openai", "text-embedding-3-small", "embed", "0.00000002", "0", "0", "2.0"),
         # Anthropic operations
-        ("anthropic", "claude-sonnet-4-20250514", "tag", "0.000003", "0.000015", "0", "1.0"),
-        ("anthropic", "claude-sonnet-4-20250514", "describe", "0.000003", "0.000015", "0", "1.0"),
-        ("anthropic", "claude-sonnet-4-20250514", "evaluate", "0.000003", "0.000015", "0", "1.0"),
-        ("anthropic", "claude-sonnet-4-20250514", "summarize", "0.000003", "0.000015", "0", "1.0"),
+        ("anthropic", "claude-sonnet-4-20250514", "tag", "0.000003", "0.000015", "0", "2.0"),
+        ("anthropic", "claude-sonnet-4-20250514", "describe", "0.000003", "0.000015", "0", "2.0"),
+        ("anthropic", "claude-sonnet-4-20250514", "evaluate", "0.000003", "0.000015", "0", "2.0"),
+        ("anthropic", "claude-sonnet-4-20250514", "summarize", "0.000003", "0.000015", "0", "2.0"),
         # fal.ai operations (per-call pricing, wildcard model)
-        ("fal", "*", "generate", "0", "0", "0.04", "1.0"),
-        ("fal", "*", "train", "0", "0", "5.00", "1.0"),
-        ("fal", "*", "edit", "0", "0", "0.03", "1.0"),
-        ("fal", "openrouter/*", "tag", "0", "0", "0.02", "1.0"),
-        ("fal", "openrouter/*", "describe", "0", "0", "0.02", "1.0"),
+        ("fal", "*", "generate", "0", "0", "0.04", "2.0"),
+        ("fal", "*", "train", "0", "0", "5.00", "2.0"),
+        ("fal", "*", "edit", "0", "0", "0.03", "2.0"),
+        ("fal", "openrouter/*", "tag", "0", "0", "0.02", "2.0"),
+        ("fal", "openrouter/*", "describe", "0", "0", "0.02", "2.0"),
     ]
     for provider, model, operation, cpit, cpot, cpc, markup in catalog_entries:
         conn.execute(
