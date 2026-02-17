@@ -193,6 +193,7 @@ class FolderService:
         folder_id: int,
         status: ImageStatus | None = None,
         min_status: ImageStatus | None = None,
+        max_status: ImageStatus | None = None,
         skip: int = 0,
         limit: int = 50,
     ) -> list[Image]:
@@ -208,6 +209,10 @@ class FolderService:
             min_rank = STATUS_ORDER.get(min_status, 0)
             eligible = [s for s, rank in STATUS_ORDER.items() if rank >= min_rank]
             query = query.filter(Image.status.in_(eligible))
+        elif max_status:
+            max_rank = STATUS_ORDER.get(max_status, 6)
+            eligible = [s for s, rank in STATUS_ORDER.items() if rank <= max_rank]
+            query = query.filter(Image.status.in_(eligible))
         return query.order_by(FolderImage.added_at.desc()).offset(skip).limit(limit).all()
 
     def count_folder_images(
@@ -215,6 +220,7 @@ class FolderService:
         folder_id: int,
         status: ImageStatus | None = None,
         min_status: ImageStatus | None = None,
+        max_status: ImageStatus | None = None,
     ) -> int:
         query = (
             self.db.query(func.count(FolderImage.id))
@@ -226,6 +232,10 @@ class FolderService:
         elif min_status:
             min_rank = STATUS_ORDER.get(min_status, 0)
             eligible = [s for s, rank in STATUS_ORDER.items() if rank >= min_rank]
+            query = query.filter(Image.status.in_(eligible))
+        elif max_status:
+            max_rank = STATUS_ORDER.get(max_status, 6)
+            eligible = [s for s, rank in STATUS_ORDER.items() if rank <= max_rank]
             query = query.filter(Image.status.in_(eligible))
         return query.scalar() or 0
 

@@ -236,7 +236,9 @@ async def upload_images_batch(
 async def list_images(
     status: ImageStatus | None = None,
     min_status: ImageStatus | None = None,
+    max_status: ImageStatus | None = None,
     source: ImageSource | None = None,
+    in_folder: bool | None = None,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -247,11 +249,13 @@ async def list_images(
     images = image_service.get_images(
         status=status,
         min_status=min_status,
+        max_status=max_status,
         source=source,
+        in_folder=in_folder,
         skip=skip,
         limit=limit,
     )
-    total = image_service.count_images(status=status, min_status=min_status)
+    total = image_service.count_images(status=status, min_status=min_status, max_status=max_status, in_folder=in_folder)
 
     return ImageListResponse(
         items=[ImageResponse.model_validate(img) for img in images],
@@ -299,6 +303,18 @@ async def get_image_folders(image_id: int, db: Session = Depends(get_db), curren
     folder_service = get_folder_service(db, current_user.id)
     folders = folder_service.get_image_folders(image_id)
     return [{"id": f.id, "name": f.name} for f in folders]
+
+
+class BatchDeleteRequest(BaseModel):
+    image_ids: list[int]
+
+
+@router.post("/batch-delete")
+async def batch_delete_images(request: BatchDeleteRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Delete multiple images."""
+    image_service = get_image_service(db, current_user.id)
+    deleted = image_service.delete_images_batch(request.image_ids)
+    return {"status": "deleted", "deleted": deleted}
 
 
 @router.delete("/{image_id}")

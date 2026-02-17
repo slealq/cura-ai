@@ -2,28 +2,19 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Search, RefreshCw } from 'lucide-react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { imagesApi, clustersApi } from '@/lib/api';
+import { Search } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { imagesApi } from '@/lib/api';
 import { cn, getStatusColor } from '@/lib/utils';
 
 export default function Header() {
   const router = useRouter();
-  const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState('');
 
   const { data: stats } = useQuery({
     queryKey: ['stats'],
     queryFn: imagesApi.getStats,
     refetchInterval: 10000,
-  });
-
-  const reclusterMutation = useMutation({
-    mutationFn: () => clustersApi.recluster(),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['clusters'] });
-      queryClient.invalidateQueries({ queryKey: ['stats'] });
-    },
   });
 
   const handleSearch = (e: React.FormEvent) => {
@@ -71,21 +62,6 @@ export default function Header() {
             )}
           </div>
         )}
-
-        <button
-          onClick={() => reclusterMutation.mutate()}
-          disabled={reclusterMutation.isPending}
-          className={cn(
-            'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-            'bg-primary text-primary-foreground hover:bg-primary/90',
-            'disabled:opacity-50 disabled:cursor-not-allowed'
-          )}
-        >
-          <RefreshCw
-            className={cn('h-4 w-4', reclusterMutation.isPending && 'animate-spin')}
-          />
-          Recluster
-        </button>
       </div>
     </header>
   );

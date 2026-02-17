@@ -38,7 +38,7 @@ const BADGE_COLORS: Record<string, { bg: string; text: string; border: string; d
 
 const navigation = [
   { name: 'Upload', href: '/upload', icon: Upload },
-  { name: 'Folders', href: '/images', icon: FolderOpen },
+  { name: 'Images', href: '/images', icon: FolderOpen },
   { name: 'Clusters', href: '/clusters', icon: LayoutGrid },
   { name: 'Models', href: '/models', icon: Box },
   { name: 'Vision', href: '/vision', icon: Eye },
