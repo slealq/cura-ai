@@ -25,6 +25,11 @@ celery_app = Celery(
     ],
 )
 
+# Disable mingle (worker-to-worker sync at startup) — causes KeyError crashes
+# in kombu Redis transport when multiple workers start simultaneously and
+# race on file descriptor tracking.
+celery_app.steps['consumer'].discard('celery.worker.consumer.mingle:Mingle')
+
 celery_app.conf.update(
     # Task settings
     task_serializer="json",

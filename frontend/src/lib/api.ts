@@ -970,6 +970,8 @@ export const editApi = {
     output_format?: string;
     enable_prompt_expansion?: boolean;
     enable_safety_checker?: boolean;
+    resolution?: string;
+    aspect_ratio?: string;
   }): Promise<{ status: string; job_id: number; generated_image_ids: number[] }> => {
     const { data } = await api.post('/edit', params);
     return data;

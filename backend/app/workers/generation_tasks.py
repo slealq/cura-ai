@@ -870,6 +870,10 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
             edit_kwargs["image_size"] = params["image_size"]
         if "seed" in params and params["seed"] is not None:
             edit_kwargs["seed"] = params["seed"]
+        if "resolution" in params:
+            edit_kwargs["resolution"] = params["resolution"]
+        if "aspect_ratio" in params:
+            edit_kwargs["aspect_ratio"] = params["aspect_ratio"]
 
         editor = get_editor(db=db, edit_model=edit_model, user_id=user_id)
         result = _run_async(editor.edit(**edit_kwargs))

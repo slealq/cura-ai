@@ -21,6 +21,26 @@ const SIZE_PRESETS = [
 
 const EDIT_MODELS = [
   { value: 'qwen-image-max-edit', label: 'Qwen Image Max Edit' },
+  { value: 'kling-image', label: 'Kling Image' },
+  { value: 'wan-25', label: 'Wan 2.5' },
+];
+
+const KLING_RESOLUTIONS = [
+  { value: '1K', label: '1K' },
+  { value: '2K', label: '2K' },
+  { value: '4K', label: '4K' },
+];
+
+const KLING_ASPECT_RATIOS = [
+  { value: 'auto', label: 'Auto' },
+  { value: '1:1', label: '1:1' },
+  { value: '16:9', label: '16:9' },
+  { value: '9:16', label: '9:16' },
+  { value: '4:3', label: '4:3' },
+  { value: '3:4', label: '3:4' },
+  { value: '3:2', label: '3:2' },
+  { value: '2:3', label: '2:3' },
+  { value: '21:9', label: '21:9' },
 ];
 
 interface SourceImage {
@@ -48,6 +68,19 @@ export default function EditPage() {
   const [outputFormat, setOutputFormat] = useState('png');
   const [enablePromptExpansion, setEnablePromptExpansion] = useState(true);
   const [enableSafetyChecker, setEnableSafetyChecker] = useState(true);
+  // Kling-specific state
+  const [resolution, setResolution] = useState('1K');
+  const [aspectRatio, setAspectRatio] = useState('auto');
+
+  const isKling = editModel === 'kling-image';
+
+  // Model capability flags
+  const MODEL_CAPS: Record<string, { maxSources: number; maxImages: number; hasNegativePrompt: boolean; hasPromptExpansion: boolean; hasSafetyChecker: boolean; usesResolution: boolean; maxPromptLen: number }> = {
+    'qwen-image-max-edit': { maxSources: 3, maxImages: 6, hasNegativePrompt: true, hasPromptExpansion: true, hasSafetyChecker: true, usesResolution: false, maxPromptLen: 800 },
+    'kling-image': { maxSources: 10, maxImages: 9, hasNegativePrompt: false, hasPromptExpansion: false, hasSafetyChecker: false, usesResolution: true, maxPromptLen: 2500 },
+    'wan-25': { maxSources: 2, maxImages: 4, hasNegativePrompt: true, hasPromptExpansion: false, hasSafetyChecker: true, usesResolution: false, maxPromptLen: 2000 },
+  };
+  const caps = MODEL_CAPS[editModel] || MODEL_CAPS['qwen-image-max-edit'];
 
   // Source images state
   const [sources, setSources] = useState<SourceImage[]>([]);
@@ -107,13 +140,30 @@ export default function EditPage() {
 
     const params: Parameters<typeof editApi.edit>[0] = {
       prompt: prompt.trim(),
-      negative_prompt: negativePrompt.trim() || undefined,
       edit_model: editModel,
       num_images: numImages,
       output_format: outputFormat,
-      enable_prompt_expansion: enablePromptExpansion,
-      enable_safety_checker: enableSafetyChecker,
     };
+
+    if (caps.usesResolution) {
+      params.resolution = resolution;
+      params.aspect_ratio = aspectRatio;
+    } else {
+      if (useCustomSize) {
+        params.image_size = { width: customWidth, height: customHeight };
+      } else {
+        params.image_size = imageSize;
+      }
+    }
+    if (caps.hasNegativePrompt && negativePrompt.trim()) {
+      params.negative_prompt = negativePrompt.trim();
+    }
+    if (caps.hasPromptExpansion) {
+      params.enable_prompt_expansion = enablePromptExpansion;
+    }
+    if (caps.hasSafetyChecker) {
+      params.enable_safety_checker = enableSafetyChecker;
+    }
 
     // Collect source IDs by type
     const galleryIds = sources.filter((s) => s.type === 'gallery').map((s) => s.id!);
@@ -124,12 +174,6 @@ export default function EditPage() {
     if (generatedIds.length > 0) params.source_generated_ids = generatedIds;
     if (uploadKeys.length > 0) params.source_upload_keys = uploadKeys;
 
-    if (useCustomSize) {
-      params.image_size = { width: customWidth, height: customHeight };
-    } else {
-      params.image_size = imageSize;
-    }
-
     if (seed) params.seed = parseInt(seed);
 
     editMutation.mutate(params);
@@ -139,11 +183,12 @@ export default function EditPage() {
     setSources(sources.filter((_, i) => i !== index));
   };
 
+  const maxSources = caps.maxSources;
+
   const handleFileUpload = useCallback(async (files: FileList | File[]) => {
-    const maxSources = 3;
     const remaining = maxSources - sources.length;
     if (remaining <= 0) {
-      toast.error('Maximum 3 source images');
+      toast.error(`Maximum ${maxSources} source images`);
       return;
     }
 
@@ -152,8 +197,8 @@ export default function EditPage() {
 
     try {
       for (const file of filesToProcess) {
-        if (file.size > 10 * 1024 * 1024) {
-          toast.error(`${file.name} is too large (max 10MB)`);
+        if (file.size > 30 * 1024 * 1024) {
+          toast.error(`${file.name} is too large (max 30MB)`);
           continue;
         }
         const result = await editApi.uploadSource(file);
@@ -168,7 +213,7 @@ export default function EditPage() {
     } finally {
       setUploading(false);
     }
-  }, [sources.length]);
+  }, [sources.length, maxSources]);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -198,14 +243,13 @@ export default function EditPage() {
     [handleFileUpload]
   );
 
-  const handlePickerSelect = (sourceType: 'gallery' | 'generated', ids: number[]) => {
-    // Remove existing selections of this type
-    const otherSources = sources.filter((s) => s.type !== sourceType);
-    const newSources = ids.map((id) => ({
-      type: sourceType as 'gallery' | 'generated',
-      id,
+  const handlePickerDone = (items: import('@/components/ImagePickerModal').PickedImage[]) => {
+    const newSources: SourceImage[] = items.map((item) => ({
+      type: item.type,
+      id: item.id,
+      previewUrl: item.previewUrl,
     }));
-    setSources([...otherSources, ...newSources]);
+    setSources((prev) => [...prev, ...newSources]);
   };
 
   const images = editedImages?.items || [];
@@ -213,8 +257,7 @@ export default function EditPage() {
     ? images.find((img) => img.id === selectedImageId) ?? null
     : null;
 
-  const selectedGalleryIds = sources.filter((s) => s.type === 'gallery').map((s) => s.id!);
-  const selectedGeneratedIds = sources.filter((s) => s.type === 'generated').map((s) => s.id!);
+  const alreadySelectedIds = sources.filter((s) => s.type === 'gallery' || s.type === 'generated').map((s) => s.id!);
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
@@ -256,13 +299,13 @@ export default function EditPage() {
           <div className="flex flex-wrap gap-3 items-start">
             {/* Existing source previews */}
             {sources.map((src, idx) => (
-              <div key={idx} className="relative group w-20 h-20">
+              <div key={idx} className="relative group w-32 h-32">
                 <div className="w-full h-full rounded-lg border border-border overflow-hidden bg-muted/30">
                   {src.previewUrl ? (
                     <img src={src.previewUrl} alt="" className="w-full h-full object-cover" />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center">
-                      <ImageIcon className="h-6 w-6 text-muted-foreground" />
+                      <ImageIcon className="h-8 w-8 text-muted-foreground" />
                     </div>
                   )}
                 </div>
@@ -270,29 +313,29 @@ export default function EditPage() {
                   onClick={() => removeSource(idx)}
                   className="absolute -top-1.5 -right-1.5 p-0.5 rounded-full bg-red-500 text-white opacity-0 group-hover:opacity-100 transition-opacity"
                 >
-                  <X className="h-3 w-3" />
+                  <X className="h-3.5 w-3.5" />
                 </button>
-                <span className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-[9px] text-center py-0.5 rounded-b-lg">
-                  {src.type === 'gallery' ? `#${src.id}` : src.type === 'generated' ? `Gen #${src.id}` : src.name?.slice(0, 8) || 'Upload'}
+                <span className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-[10px] text-center py-0.5 rounded-b-lg">
+                  {src.type === 'gallery' ? `#${src.id}` : src.type === 'generated' ? `Gen #${src.id}` : src.name?.slice(0, 12) || 'Upload'}
                 </span>
               </div>
             ))}
 
             {/* Add source buttons */}
-            {sources.length < 3 && (
+            {sources.length < maxSources && (
               <>
                 {/* Drop zone / upload */}
                 <label
-                  className="w-20 h-20 rounded-lg border-2 border-dashed border-border hover:border-primary/50 flex flex-col items-center justify-center cursor-pointer transition-colors"
+                  className="w-32 h-32 rounded-lg border-2 border-dashed border-border hover:border-primary/50 flex flex-col items-center justify-center cursor-pointer transition-colors"
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={handleDrop}
                 >
                   {uploading ? (
-                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                   ) : (
                     <>
-                      <Upload className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-[9px] text-muted-foreground mt-0.5">Upload</span>
+                      <Upload className="h-5 w-5 text-muted-foreground" />
+                      <span className="text-xs text-muted-foreground mt-1">Upload</span>
                     </>
                   )}
                   <input
@@ -307,16 +350,18 @@ export default function EditPage() {
                 {/* Browse button */}
                 <button
                   onClick={() => setPickerOpen(true)}
-                  className="w-20 h-20 rounded-lg border-2 border-dashed border-border hover:border-primary/50 flex flex-col items-center justify-center transition-colors"
+                  className="w-32 h-32 rounded-lg border-2 border-dashed border-border hover:border-primary/50 flex flex-col items-center justify-center transition-colors"
                 >
-                  <ImageIcon className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-[9px] text-muted-foreground mt-0.5">Browse</span>
+                  <ImageIcon className="h-5 w-5 text-muted-foreground" />
+                  <span className="text-xs text-muted-foreground mt-1">Browse</span>
                 </button>
               </>
             )}
           </div>
           <p className="text-xs text-muted-foreground mt-1">
-            Add 1-3 source images. Drag &amp; drop, paste, upload, or browse gallery/generated.
+            Add 1-{maxSources} source images. Drag &amp; drop, paste, upload, or browse gallery/generated.
+            {isKling && ' Reference images in your prompt using @Image1, @Image2, etc.'}
+            {editModel === 'wan-25' && ' Max 2 source images (1 for single edit, 2 for multi-reference).'}
           </p>
         </div>
 
@@ -325,13 +370,15 @@ export default function EditPage() {
           <label className="block text-sm font-medium mb-1">
             Prompt
             <span className="text-muted-foreground font-normal ml-2">
-              {prompt.length}/800
+              {prompt.length}/{caps.maxPromptLen}
             </span>
           </label>
           <textarea
             value={prompt}
-            onChange={(e) => setPrompt(e.target.value.slice(0, 800))}
-            placeholder="Describe how you want to edit the image..."
+            onChange={(e) => setPrompt(e.target.value.slice(0, caps.maxPromptLen))}
+            placeholder={isKling
+              ? "Use @Image1 to reference your source image. e.g. 'Transform @Image1 into a watercolor painting'"
+              : "Describe how you want to edit the image..."}
             className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-y min-h-[80px]"
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
@@ -365,7 +412,7 @@ export default function EditPage() {
               onChange={(e) => setNumImages(parseInt(e.target.value))}
               className="w-full px-3 py-2 border border-border rounded-lg text-sm"
             >
-              {[1, 2, 3, 4, 6].map((n) => (
+              {[1, 2, 3, 4, 6, 9].filter((n) => n <= caps.maxImages).map((n) => (
                 <option key={n} value={n}>{n}</option>
               ))}
             </select>
@@ -399,77 +446,118 @@ export default function EditPage() {
         {showAdvanced && (
           <div className="border border-border rounded-lg p-4 space-y-4">
             {/* Negative prompt */}
-            <div>
-              <label className="block text-xs text-muted-foreground mb-1">Negative Prompt</label>
-              <input
-                type="text"
-                value={negativePrompt}
-                onChange={(e) => setNegativePrompt(e.target.value.slice(0, 500))}
-                placeholder="Things to avoid..."
-                className="w-full px-3 py-2 border border-border rounded-lg text-sm"
-              />
-            </div>
+            {caps.hasNegativePrompt && (
+              <div>
+                <label className="block text-xs text-muted-foreground mb-1">Negative Prompt</label>
+                <input
+                  type="text"
+                  value={negativePrompt}
+                  onChange={(e) => setNegativePrompt(e.target.value.slice(0, 500))}
+                  placeholder="Things to avoid..."
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm"
+                />
+              </div>
+            )}
 
-            {/* Size presets */}
-            <div>
-              <label className="block text-xs text-muted-foreground mb-1">Image Size</label>
-              <div className="flex flex-wrap gap-2">
-                {SIZE_PRESETS.map((preset) => (
+            {/* Resolution + Aspect Ratio (Kling) */}
+            {caps.usesResolution && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">Resolution</label>
+                  <div className="flex gap-2">
+                    {KLING_RESOLUTIONS.map((r) => (
+                      <button
+                        key={r.value}
+                        onClick={() => setResolution(r.value)}
+                        className={cn(
+                          'px-4 py-1.5 text-xs border rounded-lg transition-colors',
+                          resolution === r.value
+                            ? 'border-primary bg-primary/5 text-primary'
+                            : 'border-border hover:bg-muted'
+                        )}
+                      >
+                        {r.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">Aspect Ratio</label>
+                  <select
+                    value={aspectRatio}
+                    onChange={(e) => setAspectRatio(e.target.value)}
+                    className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
+                  >
+                    {KLING_ASPECT_RATIOS.map((ar) => (
+                      <option key={ar.value} value={ar.value}>{ar.label}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {/* Size presets (Qwen/Wan) */}
+            {!caps.usesResolution && (
+              <div>
+                <label className="block text-xs text-muted-foreground mb-1">Image Size</label>
+                <div className="flex flex-wrap gap-2">
+                  {SIZE_PRESETS.map((preset) => (
+                    <button
+                      key={preset.value}
+                      onClick={() => {
+                        setImageSize(preset.value);
+                        setUseCustomSize(false);
+                      }}
+                      className={cn(
+                        'px-3 py-1.5 text-xs border rounded-lg transition-colors',
+                        !useCustomSize && imageSize === preset.value
+                          ? 'border-primary bg-primary/5 text-primary'
+                          : 'border-border hover:bg-muted'
+                      )}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
                   <button
-                    key={preset.value}
-                    onClick={() => {
-                      setImageSize(preset.value);
-                      setUseCustomSize(false);
-                    }}
+                    onClick={() => setUseCustomSize(true)}
                     className={cn(
                       'px-3 py-1.5 text-xs border rounded-lg transition-colors',
-                      !useCustomSize && imageSize === preset.value
+                      useCustomSize
                         ? 'border-primary bg-primary/5 text-primary'
                         : 'border-border hover:bg-muted'
                     )}
                   >
-                    {preset.label}
+                    Custom
                   </button>
-                ))}
-                <button
-                  onClick={() => setUseCustomSize(true)}
-                  className={cn(
-                    'px-3 py-1.5 text-xs border rounded-lg transition-colors',
-                    useCustomSize
-                      ? 'border-primary bg-primary/5 text-primary'
-                      : 'border-border hover:bg-muted'
-                  )}
-                >
-                  Custom
-                </button>
-              </div>
-              {useCustomSize && (
-                <div className="flex gap-2 mt-2">
-                  <div>
-                    <label className="text-xs text-muted-foreground">Width</label>
-                    <input
-                      type="number"
-                      value={customWidth}
-                      onChange={(e) => setCustomWidth(parseInt(e.target.value) || 1024)}
-                      min={256}
-                      max={2048}
-                      className="w-24 px-2 py-1 border border-border rounded-lg text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-muted-foreground">Height</label>
-                    <input
-                      type="number"
-                      value={customHeight}
-                      onChange={(e) => setCustomHeight(parseInt(e.target.value) || 1024)}
-                      min={256}
-                      max={2048}
-                      className="w-24 px-2 py-1 border border-border rounded-lg text-sm"
-                    />
-                  </div>
                 </div>
-              )}
-            </div>
+                {useCustomSize && (
+                  <div className="flex gap-2 mt-2">
+                    <div>
+                      <label className="text-xs text-muted-foreground">Width</label>
+                      <input
+                        type="number"
+                        value={customWidth}
+                        onChange={(e) => setCustomWidth(parseInt(e.target.value) || 1024)}
+                        min={256}
+                        max={2048}
+                        className="w-24 px-2 py-1 border border-border rounded-lg text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-muted-foreground">Height</label>
+                      <input
+                        type="number"
+                        value={customHeight}
+                        onChange={(e) => setCustomHeight(parseInt(e.target.value) || 1024)}
+                        min={256}
+                        max={2048}
+                        className="w-24 px-2 py-1 border border-border rounded-lg text-sm"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {/* Seed */}
@@ -500,26 +588,32 @@ export default function EditPage() {
             </div>
 
             {/* Toggles */}
-            <div className="flex flex-wrap gap-6">
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={enablePromptExpansion}
-                  onChange={(e) => setEnablePromptExpansion(e.target.checked)}
-                  className="rounded"
-                />
-                Prompt expansion
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={enableSafetyChecker}
-                  onChange={(e) => setEnableSafetyChecker(e.target.checked)}
-                  className="rounded"
-                />
-                Safety checker
-              </label>
-            </div>
+            {(caps.hasPromptExpansion || caps.hasSafetyChecker) && (
+              <div className="flex flex-wrap gap-6">
+                {caps.hasPromptExpansion && (
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={enablePromptExpansion}
+                      onChange={(e) => setEnablePromptExpansion(e.target.checked)}
+                      className="rounded"
+                    />
+                    Prompt expansion
+                  </label>
+                )}
+                {caps.hasSafetyChecker && (
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={enableSafetyChecker}
+                      onChange={(e) => setEnableSafetyChecker(e.target.checked)}
+                      className="rounded"
+                    />
+                    Safety checker
+                  </label>
+                )}
+              </div>
+            )}
           </div>
         )}
       </section>
@@ -626,10 +720,9 @@ export default function EditPage() {
       <ImagePickerModal
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
-        onSelect={handlePickerSelect}
-        selectedGalleryIds={selectedGalleryIds}
-        selectedGeneratedIds={selectedGeneratedIds}
-        maxSelection={3 - sources.filter((s) => s.type === 'upload').length}
+        onDone={handlePickerDone}
+        alreadySelectedIds={alreadySelectedIds}
+        maxSelection={maxSources}
       />
     </div>
   );

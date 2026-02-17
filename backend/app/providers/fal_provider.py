@@ -357,6 +357,24 @@ FAL_EDIT_MODEL_CONFIG = {
         "max_source_images": 3,
         "max_num_images": 6,
     },
+    "kling-image": {
+        "endpoint": "fal-ai/kling-image/o3/image-to-image",
+        "supports_negative_prompt": False,
+        "supports_prompt_expansion": False,
+        "supports_safety_checker": False,
+        "max_source_images": 10,
+        "max_num_images": 9,
+        "uses_resolution": True,
+        "uses_aspect_ratio": True,
+    },
+    "wan-25": {
+        "endpoint": "fal-ai/wan-25-preview/image-to-image",
+        "supports_negative_prompt": True,
+        "supports_prompt_expansion": False,
+        "supports_safety_checker": True,
+        "max_source_images": 2,
+        "max_num_images": 4,
+    },
 }
 
 
@@ -394,17 +412,23 @@ class FalEditor(BaseEditor):
             "image_urls": image_urls,
             "num_images": num_images,
             "output_format": output_format,
-            "enable_safety_checker": enable_safety_checker,
         }
 
-        if self.config["supports_prompt_expansion"]:
-            arguments["enable_prompt_expansion"] = enable_prompt_expansion
-
-        if negative_prompt and self.config["supports_negative_prompt"]:
-            arguments["negative_prompt"] = negative_prompt
-
-        if image_size is not None:
-            arguments["image_size"] = image_size
+        if self.config.get("uses_resolution"):
+            # Kling-style: resolution + aspect_ratio instead of image_size
+            resolution = kwargs.get("resolution", "1K")
+            arguments["resolution"] = resolution
+            aspect_ratio = kwargs.get("aspect_ratio", "auto")
+            arguments["aspect_ratio"] = aspect_ratio
+        else:
+            # Qwen-style: image_size + safety/expansion toggles
+            arguments["enable_safety_checker"] = enable_safety_checker
+            if self.config["supports_prompt_expansion"]:
+                arguments["enable_prompt_expansion"] = enable_prompt_expansion
+            if negative_prompt and self.config["supports_negative_prompt"]:
+                arguments["negative_prompt"] = negative_prompt
+            if image_size is not None:
+                arguments["image_size"] = image_size
 
         if seed is not None:
             arguments["seed"] = seed

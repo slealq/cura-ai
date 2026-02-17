@@ -22,18 +22,21 @@ router = APIRouter(prefix="/edit", tags=["edit"])
 class EditImageRequest(BaseModel):
     """Request to edit images."""
 
-    prompt: str = Field(..., min_length=1, max_length=800)
+    prompt: str = Field(..., min_length=1, max_length=2500)
     negative_prompt: str | None = Field(None, max_length=500)
     source_image_ids: list[int] | None = None
     source_generated_ids: list[int] | None = None
     source_upload_keys: list[str] | None = None
     edit_model: str = "qwen-image-max-edit"
     image_size: dict | str | None = None
-    num_images: int = Field(1, ge=1, le=6)
+    num_images: int = Field(1, ge=1, le=9)
     seed: int | None = Field(None, ge=0, le=2147483647)
     output_format: str = "png"
     enable_prompt_expansion: bool = True
     enable_safety_checker: bool = True
+    # Kling-specific fields
+    resolution: str | None = None  # 1K, 2K, 4K
+    aspect_ratio: str | None = None  # 16:9, 9:16, 1:1, 4:3, 3:4, 3:2, 2:3, 21:9, auto
 
 
 class EditImageResponse(BaseModel):
@@ -133,6 +136,10 @@ async def edit_images(
         gen_params["image_size"] = request.image_size
     if request.seed is not None:
         gen_params["seed"] = request.seed
+    if request.resolution is not None:
+        gen_params["resolution"] = request.resolution
+    if request.aspect_ratio is not None:
+        gen_params["aspect_ratio"] = request.aspect_ratio
 
     # Create job
     try:
@@ -202,9 +209,9 @@ async def upload_source_image(
 
     # Read and validate size
     data = await file.read()
-    max_size = 10 * 1024 * 1024  # 10MB
+    max_size = 30 * 1024 * 1024  # 30MB
     if len(data) > max_size:
-        raise HTTPException(status_code=400, detail="File too large (max 10MB)")
+        raise HTTPException(status_code=400, detail="File too large (max 30MB)")
 
     # Generate object key and save
     ext = file.content_type.split("/")[-1] if file.content_type else "png"

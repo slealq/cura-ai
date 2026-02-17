@@ -39,6 +39,18 @@ DEFAULT_EDIT_CONFIGS = {
         "enable_prompt_expansion": True,
         "enable_safety_checker": True,
     },
+    "kling-image": {
+        "resolution": "1K",
+        "aspect_ratio": "auto",
+        "num_images": 1,
+        "output_format": "png",
+    },
+    "wan-25": {
+        "image_size": "square",
+        "num_images": 1,
+        "output_format": "png",
+        "enable_safety_checker": True,
+    },
 }
 
 DEFAULT_BASE_MODEL = "flux-dev"

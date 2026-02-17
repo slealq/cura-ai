@@ -28,6 +28,23 @@ TAGGING_PROMPT_VERSION = "v3.0.0"
 FAL_OPENROUTER_ENDPOINT = "openrouter/router/vision"
 DEFAULT_FAL_VISION_MODEL = "x-ai/grok-4-fast"
 
+# Default polling interval for vision requests (seconds).
+# fal_client.subscribe() defaults to ~200ms which floods the API.
+_VISION_POLL_INTERVAL = 1.0
+
+
+def _fal_submit_and_poll(endpoint: str, arguments: dict, poll_interval: float = _VISION_POLL_INTERVAL) -> dict:
+    """Submit a fal.ai request and poll for completion at a sane interval."""
+    from fal_client.client import Completed
+
+    handle = fal_client.submit(endpoint, arguments=arguments)
+    while True:
+        status = handle.status(with_logs=False)
+        if isinstance(status, Completed):
+            break
+        time.sleep(poll_interval)
+    return handle.get()
+
 
 def _extract_json(text: str) -> dict:
     """Extract JSON from text that might have other content."""
@@ -69,7 +86,7 @@ class FalVisionTagger(BaseTagger):
 
         start = time.monotonic()
         try:
-            result = fal_client.subscribe(
+            result = _fal_submit_and_poll(
                 FAL_OPENROUTER_ENDPOINT,
                 arguments={
                     "image_urls": [data_uri],
@@ -166,7 +183,7 @@ class FalVisionDescriber(BaseDescriber):
 
         start = time.monotonic()
         try:
-            result = fal_client.subscribe(
+            result = _fal_submit_and_poll(
                 FAL_OPENROUTER_ENDPOINT,
                 arguments={
                     "image_urls": [data_uri],
@@ -259,7 +276,7 @@ class FalVisionEvaluator(BaseEvaluator):
 
         start = time.monotonic()
         try:
-            result = fal_client.subscribe(
+            result = _fal_submit_and_poll(
                 FAL_OPENROUTER_ENDPOINT,
                 arguments={
                     "image_urls": [orig_uri, gen_uri],
@@ -317,7 +334,7 @@ class FalVisionEvaluator(BaseEvaluator):
 
         start = time.monotonic()
         try:
-            result = fal_client.subscribe(
+            result = _fal_submit_and_poll(
                 FAL_OPENROUTER_ENDPOINT,
                 arguments={
                     "image_urls": [data_uri],
@@ -390,7 +407,7 @@ class FalVisionEvaluator(BaseEvaluator):
 
         start = time.monotonic()
         try:
-            result = fal_client.subscribe(
+            result = _fal_submit_and_poll(
                 FAL_OPENROUTER_ENDPOINT,
                 arguments={
                     "prompt": prompt,
@@ -444,7 +461,7 @@ class FalVisionEvaluator(BaseEvaluator):
 
         start = time.monotonic()
         try:
-            result = fal_client.subscribe(
+            result = _fal_submit_and_poll(
                 FAL_OPENROUTER_ENDPOINT,
                 arguments={
                     "prompt": prompt,
