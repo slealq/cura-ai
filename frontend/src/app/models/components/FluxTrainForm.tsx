@@ -16,6 +16,7 @@ export interface FluxTrainData {
   use_captions: boolean;
   caption_include_tags: boolean;
   caption_include_description: boolean;
+  example_prompts?: string[];
 }
 
 interface FluxTrainFormProps {
@@ -39,6 +40,7 @@ export default function FluxTrainForm({
 }: FluxTrainFormProps) {
   const [name, setName] = useState('');
   const [triggerWord, setTriggerWord] = useState('');
+  const [samplePromptsText, setSamplePromptsText] = useState('');
   const [sourceType, setSourceType] = useState<SourceType>('folder');
   const [folderId, setFolderId] = useState<number | undefined>(undefined);
   const [clusterId, setClusterId] = useState<number | undefined>(undefined);
@@ -53,6 +55,10 @@ export default function FluxTrainForm({
 
   const handleSubmit = () => {
     if (!canSubmit) return;
+    const examplePrompts = samplePromptsText
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
     onSubmit({
       name: name.trim(),
       trigger_word: triggerWord.trim(),
@@ -63,6 +69,7 @@ export default function FluxTrainForm({
       use_captions: useCaptions,
       caption_include_tags: captionTags,
       caption_include_description: captionDescription,
+      ...(examplePrompts.length > 0 ? { example_prompts: examplePrompts } : {}),
     });
   };
 
@@ -182,6 +189,20 @@ export default function FluxTrainForm({
             )}
           </div>
         )}
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium mb-1">Sample Prompts (optional)</label>
+        <textarea
+          value={samplePromptsText}
+          onChange={(e) => setSamplePromptsText(e.target.value)}
+          rows={3}
+          placeholder="One prompt per line..."
+          className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm resize-none"
+        />
+        <p className="text-xs text-muted-foreground mt-1">
+          Known prompts that work well with this model. Auto-collected after training if left empty.
+        </p>
       </div>
 
       <div className="flex gap-2 justify-end pt-2">

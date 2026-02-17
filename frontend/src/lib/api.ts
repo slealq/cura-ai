@@ -767,7 +767,7 @@ export const generationApi = {
   // LoRA
   trainLora: async (params: {
     name: string;
-    trigger_word: string;
+    trigger_word?: string;
     folder_id?: number;
     cluster_id?: number;
     description?: string;
@@ -778,8 +778,31 @@ export const generationApi = {
     caption_include_tags?: boolean;
     caption_include_description?: boolean;
     learning_rate?: number;
+    example_prompts?: string[];
   }): Promise<{ status: string; lora_model_id: number; job_id: number }> => {
     const { data } = await api.post('/generation/lora/train', params);
+    return data;
+  },
+
+  uploadLora: async (params: {
+    name: string;
+    trigger_word?: string;
+    base_model?: string;
+    description?: string;
+    example_prompts?: string[];
+    file: File;
+  }): Promise<LoraModel> => {
+    const formData = new FormData();
+    formData.append('name', params.name);
+    if (params.trigger_word) formData.append('trigger_word', params.trigger_word);
+    formData.append('base_model', params.base_model || 'flux-dev');
+    if (params.description) formData.append('description', params.description);
+    if (params.example_prompts?.length) formData.append('example_prompts', JSON.stringify(params.example_prompts));
+    formData.append('file', params.file);
+    const { data } = await api.post('/generation/lora/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 5 * 60 * 1000,
+    });
     return data;
   },
 

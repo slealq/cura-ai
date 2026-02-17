@@ -109,10 +109,10 @@ function GeneratePageInner() {
   const falKey = apiKeys?.find((k) => k.provider === 'fal');
   const hasFalKey = falKey?.status === 'active' || falKey?.status === 'quota_exceeded';
 
-  // Fetch completed LoRA models filtered by base model
+  // Fetch completed + uploaded LoRA models filtered by base model
   const { data: loraList } = useQuery({
-    queryKey: ['lora-models', 'completed', baseModel],
-    queryFn: () => generationApi.listLora({ status: 'completed', base_model: baseModel }),
+    queryKey: ['lora-models', 'completed,uploaded', baseModel],
+    queryFn: () => generationApi.listLora({ status: 'completed,uploaded', base_model: baseModel }),
   });
 
   // Fetch generated images with polling
@@ -260,7 +260,7 @@ function GeneratePageInner() {
               <option value="">No LoRA</option>
               {loraList?.items.map((lora) => (
                 <option key={lora.id} value={lora.id}>
-                  {lora.name} ({lora.trigger_word})
+                  {lora.trigger_word ? `${lora.name} (${lora.trigger_word})` : lora.name}
                 </option>
               ))}
             </select>

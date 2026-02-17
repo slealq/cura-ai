@@ -1,8 +1,8 @@
 """Generation API endpoints for LoRA training, image generation, and evaluation."""
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -30,7 +30,7 @@ class TrainLoraRequest(BaseModel):
     """Request to start LoRA training from a folder or cluster."""
 
     name: str = Field(..., min_length=1, max_length=256)
-    trigger_word: str = Field(..., min_length=1, max_length=128)
+    trigger_word: str | None = Field(None, max_length=128)
     folder_id: int | None = None
     cluster_id: int | None = None
     description: str | None = None
@@ -41,6 +41,13 @@ class TrainLoraRequest(BaseModel):
     use_captions: bool = False
     caption_include_tags: bool = True
     caption_include_description: bool = True
+    example_prompts: list[str] | None = None
+
+    @model_validator(mode="after")
+    def validate_trigger_word_for_flux(self) -> "TrainLoraRequest":
+        if self.base_model == "flux-dev" and not self.trigger_word:
+            raise ValueError("trigger_word is required for flux-dev base model")
+        return self
 
 
 class GenerateRequest(BaseModel):
@@ -82,7 +89,7 @@ class LoraModelResponse(BaseModel):
 
     id: int
     name: str
-    trigger_word: str
+    trigger_word: str | None
     description: str | None
     folder_id: int | None
     folder_name: str | None
@@ -278,7 +285,7 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db), c
         raise HTTPException(status_code=400, detail="Provide either folder_id or cluster_id, not both")
 
     image_count = 0
-    job_params: dict = {"trigger_word": request.trigger_word}
+    job_params: dict = {"trigger_word": request.trigger_word or ""}
 
     if request.folder_id:
         from app.models.folder import Folder, FolderImage
@@ -357,6 +364,11 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db), c
         job_id=job.id,
     )
 
+    # Save user-provided example prompts
+    if request.example_prompts:
+        lora.example_prompts = request.example_prompts
+        db.commit()
+
     # Store lora_model_id in job parameters for frontend recovery buttons
     job.parameters = {**job.parameters, "lora_model_id": lora.id}
 
@@ -374,6 +386,168 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db), c
     }
 
 
+SUPPORTED_BASE_MODELS = {"flux-dev", "qwen-2.5"}
+
+
+@router.post("/lora/upload", status_code=201)
+async def upload_lora(
+    name: str = Form(...),
+    trigger_word: str | None = Form(None),
+    base_model: str = Form("flux-dev"),
+    description: str | None = Form(None),
+    example_prompts: str | None = Form(None),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Upload an external LoRA .safetensors file."""
+    import asyncio
+    import hashlib
+    import tempfile
+    import uuid
+    from datetime import datetime
+    from pathlib import Path
+
+    from app.models.pipeline_log import LogCategory, LogLevel
+    from app.services.log_service import write_log
+
+    # Validate file extension
+    if not file.filename or not file.filename.lower().endswith(".safetensors"):
+        raise HTTPException(status_code=400, detail="File must be a .safetensors file")
+
+    # Validate base model
+    if base_model not in SUPPORTED_BASE_MODELS:
+        raise HTTPException(status_code=400, detail=f"Unsupported base model. Must be one of: {', '.join(sorted(SUPPORTED_BASE_MODELS))}")
+
+    # Read file bytes
+    file_data = await file.read()
+    if len(file_data) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    file_size = len(file_data)
+    file_hash = hashlib.sha256(file_data).hexdigest()
+    object_key = f"{uuid.uuid4().hex}.safetensors"
+
+    # Ensure fal API key is set from user's stored key
+    from app.providers import _resolve_config
+    from app.providers.fal_provider import _ensure_fal_key
+    keys, _ = _resolve_config(db, current_user.id)
+    _ensure_fal_key(keys.get("fal"))
+
+    # Upload to fal CDN via temp file (more reliable for large .safetensors files
+    # than in-memory bytes — avoids CDN "content length zero" errors)
+    try:
+        import fal_client
+        with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as tmp:
+            tmp.write(file_data)
+            tmp_path = tmp.name
+        try:
+            lora_url = await asyncio.to_thread(fal_client.upload_file, Path(tmp_path))
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+    except Exception as e:
+        logger.error(f"Failed to upload LoRA to fal CDN: {e}")
+        raise HTTPException(status_code=502, detail=f"Failed to upload to fal CDN: {e}")
+
+    write_log(
+        LogCategory.TASK, f"LoRA '{name}' uploaded to fal CDN ({file_size} bytes)",
+        level=LogLevel.INFO, operation="lora_upload_cdn", provider="fal",
+        extra={"lora_url": lora_url, "file_hash": file_hash, "base_model": base_model},
+        user_id=current_user.id,
+    )
+
+    # Save to our own storage
+    try:
+        from app.services.storage import get_storage_service
+        storage = get_storage_service()
+        await storage.save_lora_weights(file_data, object_key)
+    except Exception as e:
+        logger.warning(f"Failed to save LoRA weights to storage (CDN upload succeeded): {e}")
+        write_log(
+            LogCategory.TASK, f"LoRA '{name}' storage backup failed: {e}",
+            level=LogLevel.WARNING, operation="lora_upload_storage",
+            extra={"object_key": object_key, "error": str(e)},
+            user_id=current_user.id,
+        )
+
+    # Parse example_prompts JSON string
+    parsed_example_prompts = None
+    if example_prompts:
+        import json
+        try:
+            parsed_example_prompts = json.loads(example_prompts)
+            if not isinstance(parsed_example_prompts, list):
+                parsed_example_prompts = None
+        except (json.JSONDecodeError, TypeError):
+            parsed_example_prompts = None
+
+    try:
+        # Create LoRA model record
+        gen_service = get_generation_service(db, current_user.id)
+        lora = gen_service.create_lora_model(
+            name=name,
+            trigger_word=trigger_word or None,
+            training_provider="upload",
+            folder_id=None,
+            cluster_id=None,
+            base_model=base_model,
+            description=description,
+            training_config=None,
+            training_images_count=0,
+            job_id=None,
+        )
+
+        # Update with upload results
+        lora.status = LoraModelStatus.UPLOADED
+        lora.lora_url = lora_url
+        lora.weights_object_key = object_key
+        lora.lora_local_path = object_key
+        lora.file_size = file_size
+        lora.file_hash = file_hash
+        lora.weights_downloaded_at = datetime.utcnow()
+        if parsed_example_prompts:
+            lora.example_prompts = parsed_example_prompts
+        db.commit()
+        db.refresh(lora)
+
+        write_log(
+            LogCategory.TASK, f"LoRA '{name}' model record created (id={lora.id})",
+            level=LogLevel.INFO, operation="lora_upload_complete",
+            extra={"lora_model_id": lora.id, "base_model": base_model, "status": "uploaded"},
+            user_id=current_user.id,
+        )
+    except Exception as e:
+        logger.error(f"Failed to create LoRA model record after CDN upload: {e}")
+        write_log(
+            LogCategory.TASK, f"LoRA '{name}' model record creation failed: {e}",
+            level=LogLevel.ERROR, operation="lora_upload_create",
+            extra={"error": str(e), "lora_url": lora_url},
+            user_id=current_user.id,
+        )
+        raise HTTPException(status_code=500, detail=f"Model uploaded to CDN but failed to save record: {e}")
+
+    try:
+        return _lora_to_response(lora, db)
+    except Exception as e:
+        logger.error(f"LoRA upload succeeded (id={lora.id}) but response serialization failed: {e}")
+        write_log(
+            LogCategory.TASK, f"LoRA '{name}' response serialization failed: {e}",
+            level=LogLevel.ERROR, operation="lora_upload_response",
+            extra={"lora_model_id": lora.id, "error": str(e)},
+            user_id=current_user.id,
+        )
+        # Model was saved — return a minimal success response
+        return {
+            "id": lora.id,
+            "name": lora.name,
+            "status": lora.status.value,
+            "base_model": lora.base_model,
+            "lora_url": lora.lora_url,
+            "created_at": lora.created_at.isoformat(),
+            "warning": f"Model saved but response serialization failed: {e}",
+        }
+
+
 @router.get("/lora", response_model=LoraListResponse)
 async def list_lora_models(
     status: str | None = None,
@@ -383,9 +557,15 @@ async def list_lora_models(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """List LoRA models."""
+    """List LoRA models. Status supports comma-separated values (e.g. 'completed,uploaded')."""
     gen_service = get_generation_service(db, current_user.id)
-    status_filter = LoraModelStatus(status) if status else None
+    status_filter: LoraModelStatus | list[LoraModelStatus] | None = None
+    if status:
+        parts = [s.strip() for s in status.split(",") if s.strip()]
+        if len(parts) == 1:
+            status_filter = LoraModelStatus(parts[0])
+        else:
+            status_filter = [LoraModelStatus(p) for p in parts]
     items = gen_service.get_lora_models(status=status_filter, base_model=base_model, skip=skip, limit=limit)
     total = gen_service.count_lora_models(status=status_filter, base_model=base_model)
     return LoraListResponse(
@@ -504,7 +684,7 @@ async def retry_lora_training(lora_id: int, db: Session = Depends(get_db), curre
             job_type=JobType.LORA_TRAIN,
             status=JobStatus.PENDING,
             total_items=1,
-            parameters={"trigger_word": lora.trigger_word, "retry_of_lora_id": lora_id},
+            parameters={"trigger_word": lora.trigger_word or "", "retry_of_lora_id": lora_id},
             user_id=current_user.id,
         )
         db.add(job)
@@ -546,7 +726,7 @@ async def download_lora_weights_endpoint(lora_id: int, db: Session = Depends(get
     lora = gen_service.get_lora_model(lora_id)
     if not lora:
         raise HTTPException(status_code=404, detail="LoRA model not found")
-    if lora.status != LoraModelStatus.COMPLETED:
+    if lora.status not in (LoraModelStatus.COMPLETED, LoraModelStatus.UPLOADED):
         raise HTTPException(status_code=400, detail="LoRA model is not completed")
     if not lora.lora_url:
         raise HTTPException(status_code=400, detail="No lora_url available")
@@ -567,7 +747,7 @@ async def download_all_lora_weights(db: Session = Depends(get_db), current_user:
         db.query(LoraModel)
         .filter(
             LoraModel.user_id == current_user.id,
-            LoraModel.status == LoraModelStatus.COMPLETED,
+            LoraModel.status.in_([LoraModelStatus.COMPLETED, LoraModelStatus.UPLOADED]),
             LoraModel.lora_url.isnot(None),
             LoraModel.weights_object_key.is_(None),
         )
@@ -621,7 +801,7 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
         lora = gen_service.get_lora_model(request.lora_model_id)
         if not lora:
             raise HTTPException(status_code=404, detail="LoRA model not found")
-        if lora.status != LoraModelStatus.COMPLETED:
+        if lora.status not in (LoraModelStatus.COMPLETED, LoraModelStatus.UPLOADED):
             raise HTTPException(status_code=400, detail="LoRA model is not ready (not completed)")
         # Infer base_model from LoRA if not explicitly set
         if not request.base_model:
@@ -954,7 +1134,7 @@ async def start_evaluation(lora_id: int, request: StartEvaluationRequest, db: Se
     lora = gen_service.get_lora_model(lora_id)
     if not lora:
         raise HTTPException(status_code=404, detail="LoRA model not found")
-    if lora.status != LoraModelStatus.COMPLETED:
+    if lora.status not in (LoraModelStatus.COMPLETED, LoraModelStatus.UPLOADED):
         raise HTTPException(status_code=400, detail="LoRA model is not completed")
     if not lora.lora_url:
         raise HTTPException(status_code=400, detail="LoRA model has no trained weights URL")

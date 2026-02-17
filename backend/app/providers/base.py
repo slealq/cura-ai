@@ -174,7 +174,7 @@ class BaseTrainer(ABC):
     async def start_training(
         self,
         image_urls: list[str],
-        trigger_word: str,
+        trigger_word: str | None = None,
         steps: int = 1000,
         is_style: bool = False,
         **kwargs: Any,

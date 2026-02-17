@@ -67,6 +67,14 @@ celery_app.conf.update(
     broker_use_ssl=_broker_ssl,
     redis_backend_use_ssl=_backend_ssl,
 
+    # Broker connection resilience (Azure Redis can drop idle TLS connections)
+    broker_transport_options={
+        "socket_timeout": 30,
+        "socket_connect_timeout": 30,
+        "retry_on_timeout": True,
+    },
+    broker_connection_retry_on_startup=True,
+
     # Beat schedule
     beat_schedule={
         "cleanup-pipeline-logs": {

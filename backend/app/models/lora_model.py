@@ -17,6 +17,7 @@ class LoraModelStatus(str, enum.Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     ARCHIVED = "archived"
+    UPLOADED = "uploaded"
 
 
 class LoraModel(Base):
@@ -29,7 +30,7 @@ class LoraModel(Base):
 
     # Identity
     name: Mapped[str] = mapped_column(String(256), nullable=False)
-    trigger_word: Mapped[str] = mapped_column(String(128), nullable=False)
+    trigger_word: Mapped[str | None] = mapped_column(String(128), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Source

@@ -25,7 +25,7 @@ class GenerationService:
     def create_lora_model(
         self,
         name: str,
-        trigger_word: str,
+        trigger_word: str | None,
         training_provider: str,
         folder_id: int | None = None,
         cluster_id: int | None = None,
@@ -66,7 +66,7 @@ class GenerationService:
 
     def get_lora_models(
         self,
-        status: LoraModelStatus | None = None,
+        status: LoraModelStatus | list[LoraModelStatus] | None = None,
         base_model: str | None = None,
         skip: int = 0,
         limit: int = 50,
@@ -76,16 +76,22 @@ class GenerationService:
             joinedload(LoraModel.folder), joinedload(LoraModel.cluster)
         ).filter(LoraModel.user_id == self.user_id)
         if status:
-            query = query.filter(LoraModel.status == status)
+            if isinstance(status, list):
+                query = query.filter(LoraModel.status.in_(status))
+            else:
+                query = query.filter(LoraModel.status == status)
         if base_model:
             query = query.filter(LoraModel.base_model == base_model)
         return query.order_by(LoraModel.created_at.desc()).offset(skip).limit(limit).all()
 
-    def count_lora_models(self, status: LoraModelStatus | None = None, base_model: str | None = None) -> int:
+    def count_lora_models(self, status: LoraModelStatus | list[LoraModelStatus] | None = None, base_model: str | None = None) -> int:
         """Count LoRA models with optional status filter."""
         query = self.db.query(LoraModel).filter(LoraModel.user_id == self.user_id)
         if status:
-            query = query.filter(LoraModel.status == status)
+            if isinstance(status, list):
+                query = query.filter(LoraModel.status.in_(status))
+            else:
+                query = query.filter(LoraModel.status == status)
         if base_model:
             query = query.filter(LoraModel.base_model == base_model)
         return query.count()

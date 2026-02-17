@@ -240,7 +240,7 @@ export interface LatestEvaluationSummary {
 export interface LoraModel {
   id: number;
   name: string;
-  trigger_word: string;
+  trigger_word: string | null;
   description: string | null;
   folder_id: number | null;
   folder_name: string | null;

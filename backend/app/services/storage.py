@@ -45,7 +45,9 @@ class StorageService:
         self._azure_connection_string = settings.azure_storage_connection_string
         self._azure_container_name = settings.azure_storage_container
         self._blob_service_client = BlobServiceClient.from_connection_string(
-            self._azure_connection_string
+            self._azure_connection_string,
+            connection_timeout=30,
+            read_timeout=120,
         )
         self._container_client = self._blob_service_client.get_container_client(
             self._azure_container_name

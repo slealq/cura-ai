@@ -20,6 +20,7 @@ import {
   HardDrive,
   Copy,
   ExternalLink,
+  Upload,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
@@ -44,6 +45,7 @@ const statusConfig: Record<string, { icon: typeof Clock; color: string; label: s
   completed: { icon: CheckCircle, color: 'text-green-600 bg-green-100 dark:bg-green-900/50 dark:text-green-300', label: 'Completed' },
   failed: { icon: XCircle, color: 'text-red-600 bg-red-100 dark:bg-red-900/50 dark:text-red-300', label: 'Failed' },
   archived: { icon: Archive, color: 'text-gray-500 bg-gray-100 dark:bg-gray-900/50 dark:text-gray-400', label: 'Archived' },
+  uploaded: { icon: Upload, color: 'text-violet-600 bg-violet-100 dark:bg-violet-900/50 dark:text-violet-300', label: 'Uploaded' },
 };
 
 function formatFileSize(bytes: number): string {
@@ -51,6 +53,165 @@ function formatFileSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function isModelReady(model: LoraModel): boolean {
+  return model.status === 'completed' || model.status === 'uploaded';
+}
+
+function UploadLoraModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [name, setName] = useState('');
+  const [triggerWord, setTriggerWord] = useState('');
+  const [baseModel, setBaseModel] = useState('flux-dev');
+  const [description, setDescription] = useState('');
+  const [samplePromptsText, setSamplePromptsText] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+
+  const uploadMutation = useMutation({
+    mutationFn: generationApi.uploadLora,
+    onSuccess: () => {
+      toast.success('LoRA model uploaded successfully');
+      queryClient.invalidateQueries({ queryKey: ['lora-models'] });
+      onClose();
+      setName('');
+      setTriggerWord('');
+      setBaseModel('flux-dev');
+      setDescription('');
+      setSamplePromptsText('');
+      setFile(null);
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to upload LoRA'),
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!file || !name) return;
+    const examplePrompts = samplePromptsText
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+    uploadMutation.mutate({
+      name,
+      trigger_word: triggerWord.trim() || undefined,
+      base_model: baseModel,
+      description: description || undefined,
+      example_prompts: examplePrompts.length > 0 ? examplePrompts : undefined,
+      file,
+    });
+  };
+
+  if (!open) return null;
+
+  return (
+    <>
+      <div className="fixed inset-0 bg-black/50 z-50" onClick={onClose} />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="bg-card rounded-xl shadow-xl max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold">Upload LoRA</h3>
+            <button onClick={onClose} className="p-1 hover:bg-muted rounded-lg transition-colors">
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">.safetensors File</label>
+              <input
+                type="file"
+                accept=".safetensors"
+                onChange={(e) => setFile(e.target.files?.[0] || null)}
+                className="w-full text-sm file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-primary file:text-primary-foreground hover:file:bg-primary/90 file:cursor-pointer"
+              />
+              {file && (
+                <p className="text-xs text-muted-foreground mt-1">{(file.size / (1024 * 1024)).toFixed(1)} MB</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1">Name</label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="My LoRA Model"
+                className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1">Trigger Word (optional)</label>
+              <input
+                type="text"
+                value={triggerWord}
+                onChange={(e) => setTriggerWord(e.target.value)}
+                placeholder="e.g. TOK"
+                className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1">Base Model</label>
+              <select
+                value={baseModel}
+                onChange={(e) => setBaseModel(e.target.value)}
+                className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm"
+              >
+                {BASE_MODELS.map((m) => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1">Description (optional)</label>
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                rows={2}
+                placeholder="Describe this LoRA model..."
+                className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm resize-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1">Sample Prompts (optional)</label>
+              <textarea
+                value={samplePromptsText}
+                onChange={(e) => setSamplePromptsText(e.target.value)}
+                rows={3}
+                placeholder="One prompt per line..."
+                className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm resize-none"
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Known prompts that work well with this model
+              </p>
+            </div>
+
+            <button
+              type="submit"
+              disabled={!file || !name || uploadMutation.isPending}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors font-medium text-sm disabled:opacity-50"
+            >
+              {uploadMutation.isPending ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Uploading...
+                </>
+              ) : (
+                <>
+                  <Upload className="h-4 w-4" />
+                  Upload LoRA
+                </>
+              )}
+            </button>
+          </form>
+        </div>
+      </div>
+    </>
+  );
 }
 
 function getSourceInfo(model: LoraModel): { label: string; href: string } | null {
@@ -105,9 +266,11 @@ function LoraModelCard({
         <div className="flex items-start justify-between">
           <div>
             <h3 className="font-semibold text-sm">{model.name}</h3>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Trigger: <code className="bg-muted px-1 py-0.5 rounded">{model.trigger_word}</code>
-            </p>
+            {model.trigger_word && (
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Trigger: <code className="bg-muted px-1 py-0.5 rounded">{model.trigger_word}</code>
+              </p>
+            )}
           </div>
 
           <span className={cn('flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium', config.color)}>
@@ -139,7 +302,7 @@ function LoraModelCard({
         </div>
 
         {/* Evaluation info */}
-        {model.status === 'completed' && (
+        {isModelReady(model) && (
           <div className="mt-3">
             {model.latest_evaluation ? (
               <Link
@@ -179,7 +342,7 @@ function LoraModelCard({
             {formatDate(model.created_at)}
           </span>
           <div className="flex items-center gap-1">
-            {model.status === 'completed' && (
+            {isModelReady(model) && (
               <>
                 {model.has_local_weights && (
                   <a
@@ -230,6 +393,7 @@ function LoraModelCard({
 export default function ModelsPage() {
   const queryClient = useQueryClient();
   const [showTrainModal, setShowTrainModal] = useState(false);
+  const [showUploadModal, setShowUploadModal] = useState(false);
   const [selectedModel, setSelectedModel] = useState<LoraModel | null>(null);
 
   // Check if fal.ai API key is configured
@@ -277,7 +441,7 @@ export default function ModelsPage() {
   });
 
   const models = loraData?.items || [];
-  const modelsWithoutWeights = models.filter((m) => m.status === 'completed' && m.lora_url && !m.has_local_weights);
+  const modelsWithoutWeights = models.filter((m) => isModelReady(m) && m.lora_url && !m.has_local_weights);
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
@@ -321,6 +485,14 @@ export default function ModelsPage() {
             </button>
           )}
           <button
+            onClick={() => setShowUploadModal(true)}
+            disabled={!hasFalKey}
+            className="flex items-center gap-2 px-4 py-2 border border-border text-foreground rounded-lg hover:bg-muted transition-colors font-medium text-sm disabled:opacity-50 disabled:pointer-events-none"
+          >
+            <Upload className="h-4 w-4" />
+            Upload LoRA
+          </button>
+          <button
             onClick={() => setShowTrainModal(true)}
             disabled={!hasFalKey}
             className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors font-medium text-sm disabled:opacity-50 disabled:pointer-events-none"
@@ -361,6 +533,12 @@ export default function ModelsPage() {
         onClose={() => setShowTrainModal(false)}
       />
 
+      {/* Upload Modal */}
+      <UploadLoraModal
+        open={showUploadModal}
+        onClose={() => setShowUploadModal(false)}
+      />
+
       {/* Detail Modal */}
       {selectedModel && (
         <>
@@ -391,7 +569,11 @@ export default function ModelsPage() {
                   </div>
                   <div>
                     <span className="text-muted-foreground">Trigger Word</span>
-                    <p><code className="bg-muted px-1.5 py-0.5 rounded">{selectedModel.trigger_word}</code></p>
+                    {selectedModel.trigger_word ? (
+                      <p><code className="bg-muted px-1.5 py-0.5 rounded">{selectedModel.trigger_word}</code></p>
+                    ) : (
+                      <p className="text-muted-foreground italic text-xs">None</p>
+                    )}
                   </div>
                   <div>
                     <span className="text-muted-foreground">Base Model</span>
@@ -457,7 +639,7 @@ export default function ModelsPage() {
                 )}
 
                 {/* Weights storage status */}
-                {selectedModel.status === 'completed' && (
+                {isModelReady(selectedModel) && (
                   <div>
                     <span className="text-muted-foreground">Weights Storage</span>
                     {selectedModel.has_local_weights ? (
@@ -554,7 +736,7 @@ export default function ModelsPage() {
                 </div>
               </div>
 
-              {selectedModel.status === 'completed' && (
+              {isModelReady(selectedModel) && (
                 <div className="flex gap-2 pt-2">
                   {selectedModel.has_local_weights && (
                     <a

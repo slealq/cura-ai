@@ -141,6 +141,11 @@ def _collect_example_prompts(db: Session, lora_model_id: int, user_id: int) -> N
     sample_size = min(sample_size, len(candidates))
     sampled = random.sample(candidates, sample_size)
 
+    # Don't overwrite user-provided example prompts
+    if lora.example_prompts:
+        logger.info(f"Skipping example prompt collection for LoRA {lora_model_id} — user-provided prompts exist")
+        return
+
     # Build prompts
     prompts = []
     for image in sampled:
@@ -148,7 +153,10 @@ def _collect_example_prompts(db: Session, lora_model_id: int, user_id: int) -> N
         # Truncate long descriptions to keep prompts reasonable
         if len(desc) > 300:
             desc = desc[:297] + "..."
-        prompts.append(f"{lora.trigger_word}, {desc}")
+        if lora.trigger_word:
+            prompts.append(f"{lora.trigger_word}, {desc}")
+        else:
+            prompts.append(desc)
 
     lora.example_prompts = prompts
     db.commit()
@@ -292,7 +300,8 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
                         if use_captions:
                             # Build caption from trigger word + tags/description
                             caption_parts = []
-                            caption_parts.append(lora.trigger_word)
+                            if lora.trigger_word:
+                                caption_parts.append(lora.trigger_word)
 
                             metadata = image.image_metadata
                             if metadata:
@@ -314,8 +323,8 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
                             caption = ", ".join(caption_parts)
                             zf.writestr(f"{prefix}.txt", caption)
                         elif requires_zip:
-                            # ZIP-only model without captions: use trigger word as caption
-                            zf.writestr(f"{prefix}.txt", lora.trigger_word)
+                            # ZIP-only model without captions: use trigger word as caption (or empty)
+                            zf.writestr(f"{prefix}.txt", lora.trigger_word or "")
 
                         image_count += 1
 
@@ -748,7 +757,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
         lora = gen_service.get_lora_model(evaluation.lora_model_id)
         if not lora:
             raise Exception("LoRA model not found")
-        if lora.status != LoraModelStatus.COMPLETED or not lora.lora_url:
+        if lora.status not in (LoraModelStatus.COMPLETED, LoraModelStatus.UPLOADED) or not lora.lora_url:
             raise Exception("LoRA model is not completed or has no URL")
 
         # Mark evaluation RUNNING
@@ -824,7 +833,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
             pair = None
             try:
                 description = image.image_metadata.description_long
-                prompt = f"{lora.trigger_word}, {description}"
+                prompt = f"{lora.trigger_word}, {description}" if lora.trigger_word else description
 
                 # Create pair record
                 pair = eval_service.create_pair(
@@ -973,7 +982,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                 # Generate creative prompts
                 creative_prompts = _run_async(
                     evaluator.generate_creative_prompts(
-                        trigger_word=lora.trigger_word,
+                        trigger_word=lora.trigger_word or "",
                         sample_descriptions=sample_descriptions,
                         count=creative_count,
                     )
@@ -1122,7 +1131,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                     assessment_summary = _run_async(
                         evaluator.summarize_assessments(
                             model_name=lora.name,
-                            trigger_word=lora.trigger_word,
+                            trigger_word=lora.trigger_word or "N/A",
                             pair_assessments=pair_assessments,
                             overall_score=overall,
                             avg_vision=avg_vision,

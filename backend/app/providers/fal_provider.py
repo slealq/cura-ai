@@ -61,7 +61,7 @@ class FalTrainer(BaseTrainer):
     async def start_training(
         self,
         image_urls: list[str],
-        trigger_word: str,
+        trigger_word: str | None = None,
         steps: int = 1000,
         is_style: bool = False,
         **kwargs: Any,
@@ -75,7 +75,7 @@ class FalTrainer(BaseTrainer):
         }
 
         # Only include trigger_word and is_style for models that support them
-        if self.config["supports_trigger_word"]:
+        if self.config["supports_trigger_word"] and trigger_word:
             arguments["trigger_word"] = trigger_word
         if self.config["supports_is_style"]:
             arguments["is_style"] = is_style
