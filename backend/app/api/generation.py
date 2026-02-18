@@ -189,6 +189,7 @@ class GeneratedImageResponse(BaseModel):
     thumbnail_uri_small: str | None
     thumbnail_uri_medium: str | None
     job_id: int | None
+    cost_sparks: float | None = None
     created_at: str
     completed_at: str | None
 
@@ -314,6 +315,14 @@ def _gen_to_response(gen, db: Session) -> GeneratedImageResponse:
         lora_name = gen.lora_model.name if gen.lora_model else f"LoRA #{gen.lora_model_id}"
         loras_list.append(LoraUsed(lora_model_id=gen.lora_model_id, lora_model_name=lora_name, lora_scale=gen.lora_scale or 1.0))
 
+    # Get per-image cost from job (split evenly for batch jobs)
+    cost_sparks: float | None = None
+    if gen.job_id:
+        job = db.query(Job).filter(Job.id == gen.job_id).first()
+        if job and job.charged_cost is not None:
+            total_items = max(job.total_items, 1)
+            cost_sparks = round(float(job.charged_cost) / total_items, 1)
+
     return GeneratedImageResponse(
         id=gen.id,
         prompt=gen.prompt,
@@ -335,6 +344,7 @@ def _gen_to_response(gen, db: Session) -> GeneratedImageResponse:
         thumbnail_uri_small=gen.thumbnail_uri_small,
         thumbnail_uri_medium=gen.thumbnail_uri_medium,
         job_id=gen.job_id,
+        cost_sparks=cost_sparks,
         created_at=gen.created_at.isoformat(),
         completed_at=gen.completed_at.isoformat() if gen.completed_at else None,
     )

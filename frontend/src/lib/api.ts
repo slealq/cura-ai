@@ -40,6 +40,7 @@ import type {
   TransactionListResponse,
   UsageSummary,
   UserBalance,
+  VisionCosts,
 } from '@/types';
 
 const apiBaseURL = process.env.NEXT_PUBLIC_API_URL
@@ -1190,6 +1191,11 @@ export const billingApi = {
 
   getGenerationCosts: async (): Promise<GenerationCosts> => {
     const { data } = await api.get('/billing/generation-costs');
+    return data;
+  },
+
+  getVisionCosts: async (): Promise<VisionCosts> => {
+    const { data } = await api.get('/billing/vision-costs');
     return data;
   },
 

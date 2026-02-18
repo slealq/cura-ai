@@ -309,6 +309,7 @@ export interface GeneratedImage {
   thumbnail_uri_small: string | null;
   thumbnail_uri_medium: string | null;
   job_id: number | null;
+  cost_sparks: number | null;
   created_at: string;
   completed_at: string | null;
 }
@@ -512,6 +513,11 @@ export interface CostCatalogEntry {
 }
 
 export interface GenerationCosts {
+  costs: Record<string, Record<string, number>>;
+  expand_prompt_cost: number;
+}
+
+export interface VisionCosts {
   costs: Record<string, Record<string, number>>;
 }
 

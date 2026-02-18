@@ -20,9 +20,9 @@ const SIZE_PRESETS = [
 ];
 
 const BASE_MODELS = [
+  { value: 'nano-banana-pro', label: 'Nano Banana Pro', defaultGuidance: 0, hasLora: false, hasStepsGuidance: false, hasWidthHeight: false, usesResolutionAspect: true, hasSafetyTolerance: true, hasWebSearch: true, maxImages: 4 },
   { value: 'flux-dev', label: 'Flux', defaultGuidance: 3.5, hasLora: true, hasStepsGuidance: true, hasWidthHeight: true, usesResolutionAspect: false, hasSafetyTolerance: false, hasWebSearch: false, maxImages: 8 },
   { value: 'qwen-2.5', label: 'Qwen Image 2512', defaultGuidance: 4.0, hasLora: true, hasStepsGuidance: true, hasWidthHeight: true, usesResolutionAspect: false, hasSafetyTolerance: false, hasWebSearch: false, maxImages: 8 },
-  { value: 'nano-banana-pro', label: 'Nano Banana Pro', defaultGuidance: 0, hasLora: false, hasStepsGuidance: false, hasWidthHeight: false, usesResolutionAspect: true, hasSafetyTolerance: true, hasWebSearch: true, maxImages: 4 },
 ];
 
 const RESOLUTIONS = [
@@ -82,6 +82,8 @@ function GeneratePageInner() {
   const [aspectRatio, setAspectRatio] = useState('1:1');
   const [safetyTolerance, setSafetyTolerance] = useState('4');
   const [enableWebSearch, setEnableWebSearch] = useState(false);
+  const [autoExpand, setAutoExpand] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
 
   // Current model capabilities
   const modelCaps = BASE_MODELS.find((m) => m.value === baseModel) || BASE_MODELS[0];
@@ -229,14 +231,9 @@ function GeneratePageInner() {
     },
   });
 
-  const handleGenerate = () => {
-    if (!prompt.trim()) {
-      toast.error('Please enter a prompt');
-      return;
-    }
-
+  const buildGenerateParams = (finalPrompt: string) => {
     const params: Parameters<typeof generationApi.generate>[0] = {
-      prompt: prompt.trim(),
+      prompt: finalPrompt,
       base_model: baseModel,
       num_images: numImages,
     };
@@ -267,7 +264,33 @@ function GeneratePageInner() {
       params.enable_web_search = enableWebSearch;
     }
 
-    generateMutation.mutate(params);
+    return params;
+  };
+
+  const handleGenerate = async () => {
+    if (!prompt.trim()) {
+      toast.error('Please enter a prompt');
+      return;
+    }
+
+    let finalPrompt = prompt.trim();
+    setIsGenerating(true);
+
+    if (autoExpand) {
+      try {
+        const result = await generationApi.expandPrompt(finalPrompt);
+        finalPrompt = result.expanded_prompt;
+        setPrompt(finalPrompt);
+      } catch (err) {
+        toast.error(`Auto-expand failed: ${err instanceof Error ? err.message : String(err)}`);
+        setIsGenerating(false);
+        return;
+      }
+    }
+
+    generateMutation.mutate(buildGenerateParams(finalPrompt), {
+      onSettled: () => setIsGenerating(false),
+    });
   };
 
   const handleSizePreset = (w: number, h: number) => {
@@ -305,19 +328,40 @@ function GeneratePageInner() {
               }
             }}
           />
-          <div className="flex justify-end mt-1">
-            <button
-              onClick={() => expandMutation.mutate(prompt.trim())}
-              disabled={expandMutation.isPending || !prompt.trim()}
-              className="flex items-center gap-1.5 px-3 py-1 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
-            >
-              {expandMutation.isPending ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Wand2 className="h-3.5 w-3.5" />
+          <div className="flex items-center justify-between mt-1">
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={autoExpand}
+                onChange={(e) => setAutoExpand(e.target.checked)}
+                className="rounded"
+              />
+              Auto-expand on generate
+              {generationCosts?.expand_prompt_cost != null && (
+                <span className="inline-flex items-center gap-0.5 text-amber-600 dark:text-amber-400">
+                  <Zap className="h-3 w-3" />~{generationCosts.expand_prompt_cost < 1 ? '<1' : Math.round(generationCosts.expand_prompt_cost)}
+                </span>
               )}
-              Expand
-            </button>
+            </label>
+            <div className="flex items-center gap-2">
+              {generationCosts?.expand_prompt_cost != null && (
+                <span className="text-xs text-muted-foreground inline-flex items-center gap-0.5">
+                  <Zap className="h-3 w-3 text-amber-600 dark:text-amber-400" />~{generationCosts.expand_prompt_cost < 1 ? '<1' : Math.round(generationCosts.expand_prompt_cost)}
+                </span>
+              )}
+              <button
+                onClick={() => expandMutation.mutate(prompt.trim())}
+                disabled={expandMutation.isPending || !prompt.trim()}
+                className="flex items-center gap-1.5 px-3 py-1 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
+              >
+                {expandMutation.isPending ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Wand2 className="h-3.5 w-3.5" />
+                )}
+                Expand
+              </button>
+            </div>
           </div>
         </div>
 
@@ -425,10 +469,10 @@ function GeneratePageInner() {
           <div className="flex items-end gap-3">
             <button
               onClick={handleGenerate}
-              disabled={generateMutation.isPending || !prompt.trim()}
+              disabled={isGenerating || !prompt.trim()}
               className="flex items-center gap-2 px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 font-medium"
             >
-              {generateMutation.isPending ? (
+              {isGenerating ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <Sparkles className="h-4 w-4" />

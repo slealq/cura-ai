@@ -2,8 +2,8 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { visionApi, settingsApi } from '@/lib/api';
-import { Loader2, Eye, X, Upload, ImageIcon, Copy, Check, Trash2, ChevronDown, ChevronUp, Save } from 'lucide-react';
+import { visionApi, settingsApi, billingApi } from '@/lib/api';
+import { Loader2, Eye, X, Upload, ImageIcon, Copy, Check, Trash2, ChevronDown, ChevronUp, Save, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import ImagePickerModal from '@/components/ImagePickerModal';
 import { cn } from '@/lib/utils';
@@ -82,6 +82,15 @@ export default function VisionPage() {
     queryKey: ['presets'],
     queryFn: settingsApi.listPresets,
   });
+
+  // Fetch vision costs
+  const { data: visionCosts } = useQuery({
+    queryKey: ['vision-costs'],
+    queryFn: billingApi.getVisionCosts,
+    staleTime: 60_000,
+  });
+
+  const currentCost = visionCosts?.costs?.[provider]?.[mode] ?? null;
 
   // Load active preset prompts on mount
   useEffect(() => {
@@ -380,18 +389,26 @@ export default function VisionPage() {
             </div>
           </div>
 
-          <button
-            onClick={handleAnalyze}
-            disabled={analyzeMutation.isPending || !source || (mode === 'custom' && !customPrompt.trim())}
-            className="flex items-center gap-2 px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 font-medium"
-          >
-            {analyzeMutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Eye className="h-4 w-4" />
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleAnalyze}
+              disabled={analyzeMutation.isPending || !source || (mode === 'custom' && !customPrompt.trim())}
+              className="flex items-center gap-2 px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 font-medium"
+            >
+              {analyzeMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Eye className="h-4 w-4" />
+              )}
+              Analyze
+            </button>
+            {currentCost != null && currentCost > 0 && (
+              <span className="inline-flex items-center gap-0.5 text-xs text-amber-600 dark:text-amber-400">
+                <Zap className="h-3 w-3" />
+                ~{currentCost} sparks
+              </span>
             )}
-            Analyze
-          </button>
+          </div>
         </div>
 
         {/* Custom prompt textarea (custom mode only) */}

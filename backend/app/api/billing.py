@@ -92,6 +92,7 @@ class PlatformSummaryResponse(BaseModel):
 class GenerationCostsResponse(BaseModel):
     """Per-image generation cost in sparks for each base model."""
     costs: dict[str, dict[str, int]]
+    expand_prompt_cost: float
 
 
 # --- User endpoints ---
@@ -151,7 +152,81 @@ def get_generation_costs(
     db: Session = Depends(get_db),
 ):
     """Get per-image generation cost in sparks for each base model."""
-    return {"costs": BillingService.get_generation_costs(db)}
+    # Estimate expand_prompt cost: ~100 input tokens, ~200 output tokens typical
+    svc = BillingService(db, user_id=0)
+    entry = svc._get_catalog_entry("openai", "gpt-4o-mini", "expand_prompt")
+    expand_cost = 0.0
+    if entry and entry.cost_per_input_token and entry.cost_per_output_token:
+        from decimal import Decimal
+        raw = entry.cost_per_input_token * 100 + entry.cost_per_output_token * 200
+        charged = raw * entry.platform_markup
+        expand_cost = float(charged * Decimal("1000"))  # USD to sparks
+    return {
+        "costs": BillingService.get_generation_costs(db),
+        "expand_prompt_cost": round(expand_cost, 1),
+    }
+
+
+class VisionCostsResponse(BaseModel):
+    """Estimated per-call vision cost in sparks by provider and mode."""
+    costs: dict[str, dict[str, float]]
+
+
+# Typical token estimates for vision calls.
+# Output tokens (per mode) are conservative estimates (below max_tokens limits).
+_VISION_OUTPUT_TOKENS = {"tag": 500, "describe": 1500, "custom": 1000}
+
+# Input tokens differ dramatically by provider due to image tokenization:
+#   OpenAI gpt-4o: ~765 tokens per high-detail image + ~400 prompt/system ≈ 1200
+#   Anthropic Claude: similar to OpenAI, ~1200
+#   fal/OpenRouter (Grok): images consume ~50-60K tokens (observed from billing data)
+#     Plus fal.ai adds ~1.8x markup over raw OpenRouter cost.
+_VISION_INPUT_TOKENS = {
+    "openai": 1200,
+    "anthropic": 1200,
+    "fal": 55000,
+}
+
+# fal.ai charges ~1.8x more than raw OpenRouter token cost (their intermediary markup)
+_FAL_INTERMEDIARY_MARKUP = Decimal("1.8")
+
+# Map provider → (catalog_provider, catalog_model)
+_VISION_PROVIDER_MAP = {
+    "openai": ("openai", "gpt-4o"),
+    "anthropic": ("anthropic", "claude-sonnet-4-20250514"),
+    "fal": ("fal", "x-ai/grok-4-fast"),
+}
+
+
+@router.get("/vision-costs", response_model=VisionCostsResponse)
+def get_vision_costs(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get estimated per-call vision cost in sparks for each provider and mode."""
+    svc = BillingService(db, user_id=0)
+    result: dict[str, dict[str, float]] = {}
+
+    for provider_key, (cat_provider, cat_model) in _VISION_PROVIDER_MAP.items():
+        costs: dict[str, float] = {}
+        input_tokens = _VISION_INPUT_TOKENS.get(provider_key, 1200)
+        for mode, output_tokens in _VISION_OUTPUT_TOKENS.items():
+            # tag and describe have catalog entries; custom uses describe pricing
+            operation = "tag" if mode == "tag" else "describe"
+            entry = svc._get_catalog_entry(cat_provider, cat_model, operation)
+            if entry and entry.cost_per_input_token and entry.cost_per_output_token:
+                raw = (entry.cost_per_input_token * input_tokens
+                       + entry.cost_per_output_token * output_tokens)
+                # fal.ai adds its own intermediary markup on top of OpenRouter
+                if provider_key == "fal":
+                    raw = raw * _FAL_INTERMEDIARY_MARKUP
+                charged = raw * entry.platform_markup
+                costs[mode] = round(float(charged * Decimal("1000")), 1)
+            else:
+                costs[mode] = 0
+        result[provider_key] = costs
+
+    return {"costs": result}
 
 
 # --- Admin endpoints ---
