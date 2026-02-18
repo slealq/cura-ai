@@ -77,6 +77,13 @@ export default function VisionPage() {
     (m: ProviderModel) => m.capabilities.includes('vision')
   );
 
+  // Auto-select the first (cheapest) model when the list loads or provider changes
+  useEffect(() => {
+    if (visionModels.length > 0 && !visionModels.some((m: ProviderModel) => m.id === selectedModel)) {
+      setSelectedModel(visionModels[0].id);
+    }
+  }, [visionModels, selectedModel]);
+
   // Fetch prompt presets
   const { data: presets } = useQuery({
     queryKey: ['presets'],
@@ -362,7 +369,6 @@ export default function VisionPage() {
               onChange={(e) => setSelectedModel(e.target.value)}
               className="px-3 py-2 border border-border rounded-lg text-sm min-w-[180px]"
             >
-              <option value="">Default</option>
               {visionModels.map((m: ProviderModel) => (
                 <option key={m.id} value={m.id}>{m.name}</option>
               ))}
