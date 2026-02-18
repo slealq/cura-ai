@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user, require_admin
 from app.db.base import get_db
+from app.models.billing import UsageRecord
+from app.models.user import User
 from app.services.billing_service import BillingService
 
 router = APIRouter(prefix="/billing", tags=["billing"])
@@ -93,6 +95,30 @@ class GenerationCostsResponse(BaseModel):
     """Per-image generation cost in sparks for each base model."""
     costs: dict[str, dict[str, int]]
     expand_prompt_cost: float
+
+
+class BillingLogEntryResponse(BaseModel):
+    id: int
+    user_id: int
+    user_email: str
+    user_display_name: str | None
+    pipeline_log_id: int | None
+    operation: str
+    provider: str
+    model: str
+    input_tokens: int | None
+    output_tokens: int | None
+    raw_cost: float
+    charged_cost: float
+    detail: dict | None
+    created_at: str
+
+
+class BillingLogListResponse(BaseModel):
+    items: list[BillingLogEntryResponse]
+    total: int
+    skip: int
+    limit: int
 
 
 # --- User endpoints ---
@@ -281,6 +307,65 @@ def admin_get_summary(
     start = datetime.fromisoformat(start_date) if start_date else None
     end = datetime.fromisoformat(end_date) if end_date else None
     return BillingService.get_platform_summary(db, start, end)
+
+
+@router.get("/admin/logs", response_model=BillingLogListResponse)
+def admin_get_logs(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    user_search: str | None = None,
+    provider: str | None = None,
+    operation: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Get paginated billing logs across all users with filters."""
+    query = db.query(UsageRecord, User).join(User, UsageRecord.user_id == User.id)
+
+    if user_search:
+        search = f"%{user_search}%"
+        query = query.filter(
+            (User.email.ilike(search)) | (User.display_name.ilike(search))
+        )
+    if provider:
+        query = query.filter(UsageRecord.provider == provider)
+    if operation:
+        query = query.filter(UsageRecord.operation == operation)
+    if start_date:
+        query = query.filter(UsageRecord.created_at >= datetime.fromisoformat(start_date))
+    if end_date:
+        query = query.filter(UsageRecord.created_at <= datetime.fromisoformat(end_date))
+
+    total = query.count()
+    rows = (
+        query.order_by(UsageRecord.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+
+    items = []
+    for record, user in rows:
+        items.append({
+            "id": record.id,
+            "user_id": record.user_id,
+            "user_email": user.email,
+            "user_display_name": user.display_name,
+            "pipeline_log_id": record.pipeline_log_id,
+            "operation": record.operation,
+            "provider": record.provider,
+            "model": record.model,
+            "input_tokens": record.input_tokens,
+            "output_tokens": record.output_tokens,
+            "raw_cost": float(record.raw_cost),
+            "charged_cost": float(record.charged_cost),
+            "detail": record.detail,
+            "created_at": record.created_at.isoformat(),
+        })
+
+    return {"items": items, "total": total, "skip": skip, "limit": limit}
 
 
 @router.get("/admin/catalog", response_model=list[CatalogEntryResponse])

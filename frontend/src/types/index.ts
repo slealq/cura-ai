@@ -529,3 +529,36 @@ export interface PlatformUsageSummary {
   by_operation: Record<string, number>;
   record_count: number;
 }
+
+export interface BillingLogEntry {
+  id: number;
+  user_id: number;
+  user_email: string;
+  user_display_name: string | null;
+  pipeline_log_id: number | null;
+  operation: string;
+  provider: string;
+  model: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  raw_cost: number;
+  charged_cost: number;
+  detail: {
+    cost_per_input_token: number;
+    cost_per_output_token: number;
+    cost_per_call: number;
+    input_cost: number;
+    output_cost: number;
+    call_cost: number;
+    platform_markup: number;
+    sparks: number;
+  } | null;
+  created_at: string;
+}
+
+export interface BillingLogListResponse {
+  items: BillingLogEntry[];
+  total: number;
+  skip: number;
+  limit: number;
+}

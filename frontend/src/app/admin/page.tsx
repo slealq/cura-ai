@@ -1,14 +1,14 @@
 'use client';
 
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { notFound } from 'next/navigation';
-import { Loader2, Plus, Pencil, Trash2, RefreshCw, Eye, EyeOff, Key } from 'lucide-react';
+import { Loader2, Plus, Pencil, Trash2, RefreshCw, Eye, EyeOff, Key, ChevronRight, ChevronDown, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { billingApi, settingsApi } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn, formatDateCompact, formatNumber } from '@/lib/utils';
-import type { AdminUserBalance, APIKeyInfo, CostCatalogEntry } from '@/types';
+import type { AdminUserBalance, APIKeyInfo, BillingLogEntry, CostCatalogEntry } from '@/types';
 
 type DateRange = '7d' | '30d' | '90d' | 'all';
 
@@ -20,7 +20,7 @@ function getStartDate(range: DateRange): string | undefined {
   return d.toISOString();
 }
 
-export default function AdminUsagePage() {
+export default function AdminPage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [dateRange, setDateRange] = useState<DateRange>('30d');
@@ -38,9 +38,19 @@ export default function AdminUsagePage() {
     cost_per_call: 0,
     platform_markup: 1.0,
   });
+  const [activeTab, setActiveTab] = useState<'usage' | 'catalog' | 'logs' | 'system'>('usage');
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
   const [keyInput, setKeyInput] = useState('');
   const [showKeyInput, setShowKeyInput] = useState(false);
+
+  // Billing Logs state
+  const [logsPage, setLogsPage] = useState(0);
+  const [logsUserSearch, setLogsUserSearch] = useState('');
+  const [logsUserSearchInput, setLogsUserSearchInput] = useState('');
+  const [logsProvider, setLogsProvider] = useState('');
+  const [logsOperation, setLogsOperation] = useState('');
+  const [logsDateRange, setLogsDateRange] = useState<DateRange>('30d');
+  const [expandedLogId, setExpandedLogId] = useState<number | null>(null);
 
   const isAdmin = user?.role === 'admin';
 
@@ -70,6 +80,22 @@ export default function AdminUsagePage() {
     queryKey: ['settings', 'api-keys'],
     queryFn: settingsApi.getApiKeys,
     enabled: isAdmin,
+  });
+
+  const logsStartDate = getStartDate(logsDateRange);
+  const LOGS_LIMIT = 50;
+
+  const { data: logsData, isLoading: logsLoading } = useQuery({
+    queryKey: ['billing', 'admin', 'logs', logsPage, logsUserSearch, logsProvider, logsOperation, logsDateRange],
+    queryFn: () => billingApi.adminGetLogs({
+      skip: logsPage * LOGS_LIMIT,
+      limit: LOGS_LIMIT,
+      user_search: logsUserSearch || undefined,
+      provider: logsProvider || undefined,
+      operation: logsOperation || undefined,
+      start_date: logsStartDate,
+    }),
+    enabled: activeTab === 'logs',
   });
 
   const saveKeyMutation = useMutation({
@@ -153,25 +179,31 @@ export default function AdminUsagePage() {
 
   return (
     <div className="p-6 space-y-8 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Usage Dashboard</h1>
-        <div className="flex gap-1 bg-muted rounded-lg p-1">
-          {(['7d', '30d', '90d', 'all'] as DateRange[]).map((range) => (
+      <div>
+        <h1 className="text-2xl font-bold">Admin</h1>
+        <div className="flex gap-1 bg-muted rounded-lg p-1 mt-4 w-fit">
+          {([
+            { key: 'usage', label: 'Usage & Billing' },
+            { key: 'catalog', label: 'Cost Catalog' },
+            { key: 'logs', label: 'Billing Logs' },
+            { key: 'system', label: 'System' },
+          ] as const).map(({ key, label }) => (
             <button
-              key={range}
-              onClick={() => setDateRange(range)}
+              key={key}
+              onClick={() => setActiveTab(key)}
               className={cn(
                 'px-3 py-1 text-sm rounded-md transition-colors',
-                dateRange === range ? 'bg-background shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'
+                activeTab === key ? 'bg-background shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'
               )}
             >
-              {range === 'all' ? 'All' : range}
+              {label}
             </button>
           ))}
         </div>
       </div>
 
-      {/* Platform API Keys */}
+      {/* System Tab - Platform API Keys */}
+      {activeTab === 'system' && (
       <section>
         <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
           <Key className="h-5 w-5" /> Platform API Keys
@@ -305,6 +337,27 @@ export default function AdminUsagePage() {
           </div>
         )}
       </section>
+      )}
+
+      {/* Usage Tab - Platform Summary + User Balances */}
+      {activeTab === 'usage' && (
+      <>
+      <div className="flex justify-end">
+        <div className="flex gap-1 bg-muted rounded-lg p-1">
+          {(['7d', '30d', '90d', 'all'] as DateRange[]).map((range) => (
+            <button
+              key={range}
+              onClick={() => setDateRange(range)}
+              className={cn(
+                'px-3 py-1 text-sm rounded-md transition-colors',
+                dateRange === range ? 'bg-background shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              {range === 'all' ? 'All' : range}
+            </button>
+          ))}
+        </div>
+      </div>
 
       {/* Platform Summary */}
       <section>
@@ -476,8 +529,254 @@ export default function AdminUsagePage() {
           </div>
         )}
       </section>
+      </>
+      )}
 
-      {/* Cost Catalog */}
+      {/* Billing Logs Tab */}
+      {activeTab === 'logs' && (
+      <section className="space-y-4">
+        <h2 className="text-lg font-semibold">Billing Logs</h2>
+
+        {/* Filters */}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-1">
+            <input
+              type="text"
+              value={logsUserSearchInput}
+              onChange={(e) => setLogsUserSearchInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  setLogsUserSearch(logsUserSearchInput);
+                  setLogsPage(0);
+                }
+              }}
+              placeholder="Search user..."
+              className="px-3 py-1.5 bg-background border rounded-md text-sm w-48"
+            />
+            <button
+              onClick={() => { setLogsUserSearch(logsUserSearchInput); setLogsPage(0); }}
+              className="p-1.5 text-muted-foreground hover:text-foreground rounded-md hover:bg-muted"
+            >
+              <Search className="h-4 w-4" />
+            </button>
+          </div>
+
+          <select
+            value={logsProvider}
+            onChange={(e) => { setLogsProvider(e.target.value); setLogsPage(0); }}
+            className="px-3 py-1.5 bg-background border rounded-md text-sm"
+          >
+            <option value="">All Providers</option>
+            <option value="openai">openai</option>
+            <option value="anthropic">anthropic</option>
+            <option value="fal">fal</option>
+          </select>
+
+          <select
+            value={logsOperation}
+            onChange={(e) => { setLogsOperation(e.target.value); setLogsPage(0); }}
+            className="px-3 py-1.5 bg-background border rounded-md text-sm"
+          >
+            <option value="">All Operations</option>
+            <option value="tag">tag</option>
+            <option value="describe">describe</option>
+            <option value="embed">embed</option>
+            <option value="generate">generate</option>
+            <option value="train">train</option>
+            <option value="expand_prompt">expand_prompt</option>
+            <option value="summarize">summarize</option>
+          </select>
+
+          <div className="flex gap-1 bg-muted rounded-lg p-1">
+            {(['7d', '30d', '90d', 'all'] as DateRange[]).map((range) => (
+              <button
+                key={range}
+                onClick={() => { setLogsDateRange(range); setLogsPage(0); }}
+                className={cn(
+                  'px-3 py-1 text-sm rounded-md transition-colors',
+                  logsDateRange === range ? 'bg-background shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                {range === 'all' ? 'All' : range}
+              </button>
+            ))}
+          </div>
+
+          {(logsUserSearch || logsProvider || logsOperation) && (
+            <button
+              onClick={() => {
+                setLogsUserSearch('');
+                setLogsUserSearchInput('');
+                setLogsProvider('');
+                setLogsOperation('');
+                setLogsPage(0);
+              }}
+              className="px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground border rounded-md"
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+
+        {/* Table */}
+        {logsLoading ? (
+          <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+        ) : (
+          <>
+          <div className="bg-card border rounded-lg overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-muted/50">
+                  <th className="w-8 px-2 py-3" />
+                  <th className="text-left px-4 py-3 font-medium text-xs text-muted-foreground">Time</th>
+                  <th className="text-left px-4 py-3 font-medium text-xs text-muted-foreground">User</th>
+                  <th className="text-left px-4 py-3 font-medium text-xs text-muted-foreground">Operation</th>
+                  <th className="text-left px-4 py-3 font-medium text-xs text-muted-foreground">Provider / Model</th>
+                  <th className="text-right px-4 py-3 font-medium text-xs text-muted-foreground">Tokens</th>
+                  <th className="text-right px-4 py-3 font-medium text-xs text-muted-foreground">Raw $</th>
+                  <th className="text-right px-4 py-3 font-medium text-xs text-muted-foreground">Charged $</th>
+                  <th className="text-right px-4 py-3 font-medium text-xs text-muted-foreground">Sparks</th>
+                </tr>
+              </thead>
+              <tbody>
+                {logsData?.items.map((entry: BillingLogEntry) => {
+                  const isExpanded = expandedLogId === entry.id;
+                  const hasDetail = entry.detail !== null;
+                  const sparks = hasDetail ? entry.detail!.sparks : entry.charged_cost * 1000;
+                  return (
+                    <Fragment key={entry.id}>
+                      <tr
+                        className={cn(
+                          'border-b cursor-pointer hover:bg-muted/30 transition-colors',
+                          isExpanded && 'bg-muted/20',
+                          !hasDetail && 'cursor-default'
+                        )}
+                        onClick={() => hasDetail && setExpandedLogId(isExpanded ? null : entry.id)}
+                      >
+                        <td className="w-8 px-2 py-2.5 text-muted-foreground">
+                          {hasDetail && (
+                            isExpanded
+                              ? <ChevronDown className="h-4 w-4" />
+                              : <ChevronRight className="h-4 w-4" />
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap">
+                          {formatDateCompact(entry.created_at)}
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <span className="text-xs">{entry.user_email}</span>
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <span className="px-1.5 py-0.5 text-xs bg-muted rounded">{entry.operation}</span>
+                        </td>
+                        <td className="px-4 py-2.5 font-mono text-xs">
+                          {entry.provider}/{entry.model.length > 30 ? entry.model.slice(0, 28) + '...' : entry.model}
+                        </td>
+                        <td className="text-right px-4 py-2.5 text-xs text-muted-foreground">
+                          {entry.input_tokens || entry.output_tokens
+                            ? `${entry.input_tokens ?? 0} / ${entry.output_tokens ?? 0}`
+                            : '-'}
+                        </td>
+                        <td className="text-right px-4 py-2.5 font-mono text-xs">
+                          ${entry.raw_cost.toFixed(6)}
+                        </td>
+                        <td className="text-right px-4 py-2.5 font-mono text-xs">
+                          ${entry.charged_cost.toFixed(6)}
+                        </td>
+                        <td className="text-right px-4 py-2.5 font-mono text-xs font-medium">
+                          {sparks.toFixed(2)}
+                        </td>
+                      </tr>
+                      {isExpanded && hasDetail && (
+                        <tr className="border-b bg-muted/10">
+                          <td colSpan={9} className="px-10 py-3">
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                              <div>
+                                <span className="text-muted-foreground">Rate/Input Token</span>
+                                <p className="font-mono">{entry.detail!.cost_per_input_token.toFixed(10)}</p>
+                              </div>
+                              <div>
+                                <span className="text-muted-foreground">Rate/Output Token</span>
+                                <p className="font-mono">{entry.detail!.cost_per_output_token.toFixed(10)}</p>
+                              </div>
+                              <div>
+                                <span className="text-muted-foreground">Rate/Call</span>
+                                <p className="font-mono">${entry.detail!.cost_per_call.toFixed(6)}</p>
+                              </div>
+                              <div>
+                                <span className="text-muted-foreground">Platform Markup</span>
+                                <p className="font-mono">{entry.detail!.platform_markup}x</p>
+                              </div>
+                              <div>
+                                <span className="text-muted-foreground">Input Cost</span>
+                                <p className="font-mono">${entry.detail!.input_cost.toFixed(8)}</p>
+                              </div>
+                              <div>
+                                <span className="text-muted-foreground">Output Cost</span>
+                                <p className="font-mono">${entry.detail!.output_cost.toFixed(8)}</p>
+                              </div>
+                              <div>
+                                <span className="text-muted-foreground">Call Cost</span>
+                                <p className="font-mono">${entry.detail!.call_cost.toFixed(8)}</p>
+                              </div>
+                              {entry.pipeline_log_id && (
+                                <div>
+                                  <span className="text-muted-foreground">Pipeline Log ID</span>
+                                  <p className="font-mono">{entry.pipeline_log_id}</p>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+                {(!logsData?.items.length) && (
+                  <tr>
+                    <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">
+                      No billing logs found.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Pagination */}
+          {logsData && logsData.total > 0 && (
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-muted-foreground">
+                {logsData.total} records total
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setLogsPage(Math.max(0, logsPage - 1))}
+                  disabled={logsPage === 0}
+                  className="px-3 py-1.5 text-sm border rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-muted"
+                >
+                  Previous
+                </button>
+                <span className="text-sm text-muted-foreground">
+                  Page {logsPage + 1} of {Math.ceil(logsData.total / LOGS_LIMIT)}
+                </span>
+                <button
+                  onClick={() => setLogsPage(logsPage + 1)}
+                  disabled={(logsPage + 1) * LOGS_LIMIT >= logsData.total}
+                  className="px-3 py-1.5 text-sm border rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-muted"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
+          </>
+        )}
+      </section>
+      )}
+
+      {/* Catalog Tab - Cost Catalog */}
+      {activeTab === 'catalog' && (
       <section>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">Cost Catalog</h2>
@@ -671,6 +970,7 @@ export default function AdminUsagePage() {
           </div>
         )}
       </section>
+      )}
     </div>
   );
 }

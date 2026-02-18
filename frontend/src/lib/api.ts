@@ -5,6 +5,7 @@ import type {
   AuthUser,
   BatchJobImage,
   BatchUploadResponse,
+  BillingLogListResponse,
   Cluster,
   ClusterDetail,
   ClusteringConfig,
@@ -1248,6 +1249,19 @@ export const billingApi = {
 
   adminDeleteCatalogEntry: async (id: number): Promise<void> => {
     await api.delete(`/billing/admin/catalog/${id}`);
+  },
+
+  adminGetLogs: async (params?: {
+    skip?: number;
+    limit?: number;
+    user_search?: string;
+    provider?: string;
+    operation?: string;
+    start_date?: string;
+    end_date?: string;
+  }): Promise<BillingLogListResponse> => {
+    const { data } = await api.get('/billing/admin/logs', { params });
+    return data;
   },
 };
 

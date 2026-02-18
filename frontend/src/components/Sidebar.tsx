@@ -16,7 +16,7 @@ import {
   Box,
   LogOut,
   CreditCard,
-  BarChart3,
+  ShieldCheck,
   Zap,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
@@ -112,7 +112,7 @@ export default function Sidebar() {
   // Build navigation with conditional admin item
   const navItems = [
     ...navigation,
-    ...(isAdmin ? [{ name: 'Usage', href: '/admin/usage', icon: BarChart3 }] : []),
+    ...(isAdmin ? [{ name: 'Admin', href: '/admin', icon: ShieldCheck }] : []),
   ];
 
   return (

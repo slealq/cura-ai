@@ -147,7 +147,7 @@ class BillingService:
         pipeline_log_id: int | None = None,
     ) -> UsageRecord:
         """Record a usage event: look up cost, create record, debit balance."""
-        raw_cost, charged_cost = self._calculate_cost(
+        raw_cost, charged_cost, detail = self._calculate_cost(
             provider, model, operation, input_tokens, output_tokens
         )
 
@@ -161,6 +161,7 @@ class BillingService:
             output_tokens=output_tokens,
             raw_cost=raw_cost,
             charged_cost=charged_cost,
+            detail=detail,
         )
         self.db.add(record)
         self.db.flush()
@@ -182,8 +183,8 @@ class BillingService:
         operation: str,
         input_tokens: int | None,
         output_tokens: int | None,
-    ) -> tuple[Decimal, Decimal]:
-        """Calculate raw and charged cost from catalog. Returns (raw_cost, charged_cost)."""
+    ) -> tuple[Decimal, Decimal, dict | None]:
+        """Calculate raw and charged cost from catalog. Returns (raw_cost, charged_cost, detail)."""
         entry = self._get_catalog_entry(provider, model, operation)
         if not entry:
             logger.warning(
@@ -192,7 +193,7 @@ class BillingService:
                 self._email, provider, model, operation,
                 input_tokens, output_tokens,
             )
-            return Decimal("0"), Decimal("0")
+            return Decimal("0"), Decimal("0"), None
 
         input_cost = Decimal("0")
         output_cost = Decimal("0")
@@ -225,7 +226,18 @@ class BillingService:
             float(charged_cost), float(sparks),
         )
 
-        return raw_cost, charged_cost
+        detail = {
+            "cost_per_input_token": float(entry.cost_per_input_token or 0),
+            "cost_per_output_token": float(entry.cost_per_output_token or 0),
+            "cost_per_call": float(entry.cost_per_call or 0),
+            "input_cost": float(input_cost),
+            "output_cost": float(output_cost),
+            "call_cost": float(call_cost),
+            "platform_markup": float(entry.platform_markup),
+            "sparks": float(sparks),
+        }
+
+        return raw_cost, charged_cost, detail
 
     def _get_catalog_entry(
         self, provider: str, model: str, operation: str
