@@ -361,6 +361,12 @@ export interface ProviderConfig {
   max_tokens_tagging: number;
   max_tokens_description: number;
   max_tokens_summarization: number;
+  language_provider: string;
+  openai_language_model: string;
+  anthropic_language_model: string;
+  fal_language_model: string;
+  max_tokens_expansion: number;
+  max_tokens_suggestion: number;
 }
 
 export interface ProviderModel {

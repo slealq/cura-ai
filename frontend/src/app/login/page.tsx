@@ -2,8 +2,8 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Folder } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import SightLabLogo from '@/components/SightLabLogo';
 
 export default function LoginPage() {
   const [isSignUp, setIsSignUp] = useState(false);
@@ -45,10 +45,10 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-background">
       <div className="w-full max-w-sm mx-auto">
         <div className="flex items-center justify-center gap-2 mb-8">
-          <Folder className="h-10 w-10 text-primary" />
+          <SightLabLogo size="lg" />
           <div>
-            <h1 className="font-semibold text-2xl">Cura.ai</h1>
-            <p className="text-sm text-muted-foreground">Image Intelligence</p>
+            <h1 className="font-semibold text-2xl">SightLab</h1>
+            <p className="text-sm text-muted-foreground">See more. Create more.</p>
           </div>
         </div>
 

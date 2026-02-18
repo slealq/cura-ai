@@ -1,4 +1,4 @@
-# Cura.ai
+# SightLab
 
 Automatically ingest, tag, cluster, and browse design inspiration images using AI. Images flow through a processing pipeline that extracts tags, generates descriptions, creates embeddings for semantic search, and clusters similar images together.
 

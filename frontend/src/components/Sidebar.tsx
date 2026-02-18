@@ -5,7 +5,6 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutGrid,
   FolderOpen,
-  Folder,
   Settings,
   Activity,
   Upload,
@@ -19,6 +18,7 @@ import {
   ShieldCheck,
   Zap,
 } from 'lucide-react';
+import SightLabLogo from '@/components/SightLabLogo';
 import { useQuery } from '@tanstack/react-query';
 import { cn, formatNumber } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
@@ -119,11 +119,11 @@ export default function Sidebar() {
     <aside className="w-64 bg-card border-r border-border flex flex-col">
       <div className="p-6 border-b border-border">
         <Link href="/generate" className="flex items-center gap-2">
-          <Folder className="h-8 w-8 text-primary" />
+          <SightLabLogo size="sm" />
           <div>
-            <h1 className="font-semibold text-lg">Cura.ai</h1>
+            <h1 className="font-semibold text-lg">SightLab</h1>
             <p className="text-xs text-muted-foreground">
-              Image Intelligence
+              See more. Create more.
             </p>
             {ENV_BADGE[ENV_LABEL] && (() => {
               const colors = BADGE_COLORS[ENV_BADGE[ENV_LABEL]!.color];

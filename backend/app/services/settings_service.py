@@ -27,6 +27,7 @@ DEFAULT_TRAINING_CONFIGS = {
 }
 
 DEFAULT_GENERATION_CONFIGS = {
+    "nano-banana-pro": {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 3.5, "default_lora_scale": 1.0},
     "flux-dev": {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 3.5, "default_lora_scale": 1.0},
     "qwen-2.5": {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 4.0, "default_lora_scale": 1.0},
 }
@@ -73,6 +74,13 @@ DEFAULT_PROVIDER_CONFIG = {
     "max_tokens_tagging": 1000,
     "max_tokens_description": 3000,
     "max_tokens_summarization": 500,
+    # Language model settings (text-only tasks: summarization, expansion, suggestions)
+    "language_provider": "openai",
+    "openai_language_model": "gpt-4o-mini",
+    "anthropic_language_model": "claude-3-haiku-20240307",
+    "fal_language_model": "x-ai/grok-4-fast",
+    "max_tokens_expansion": 500,
+    "max_tokens_suggestion": 2000,
 }
 
 DEFAULT_CLUSTERING_CONFIG = {
@@ -92,35 +100,23 @@ DEFAULT_CLUSTERING_CONFIG = {
 # Factory-default GUIDANCE (user-controlled portion only).
 # The system wraps these with JSON format + error handling instructions.
 DEFAULT_TAG_GUIDANCE = """Tags should categorize the image across these dimensions:
-- Framing: full-body, upper-body, lower-body, feet-close-up, face-close-up, hands-close-up, medium-shot, wide-shot
-- People: single-woman, single-man, multiple-people, couple, group
-- Clothing: nude, semi-nude, clothed, lingerie, swimwear, dress, casual, formal, heels, barefoot
-- Body features: soles-visible, toenails-visible, fingernails-visible, tattoos, piercings
-- Activity: standing, sitting, lying-down, walking, posing, kneeling, bending-over
-- Setting: indoor, outdoor, studio, bedroom, bathroom, beach, nature, urban
-- Content: portrait, candid, artistic, professional, selfie, mirror
+- Subject type: person, animal, object, food, landscape, architecture, vehicle, artwork, text, abstract
+- Framing: close-up, medium-shot, wide-shot, aerial, macro, panoramic
+- People (if present): single-person, couple, group, child, adult
+- Appearance: clothing style, colors, accessories, notable features
+- Activity: standing, sitting, walking, running, eating, working, playing, posing, resting
+- Setting: indoor, outdoor, studio, nature, urban, rural, underwater
+- Scene: portrait, candid, street, product, food, wildlife, sports, event, still-life
+- Mood: bright, dark, warm, cool, dramatic, calm, energetic, moody
+- Style: photography, illustration, painting, digital-art, sketch, 3d-render
 
 Only include tags that are clearly present or relevant."""
 
-DEFAULT_DESCRIPTION_GUIDANCE = """Analyze this image and provide a detailed description organized by sections. The goal is that if someone uses this description to generate an image via AI, the result should match the original image as closely as possible.
+DEFAULT_DESCRIPTION_GUIDANCE = """Analyze this image and write a single flowing description as one continuous block of text. The image could be anything — a photograph, illustration, painting, screenshot, diagram, or any other visual. The goal is that if someone uses this description to generate an image via AI, the result should match the original as closely as possible.
 
-Sections to cover (include all that are relevant):
+Start by identifying what the image depicts, then describe it in detail — what is shown, how it is arranged, the composition and framing, the colors, lighting, textures, and any notable details. Work from the most prominent elements to the finer ones.
 
-**Subject**: Person(s) - clothing, pose, position of hands and legs, action, body position and orientation.
-
-**Face & Hair**: Hair style, color, length. Facial expression, makeup, notable features.
-
-**Body Details**: Nails (fingers/toes) - colors, shape, length. Accessories, jewelry, tattoos.
-
-**Camera**: Camera angle, distance, perspective relative to subject. Framing (close-up, medium shot, full body).
-
-**Background**: Setting description, colors, objects, depth of field.
-
-**Lighting**: Quality, direction, color temperature, shadows.
-
-**Special Focus**: If the image emphasizes feet, describe feet in detail - toenails, nail colors, nail shapes, sole visibility, toe positioning. If adult content, describe what is visible, body positioning, and physical details explicitly.
-
-Be specific, observational, and thorough. Write in plain descriptive language. The description should be long and detailed enough to reproduce the image."""
+Do not use headings, bullet points, or labeled sections. Write in plain, specific, observational language as a single cohesive paragraph. Be thorough enough to reproduce the image."""
 
 # Keep old names as aliases for backward compatibility with imports
 DEFAULT_TAG_PROMPT = DEFAULT_TAG_GUIDANCE

@@ -191,20 +191,26 @@ def get_cluster_summarizer(
     db: Session | None = None,
     user_id: int | None = None,
 ) -> BaseClusterSummarizer:
-    """Get cluster summarizer instance for the specified provider."""
+    """Get cluster summarizer instance for the specified provider.
+
+    Uses language_provider + *_language_model settings (text-only task).
+    Falls back to vision_provider + *_vision_model for backward compat.
+    """
     keys, config = _resolve_config(db, user_id)
     max_tokens = _token_config(config)
-    provider = provider or config.get("vision_provider") or settings.default_vision_provider
+    provider = provider or config.get("language_provider") or config.get("vision_provider") or settings.default_vision_provider
     if provider == "openai":
+        model = config.get("openai_language_model") or config.get("openai_vision_model")
         return OpenAIClusterSummarizer(
             api_key=keys.get("openai"),
-            model=config.get("openai_vision_model"),
+            model=model,
             max_tokens=max_tokens,
         )
     elif provider == "anthropic":
+        model = config.get("anthropic_language_model") or config.get("anthropic_vision_model")
         return AnthropicClusterSummarizer(
             api_key=keys.get("anthropic"),
-            model=config.get("anthropic_vision_model"),
+            model=model,
             max_tokens=max_tokens,
         )
     else:

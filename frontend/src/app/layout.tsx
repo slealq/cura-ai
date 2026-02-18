@@ -87,8 +87,9 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <title>Cura.ai</title>
-        <meta name="description" content="AI-powered image tagging, description, clustering, and semantic search" />
+        <title>SightLab</title>
+        <meta name="description" content="SightLab — AI-powered image intelligence, tagging, and generation" />
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
         <script
           dangerouslySetInnerHTML={{
             __html: `

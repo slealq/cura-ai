@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { imagesApi, settingsApi, clustersApi } from '@/lib/api';
+import { settingsApi, clustersApi } from '@/lib/api';
 import { RotateCcw, Plus, Trash2, Check, Copy, Play, HelpCircle, Eye, EyeOff, Shield, ShieldAlert, ShieldCheck, ShieldX, Loader2, Sun, Moon, Monitor } from 'lucide-react';
 import { toast } from 'sonner';
-import { getStatusColor, cn, formatDate } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { useTheme } from '@/contexts/ThemeContext';
 import type { ClusteringConfig, GenerationConfig, ProviderConfig, ProviderModel, TrainingConfig, PromptPreset } from '@/types';
 
@@ -101,12 +101,39 @@ function PromptSuggest({
   );
 }
 
+function AutoTextarea({
+  value,
+  onChange,
+  className,
+  ...props
+}: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  const resize = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = el.scrollHeight + 'px';
+  }, []);
+
+  useEffect(() => { resize(); }, [value, resize]);
+
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      onChange={(e) => { onChange?.(e); resize(); }}
+      className={cn('w-full px-4 py-3 border border-border rounded-lg text-sm leading-relaxed overflow-hidden', className)}
+      {...props}
+    />
+  );
+}
+
+type SettingsTab = 'appearance' | 'prompts' | 'vision' | 'language' | 'generation' | 'clustering';
+
 export default function SettingsPage() {
   const queryClient = useQueryClient();
-  const { data: stats } = useQuery({
-    queryKey: ['stats'],
-    queryFn: imagesApi.getStats,
-  });
+  const [activeTab, setActiveTab] = useState<SettingsTab>('appearance');
 
   const { data: presets } = useQuery({
     queryKey: ['presets'],
@@ -221,66 +248,32 @@ export default function SettingsPage() {
     <div className="max-w-6xl mx-auto space-y-8">
       <div>
         <h1 className="text-2xl font-bold">Settings</h1>
-        <p className="text-muted-foreground mt-1">
-          Pipeline configuration and system status
-        </p>
+        <div className="flex gap-1 bg-muted rounded-lg p-1 mt-4 w-fit">
+          {([
+            { key: 'appearance', label: 'Appearance' },
+            { key: 'prompts', label: 'Prompt Library' },
+            { key: 'vision', label: 'Vision Models' },
+            { key: 'language', label: 'Language Models' },
+            { key: 'generation', label: 'Generation & Training' },
+            { key: 'clustering', label: 'Clustering' },
+          ] as const).map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => setActiveTab(key)}
+              className={cn(
+                'px-3 py-1 text-sm rounded-md transition-colors',
+                activeTab === key ? 'bg-background shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Appearance */}
-      <AppearanceSettings />
+      {activeTab === 'appearance' && <AppearanceSettings />}
 
-      {/* Pipeline Stats */}
-      <section className="bg-card rounded-xl border border-border p-6">
-        <h2 className="font-semibold mb-4">Pipeline Statistics</h2>
-        {stats ? (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="p-4 bg-muted/50 rounded-lg">
-              <p className="text-2xl font-bold">{stats.total_images}</p>
-              <p className="text-sm text-muted-foreground">Total Images</p>
-            </div>
-            <div className="p-4 bg-muted/50 rounded-lg">
-              <p className="text-2xl font-bold">{stats.total_clusters}</p>
-              <p className="text-sm text-muted-foreground">Clusters</p>
-            </div>
-            <div className="p-4 bg-muted/50 rounded-lg">
-              <p className="text-2xl font-bold">{stats.clustered}</p>
-              <p className="text-sm text-muted-foreground">Processed</p>
-            </div>
-            <div className="p-4 bg-muted/50 rounded-lg">
-              <p className="text-2xl font-bold text-red-600 dark:text-red-400">{stats.failed}</p>
-              <p className="text-sm text-muted-foreground">Failed</p>
-            </div>
-          </div>
-        ) : (
-          <p className="text-muted-foreground">Loading stats...</p>
-        )}
-
-        {/* Status breakdown */}
-        {stats && (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {[
-              { label: 'Pending', count: stats.pending, status: 'pending' },
-              { label: 'Ingested', count: stats.ingested, status: 'ingested' },
-              { label: 'Tagged', count: stats.tagged, status: 'tagged' },
-              { label: 'Described', count: stats.described, status: 'described' },
-              { label: 'Embedded', count: stats.embedded, status: 'embedded' },
-              { label: 'Clustered', count: stats.clustered, status: 'clustered' },
-            ].map((item) => (
-              <div
-                key={item.label}
-                className={cn(
-                  'px-3 py-1 rounded-full text-sm',
-                  getStatusColor(item.status)
-                )}
-              >
-                {item.label}: {item.count}
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* Prompt Presets */}
+      {activeTab === 'prompts' && (
       <section className="bg-card rounded-xl border border-border p-6">
         <div className="flex items-center justify-between mb-4">
           <div>
@@ -347,10 +340,9 @@ export default function SettingsPage() {
                 {/* Tag prompt */}
                 <div>
                   <label className="block text-sm font-medium mb-1">Tag Instructions</label>
-                  <textarea
+                  <AutoTextarea
                     value={editTagPrompt}
                     onChange={(e) => setEditTagPrompt(e.target.value)}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm font-mono resize-y min-h-[180px]"
                   />
                   <PromptSuggest
                     promptType="tag"
@@ -362,10 +354,9 @@ export default function SettingsPage() {
                 {/* Description prompt */}
                 <div>
                   <label className="block text-sm font-medium mb-1">Description Instructions</label>
-                  <textarea
+                  <AutoTextarea
                     value={editDescPrompt}
                     onChange={(e) => setEditDescPrompt(e.target.value)}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm font-mono resize-y min-h-[180px]"
                   />
                   <PromptSuggest
                     promptType="description"
@@ -435,15 +426,15 @@ export default function SettingsPage() {
           </div>
         </div>
       </section>
+      )}
 
-      {/* Provider & Model Selection */}
-      <ProviderModelSettings />
+      {activeTab === 'vision' && <VisionModelSettings />}
 
-      {/* Generation Settings */}
-      <GenerationSettings />
+      {activeTab === 'language' && <LanguageModelSettings />}
 
-      {/* Clustering Settings */}
-      <ClusteringSettings />
+      {activeTab === 'generation' && <GenerationSettings />}
+
+      {activeTab === 'clustering' && <ClusteringSettings />}
     </div>
   );
 }
@@ -549,8 +540,9 @@ function Hint({ text }: { text: string }) {
 }
 
 const BASE_MODELS = [
-  { value: 'flux-dev', label: 'Flux' },
-  { value: 'qwen-2.5', label: 'Qwen 2.5' },
+  { value: 'nano-banana-pro', label: 'Nano Banana Pro', hasTraining: false },
+  { value: 'flux-dev', label: 'Flux', hasTraining: true },
+  { value: 'qwen-2.5', label: 'Qwen 2.5', hasTraining: true },
 ];
 
 function GenerationSettings() {
@@ -580,10 +572,12 @@ function GenerationSettings() {
     enabled: !baseModelLoading,
   });
 
+  const modelHasTraining = BASE_MODELS.find((m) => m.value === baseModel)?.hasTraining ?? false;
+
   const { data: trainConfig, isLoading: trainLoading } = useQuery({
     queryKey: ['training-config', baseModel],
     queryFn: () => settingsApi.getTrainingConfig(baseModel),
-    enabled: !baseModelLoading,
+    enabled: !baseModelLoading && modelHasTraining,
   });
 
   const [genDraft, setGenDraft] = useState<GenerationConfig | null>(null);
@@ -635,7 +629,7 @@ function GenerationSettings() {
     },
   });
 
-  if (baseModelLoading || genLoading || trainLoading || !genDraft || !trainDraft) {
+  if (baseModelLoading || genLoading || !genDraft || (modelHasTraining && (trainLoading || !trainDraft))) {
     return (
       <section className="bg-card rounded-xl border border-border p-6">
         <h2 className="font-semibold mb-4">Generation &amp; Training</h2>
@@ -653,38 +647,46 @@ function GenerationSettings() {
       <div className="mb-4">
         <h2 className="font-semibold">Generation &amp; Training</h2>
         <p className="text-sm text-muted-foreground mt-1">
-          Default parameters for image generation and LoRA training. Settings are saved per model.
+          Default parameters for image generation and LoRA training via fal.ai. Training is available for models that support LoRA fine-tuning.
         </p>
       </div>
 
       <div className="space-y-6">
-        {/* Top-level Base Model selector */}
-        <div>
-          <label className="block text-sm font-medium mb-2">Base Model</label>
-          <div className="inline-flex rounded-lg border border-border">
-            {BASE_MODELS.map((m) => (
-              <button
-                key={m.value}
-                onClick={() => {
-                  if (m.value !== baseModel) {
-                    setBaseModelMutation.mutate(m.value);
-                  }
-                }}
-                disabled={setBaseModelMutation.isPending}
-                className={cn(
-                  'px-4 py-2 text-sm font-medium transition-colors first:rounded-l-lg last:rounded-r-lg',
-                  baseModel === m.value
-                    ? 'bg-primary text-primary-foreground'
-                    : 'hover:bg-muted'
-                )}
-              >
-                {m.label}
-              </button>
-            ))}
+        {/* Provider + Model selector */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Provider</label>
+            <select
+              className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
+              value="fal"
+              disabled
+            >
+              <option value="fal">fal.ai</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Model</label>
+            <select
+              value={baseModel}
+              onChange={(e) => {
+                if (e.target.value !== baseModel) {
+                  setBaseModelMutation.mutate(e.target.value);
+                }
+              }}
+              disabled={setBaseModelMutation.isPending}
+              className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
+            >
+              {BASE_MODELS.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 
-        {/* Training defaults (shown first) */}
+        {/* Training defaults (shown first, only for models that support training) */}
+        {modelHasTraining && trainDraft && (
         <div className="border border-border rounded-lg p-4">
           <h3 className="text-sm font-medium mb-3">Training Defaults</h3>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -761,6 +763,7 @@ function GenerationSettings() {
             </button>
           </div>
         </div>
+        )}
 
         {/* Generation defaults (shown second) */}
         <div className="border border-border rounded-lg p-4">
@@ -1241,7 +1244,41 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function ProviderModelSettings() {
+const VISION_MODELS = [
+  // OpenAI
+  { id: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'openai' as const, field: 'openai_vision_model' as const },
+  { id: 'gpt-4o', label: 'GPT-4o', provider: 'openai' as const, field: 'openai_vision_model' as const },
+  { id: 'gpt-5-mini', label: 'GPT-5 Mini', provider: 'openai' as const, field: 'openai_vision_model' as const },
+  { id: 'gpt-5.2', label: 'GPT-5.2', provider: 'openai' as const, field: 'openai_vision_model' as const },
+  // Anthropic
+  { id: 'claude-3-haiku-20240307', label: 'Claude Haiku 3', provider: 'anthropic' as const, field: 'anthropic_vision_model' as const },
+  { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', provider: 'anthropic' as const, field: 'anthropic_vision_model' as const },
+  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'anthropic' as const, field: 'anthropic_vision_model' as const },
+  { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'anthropic' as const, field: 'anthropic_vision_model' as const },
+  // fal.ai (OpenRouter)
+  { id: 'x-ai/grok-4-fast', label: 'Grok 4 Fast', provider: 'fal' as const, field: 'fal_vision_model' as const },
+  { id: 'qwen/qwen3-vl-235b-a22b-instruct', label: 'Qwen3 VL 235B', provider: 'fal' as const, field: 'fal_vision_model' as const },
+  { id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'fal' as const, field: 'fal_vision_model' as const },
+];
+
+const LANGUAGE_MODELS = [
+  // OpenAI
+  { id: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'openai' as const, field: 'openai_language_model' as const },
+  { id: 'gpt-4o', label: 'GPT-4o', provider: 'openai' as const, field: 'openai_language_model' as const },
+  { id: 'gpt-5-mini', label: 'GPT-5 Mini', provider: 'openai' as const, field: 'openai_language_model' as const },
+  { id: 'gpt-5.2', label: 'GPT-5.2', provider: 'openai' as const, field: 'openai_language_model' as const },
+  // Anthropic
+  { id: 'claude-3-haiku-20240307', label: 'Claude Haiku 3', provider: 'anthropic' as const, field: 'anthropic_language_model' as const },
+  { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', provider: 'anthropic' as const, field: 'anthropic_language_model' as const },
+  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'anthropic' as const, field: 'anthropic_language_model' as const },
+  { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'anthropic' as const, field: 'anthropic_language_model' as const },
+  // fal.ai (OpenRouter)
+  { id: 'x-ai/grok-4-fast', label: 'Grok 4 Fast', provider: 'fal' as const, field: 'fal_language_model' as const },
+  { id: 'qwen/qwen3-vl-235b-a22b-instruct', label: 'Qwen3 VL 235B', provider: 'fal' as const, field: 'fal_language_model' as const },
+  { id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'fal' as const, field: 'fal_language_model' as const },
+];
+
+function VisionModelSettings() {
   const queryClient = useQueryClient();
 
   const { data: config, isLoading } = useQuery({
@@ -1255,15 +1292,8 @@ function ProviderModelSettings() {
     if (config && !draft) setDraft(config);
   }, [config, draft]);
 
-  // Fetch models for the selected vision provider
-  const visionProvider = draft?.vision_provider || 'openai';
+  // Fetch embedding models from OpenAI
   const embeddingProvider = draft?.embedding_provider || 'openai';
-
-  const { data: visionModels } = useQuery({
-    queryKey: ['provider-models', visionProvider],
-    queryFn: () => settingsApi.getProviderModels(visionProvider),
-    enabled: !!draft,
-  });
 
   const { data: embeddingModels } = useQuery({
     queryKey: ['provider-models', embeddingProvider],
@@ -1276,100 +1306,83 @@ function ProviderModelSettings() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['provider-config'] });
       setDraft(data);
-      toast.success('Provider settings saved');
+      toast.success('Vision settings saved');
     },
-    onError: () => toast.error('Failed to save provider settings'),
+    onError: () => toast.error('Failed to save vision settings'),
   });
 
   const resetMutation = useMutation({
-    mutationFn: settingsApi.resetProviderConfig,
+    mutationFn: () => settingsApi.updateProviderConfig({
+      vision_provider: 'openai',
+      openai_vision_model: 'gpt-4o-mini',
+      openai_embedding_model: 'text-embedding-3-small',
+      anthropic_vision_model: 'claude-3-haiku-20240307',
+      fal_vision_model: 'x-ai/grok-4-fast',
+      max_tokens_tagging: 1000,
+      max_tokens_description: 3000,
+    }),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['provider-config'] });
       setDraft(data);
-      toast.success('Provider settings reset to defaults');
+      toast.success('Vision settings reset to defaults');
     },
   });
 
   if (isLoading || !draft) {
     return (
       <section className="bg-card rounded-xl border border-border p-6">
-        <h2 className="font-semibold mb-4">Provider &amp; Model Selection</h2>
+        <h2 className="font-semibold mb-4">Vision Models</h2>
         <p className="text-muted-foreground text-sm">Loading...</p>
       </section>
     );
   }
 
-  const visionCapableModels = (visionModels || []).filter((m) =>
-    m.capabilities.includes('vision') || m.capabilities.includes('chat')
-  );
   const embeddingCapableModels = (embeddingModels || []).filter((m) =>
     m.capabilities.includes('embedding')
   );
 
-  const currentVisionModel = visionProvider === 'openai' ? draft.openai_vision_model : visionProvider === 'fal' ? draft.fal_vision_model : draft.anthropic_vision_model;
+  // Derive current vision model from provider + per-provider field
+  const visionProvider = draft.vision_provider || 'openai';
+  const currentVisionModelId = visionProvider === 'openai'
+    ? draft.openai_vision_model
+    : visionProvider === 'fal'
+      ? draft.fal_vision_model
+      : draft.anthropic_vision_model;
+
+  const handleVisionModelChange = (modelId: string) => {
+    const model = VISION_MODELS.find((m) => m.id === modelId);
+    if (!model) return;
+    setDraft({
+      ...draft,
+      vision_provider: model.provider,
+      [model.field]: modelId,
+    });
+  };
 
   return (
     <section className="bg-card rounded-xl border border-border p-6">
       <div className="mb-4">
-        <h2 className="font-semibold">Provider &amp; Model Selection</h2>
+        <h2 className="font-semibold">Vision Models</h2>
         <p className="text-sm text-muted-foreground mt-1">
-          Choose which AI providers and models to use for vision (tagging/description) and embeddings.
+          Models used for image tagging, describing, and embedding. These tasks send images to the AI model.
         </p>
       </div>
 
       <div className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Vision Provider */}
-          <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Vision Provider</label>
-            <select
-              value={draft.vision_provider}
-              onChange={(e) => setDraft({ ...draft, vision_provider: e.target.value })}
-              className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
-            >
-              <option value="openai">OpenAI</option>
-              <option value="anthropic">Anthropic</option>
-              <option value="fal">fal.ai (OpenRouter)</option>
-            </select>
-          </div>
-
           {/* Vision Model */}
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Vision Model</label>
             <select
-              value={currentVisionModel}
-              onChange={(e) => {
-                if (draft.vision_provider === 'openai') {
-                  setDraft({ ...draft, openai_vision_model: e.target.value });
-                } else if (draft.vision_provider === 'fal') {
-                  setDraft({ ...draft, fal_vision_model: e.target.value });
-                } else {
-                  setDraft({ ...draft, anthropic_vision_model: e.target.value });
-                }
-              }}
+              value={currentVisionModelId}
+              onChange={(e) => handleVisionModelChange(e.target.value)}
               className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
             >
-              {visionCapableModels.length > 0 ? (
-                visionCapableModels.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))
-              ) : (
-                <option value={currentVisionModel}>{currentVisionModel}</option>
-              )}
-            </select>
-          </div>
-
-          {/* Embedding Provider */}
-          <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Embedding Provider</label>
-            <select
-              value={draft.embedding_provider}
-              onChange={(e) => setDraft({ ...draft, embedding_provider: e.target.value })}
-              className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
-            >
-              <option value="openai">OpenAI</option>
+              {VISION_MODELS.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
             </select>
           </div>
 
@@ -1400,7 +1413,7 @@ function ProviderModelSettings() {
             Token Limits
             <Hint text="Maximum number of output tokens the AI model can generate for each operation. Increase if responses are being cut off; decrease to save costs." />
           </h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="flex items-center text-xs text-muted-foreground mb-1">
                 Tagging: {draft.max_tokens_tagging}
@@ -1439,6 +1452,131 @@ function ProviderModelSettings() {
                 <span>8000</span>
               </div>
             </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 pt-2">
+          <button
+            onClick={() => saveMutation.mutate(draft)}
+            disabled={saveMutation.isPending}
+            className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            {saveMutation.isPending ? 'Saving...' : 'Save'}
+          </button>
+          <button
+            onClick={() => resetMutation.mutate()}
+            disabled={resetMutation.isPending}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Reset to Defaults
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function LanguageModelSettings() {
+  const queryClient = useQueryClient();
+
+  const { data: config, isLoading } = useQuery({
+    queryKey: ['provider-config'],
+    queryFn: settingsApi.getProviderConfig,
+  });
+
+  const [draft, setDraft] = useState<ProviderConfig | null>(null);
+
+  useEffect(() => {
+    if (config && !draft) setDraft(config);
+  }, [config, draft]);
+
+  const saveMutation = useMutation({
+    mutationFn: (cfg: Partial<ProviderConfig>) => settingsApi.updateProviderConfig(cfg),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['provider-config'] });
+      setDraft(data);
+      toast.success('Language settings saved');
+    },
+    onError: () => toast.error('Failed to save language settings'),
+  });
+
+  const resetMutation = useMutation({
+    mutationFn: () => settingsApi.updateProviderConfig({
+      language_provider: 'openai',
+      openai_language_model: 'gpt-4o-mini',
+      anthropic_language_model: 'claude-3-haiku-20240307',
+      fal_language_model: 'x-ai/grok-4-fast',
+      max_tokens_summarization: 500,
+      max_tokens_expansion: 500,
+      max_tokens_suggestion: 2000,
+    }),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['provider-config'] });
+      setDraft(data);
+      toast.success('Language settings reset to defaults');
+    },
+  });
+
+  if (isLoading || !draft) {
+    return (
+      <section className="bg-card rounded-xl border border-border p-6">
+        <h2 className="font-semibold mb-4">Language Models</h2>
+        <p className="text-muted-foreground text-sm">Loading...</p>
+      </section>
+    );
+  }
+
+  // Derive current language model from provider + per-provider field
+  const languageProvider = draft.language_provider || 'openai';
+  const currentLanguageModelId = languageProvider === 'openai'
+    ? draft.openai_language_model
+    : languageProvider === 'fal'
+      ? draft.fal_language_model
+      : draft.anthropic_language_model;
+
+  const handleLanguageModelChange = (modelId: string) => {
+    const model = LANGUAGE_MODELS.find((m) => m.id === modelId);
+    if (!model) return;
+    setDraft({
+      ...draft,
+      language_provider: model.provider,
+      [model.field]: modelId,
+    });
+  };
+
+  return (
+    <section className="bg-card rounded-xl border border-border p-6">
+      <div className="mb-4">
+        <h2 className="font-semibold">Language Models</h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          Models used for text-only tasks: cluster summarization, prompt expansion, and prompt library suggestions.
+        </p>
+      </div>
+
+      <div className="space-y-4">
+        <div>
+          <label className="text-xs text-muted-foreground mb-1 block">Language Model</label>
+          <select
+            value={currentLanguageModelId}
+            onChange={(e) => handleLanguageModelChange(e.target.value)}
+            className="w-full max-w-md px-3 py-1.5 border border-border rounded-lg text-sm"
+          >
+            {LANGUAGE_MODELS.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Token Limits */}
+        <div className="border border-border rounded-lg p-4">
+          <h3 className="flex items-center text-sm font-medium mb-3">
+            Token Limits
+            <Hint text="Maximum number of output tokens the AI model can generate for each operation. Increase if responses are being cut off; decrease to save costs." />
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="flex items-center text-xs text-muted-foreground mb-1">
                 Summarization: {draft.max_tokens_summarization}
@@ -1456,6 +1594,44 @@ function ProviderModelSettings() {
               <div className="flex justify-between text-[10px] text-muted-foreground">
                 <span>100</span>
                 <span>2000</span>
+              </div>
+            </div>
+            <div>
+              <label className="flex items-center text-xs text-muted-foreground mb-1">
+                Expansion: {draft.max_tokens_expansion}
+                <Hint text="Token limit for prompt expansion (Generate page). Default: 500." />
+              </label>
+              <input
+                type="range"
+                min={100}
+                max={2000}
+                step={50}
+                value={draft.max_tokens_expansion}
+                onChange={(e) => setDraft({ ...draft, max_tokens_expansion: parseInt(e.target.value) })}
+                className="w-full"
+              />
+              <div className="flex justify-between text-[10px] text-muted-foreground">
+                <span>100</span>
+                <span>2000</span>
+              </div>
+            </div>
+            <div>
+              <label className="flex items-center text-xs text-muted-foreground mb-1">
+                Suggestion: {draft.max_tokens_suggestion}
+                <Hint text="Token limit for prompt library AI suggestions. Default: 2000." />
+              </label>
+              <input
+                type="range"
+                min={500}
+                max={4000}
+                step={100}
+                value={draft.max_tokens_suggestion}
+                onChange={(e) => setDraft({ ...draft, max_tokens_suggestion: parseInt(e.target.value) })}
+                className="w-full"
+              />
+              <div className="flex justify-between text-[10px] text-muted-foreground">
+                <span>500</span>
+                <span>4000</span>
               </div>
             </div>
           </div>

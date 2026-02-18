@@ -121,6 +121,12 @@ class ProviderConfigResponse(BaseModel):
     max_tokens_tagging: int
     max_tokens_description: int
     max_tokens_summarization: int
+    language_provider: str
+    openai_language_model: str
+    anthropic_language_model: str
+    fal_language_model: str
+    max_tokens_expansion: int
+    max_tokens_suggestion: int
 
 
 class ProviderConfigUpdateRequest(BaseModel):
@@ -135,6 +141,12 @@ class ProviderConfigUpdateRequest(BaseModel):
     max_tokens_tagging: int | None = None
     max_tokens_description: int | None = None
     max_tokens_summarization: int | None = None
+    language_provider: str | None = None
+    openai_language_model: str | None = None
+    anthropic_language_model: str | None = None
+    fal_language_model: str | None = None
+    max_tokens_expansion: int | None = None
+    max_tokens_suggestion: int | None = None
 
 
 class ProviderModelInfo(BaseModel):
@@ -334,6 +346,12 @@ async def suggest_prompt(request: PromptSuggestRequest, db: Session = Depends(ge
             raise HTTPException(status_code=400, detail="OpenAI API key not configured on the platform.")
         client = AsyncOpenAI(api_key=openai_key)
 
+        # Use language model settings from provider config
+        settings_service = get_settings_service(db, current_user.id)
+        provider_config = settings_service.get_provider_config()
+        suggestion_model = provider_config.get("openai_language_model", "gpt-4o-mini")
+        suggestion_max_tokens = provider_config.get("max_tokens_suggestion", 2000)
+
         system_prompt = (
             f"You are helping edit an AI prompt for image {request.prompt_type} generation. "
             "The user will provide the current prompt and a requested change. "
@@ -342,7 +360,7 @@ async def suggest_prompt(request: PromptSuggestRequest, db: Session = Depends(ge
         )
 
         response = await client.chat.completions.create(
-            model="gpt-4o",
+            model=suggestion_model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {
@@ -353,7 +371,7 @@ async def suggest_prompt(request: PromptSuggestRequest, db: Session = Depends(ge
                     ),
                 },
             ],
-            max_tokens=2000,
+            max_tokens=suggestion_max_tokens,
         )
 
         suggested = response.choices[0].message.content or ""
@@ -593,7 +611,6 @@ def _get_fal_models() -> list[ProviderModelInfo]:
         ProviderModelInfo(id="x-ai/grok-4-fast", name="Grok 4 Fast", capabilities=["vision", "chat"]),
         ProviderModelInfo(id="qwen/qwen3-vl-235b-a22b-instruct", name="Qwen3 VL 235B", capabilities=["vision", "chat"]),
         ProviderModelInfo(id="google/gemini-2.5-flash", name="Gemini 2.5 Flash", capabilities=["vision", "chat"]),
-        ProviderModelInfo(id="anthropic/claude-opus-4.5", name="Claude Opus 4.5 (via fal)", capabilities=["vision", "chat"]),
         # Generation/training endpoints
         ProviderModelInfo(id="fal-ai/flux/dev", name="Flux.1 Dev", capabilities=["generation"]),
         ProviderModelInfo(id="fal-ai/flux-lora", name="Flux LoRA", capabilities=["generation", "lora"]),

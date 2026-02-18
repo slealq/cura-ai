@@ -7,12 +7,23 @@ import { Loader2, Eye, X, Upload, ImageIcon, Copy, Check, Trash2, ChevronDown, C
 import { toast } from 'sonner';
 import ImagePickerModal from '@/components/ImagePickerModal';
 import { cn } from '@/lib/utils';
-import type { PromptPreset, ProviderModel } from '@/types';
+import type { PromptPreset } from '@/types';
 
-const VISION_PROVIDERS = [
-  { value: 'openai', label: 'OpenAI' },
-  { value: 'anthropic', label: 'Anthropic' },
-  { value: 'fal', label: 'fal.ai' },
+const VISION_MODEL_OPTIONS = [
+  // OpenAI
+  { id: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'openai' },
+  { id: 'gpt-4o', label: 'GPT-4o', provider: 'openai' },
+  { id: 'gpt-5-mini', label: 'GPT-5 Mini', provider: 'openai' },
+  { id: 'gpt-5.2', label: 'GPT-5.2', provider: 'openai' },
+  // Anthropic
+  { id: 'claude-3-haiku-20240307', label: 'Claude Haiku 3', provider: 'anthropic' },
+  { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', provider: 'anthropic' },
+  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'anthropic' },
+  { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'anthropic' },
+  // fal.ai (OpenRouter)
+  { id: 'x-ai/grok-4-fast', label: 'Grok 4 Fast', provider: 'fal' },
+  { id: 'qwen/qwen3-vl-235b-a22b-instruct', label: 'Qwen3 VL 235B', provider: 'fal' },
+  { id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'fal' },
 ];
 
 const MODES = [
@@ -43,10 +54,10 @@ export default function VisionPage() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
 
-  // Analysis params
-  const [provider, setProvider] = useState('openai');
-  const [selectedModel, setSelectedModel] = useState('');
+  // Analysis params — single model dropdown derives provider
+  const [selectedModel, setSelectedModel] = useState('gpt-4o-mini');
   const [mode, setMode] = useState<'tag' | 'describe' | 'custom'>('describe');
+  const provider = VISION_MODEL_OPTIONS.find((m) => m.id === selectedModel)?.provider ?? 'openai';
   const [customPrompt, setCustomPrompt] = useState('');
 
   // Prompt editing
@@ -66,23 +77,6 @@ export default function VisionPage() {
   });
 
   const results = resultsData?.items ?? [];
-
-  // Fetch models for the selected provider
-  const { data: providerModels } = useQuery({
-    queryKey: ['provider-models', provider],
-    queryFn: () => settingsApi.getProviderModels(provider),
-  });
-
-  const visionModels = (providerModels || []).filter(
-    (m: ProviderModel) => m.capabilities.includes('vision')
-  );
-
-  // Auto-select the first (cheapest) model when the list loads or provider changes
-  useEffect(() => {
-    if (visionModels.length > 0 && !visionModels.some((m: ProviderModel) => m.id === selectedModel)) {
-      setSelectedModel(visionModels[0].id);
-    }
-  }, [visionModels, selectedModel]);
 
   // Fetch prompt presets
   const { data: presets } = useQuery({
@@ -144,11 +138,6 @@ export default function VisionPage() {
       toast.error(`Failed to save: ${err.message}`);
     },
   });
-
-  const handleProviderChange = (newProvider: string) => {
-    setProvider(newProvider);
-    setSelectedModel('');
-  };
 
   // Analyze mutation
   const analyzeMutation = useMutation({
@@ -348,29 +337,14 @@ export default function VisionPage() {
         {/* Controls row */}
         <div className="flex flex-wrap gap-4 items-end">
           <div>
-            <label className="block text-xs text-muted-foreground mb-1">Provider</label>
-            <select
-              value={provider}
-              onChange={(e) => handleProviderChange(e.target.value)}
-              className="px-3 py-2 border border-border rounded-lg text-sm"
-            >
-              {VISION_PROVIDERS.map((p) => (
-                <option key={p.value} value={p.value}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
             <label className="block text-xs text-muted-foreground mb-1">Model</label>
             <select
               value={selectedModel}
               onChange={(e) => setSelectedModel(e.target.value)}
-              className="px-3 py-2 border border-border rounded-lg text-sm min-w-[180px]"
+              className="px-3 py-2 border border-border rounded-lg text-sm min-w-[200px]"
             >
-              {visionModels.map((m: ProviderModel) => (
-                <option key={m.id} value={m.id}>{m.name}</option>
+              {VISION_MODEL_OPTIONS.map((m) => (
+                <option key={m.id} value={m.id}>{m.label}</option>
               ))}
             </select>
           </div>

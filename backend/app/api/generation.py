@@ -375,11 +375,17 @@ async def expand_prompt(
     if not openai_key:
         raise HTTPException(status_code=400, detail="OpenAI API key not configured on the platform.")
 
+    # Use language model settings from provider config
+    settings_svc = get_settings_service(db, current_user.id)
+    provider_config = settings_svc.get_provider_config()
+    expansion_model = provider_config.get("openai_language_model", "gpt-4o-mini")
+    expansion_max_tokens = provider_config.get("max_tokens_expansion", 500)
+
     client = AsyncOpenAI(api_key=openai_key)
 
     try:
         response = await client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=expansion_model,
             messages=[
                 {
                     "role": "system",
@@ -394,7 +400,7 @@ async def expand_prompt(
                 },
                 {"role": "user", "content": request.prompt},
             ],
-            max_tokens=500,
+            max_tokens=expansion_max_tokens,
         )
 
         expanded = response.choices[0].message.content or ""
@@ -406,7 +412,7 @@ async def expand_prompt(
             billing.record_usage(
                 operation="expand_prompt",
                 provider="openai",
-                model="gpt-4o-mini",
+                model=expansion_model,
                 input_tokens=usage.prompt_tokens,
                 output_tokens=usage.completion_tokens,
             )
