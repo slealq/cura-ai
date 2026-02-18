@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useState } from 'react';
+import { Fragment, useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { notFound } from 'next/navigation';
 import { Loader2, Plus, Pencil, Trash2, RefreshCw, Eye, EyeOff, Key, ChevronRight, ChevronDown, Search } from 'lucide-react';
@@ -8,7 +8,7 @@ import { toast } from 'sonner';
 import { billingApi, settingsApi } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn, formatDateCompact, formatNumber } from '@/lib/utils';
-import type { AdminUserBalance, APIKeyInfo, BillingLogEntry, CostCatalogEntry } from '@/types';
+import type { AdminUserBalance, APIKeyInfo, BillingLogEntry, CostCatalogEntry, ModelBulkUpdateRequest } from '@/types';
 
 type DateRange = '7d' | '30d' | '90d' | 'all';
 
@@ -42,6 +42,16 @@ export default function AdminPage() {
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
   const [keyInput, setKeyInput] = useState('');
   const [showKeyInput, setShowKeyInput] = useState(false);
+
+  // Model edit dialog state
+  const [editingModel, setEditingModel] = useState<{ provider: string; model: string } | null>(null);
+  const [modelEditForm, setModelEditForm] = useState<{
+    cost_per_input_token: number;
+    cost_per_output_token: number;
+    cost_per_call: number;
+    operations: { operation: string; platform_markup: number }[];
+  }>({ cost_per_input_token: 0, cost_per_output_token: 0, cost_per_call: 0, operations: [] });
+  const [setAllMarkup, setSetAllMarkup] = useState('');
 
   // Billing Logs state
   const [logsPage, setLogsPage] = useState(0);
@@ -168,14 +178,60 @@ export default function AdminPage() {
     onError: () => toast.error('Failed to delete catalog entry'),
   });
 
+  const bulkUpdateMutation = useMutation({
+    mutationFn: (data: ModelBulkUpdateRequest) => billingApi.adminBulkUpdateModel(data),
+    onSuccess: () => {
+      toast.success('Model pricing updated');
+      queryClient.invalidateQueries({ queryKey: ['billing', 'admin', 'catalog'] });
+      setEditingModel(null);
+    },
+    onError: () => toast.error('Failed to update model pricing'),
+  });
+
   const sortedUsers = users?.slice().sort((a: AdminUserBalance, b: AdminUserBalance) => a.balance - b.balance) || [];
 
-  // Group catalog by provider
-  const catalogByProvider: Record<string, CostCatalogEntry[]> = {};
-  catalog?.forEach((entry: CostCatalogEntry) => {
-    if (!catalogByProvider[entry.provider]) catalogByProvider[entry.provider] = [];
-    catalogByProvider[entry.provider].push(entry);
-  });
+  // Group catalog by provider → model
+  type ModelGroup = {
+    provider: string;
+    model: string;
+    entries: CostCatalogEntry[];
+    isTokenBased: boolean;
+  };
+
+  const catalogGroups = useMemo(() => {
+    if (!catalog) return { tokenModels: [] as ModelGroup[], perCallEntries: [] as CostCatalogEntry[] };
+
+    const byKey: Record<string, CostCatalogEntry[]> = {};
+    catalog.forEach((entry: CostCatalogEntry) => {
+      const key = `${entry.provider}::${entry.model}`;
+      if (!byKey[key]) byKey[key] = [];
+      byKey[key].push(entry);
+    });
+
+    const tokenModels: ModelGroup[] = [];
+    const perCallEntries: CostCatalogEntry[] = [];
+
+    Object.entries(byKey).forEach(([, entries]) => {
+      const hasTokenPricing = entries.some(
+        (e) => (e.cost_per_input_token && e.cost_per_input_token > 0) || (e.cost_per_output_token && e.cost_per_output_token > 0)
+      );
+      if (hasTokenPricing) {
+        tokenModels.push({
+          provider: entries[0].provider,
+          model: entries[0].model,
+          entries,
+          isTokenBased: true,
+        });
+      } else {
+        perCallEntries.push(...entries);
+      }
+    });
+
+    // Sort token models by provider then model
+    tokenModels.sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model));
+
+    return { tokenModels, perCallEntries };
+  }, [catalog]);
 
   return (
     <div className="p-6 space-y-8 max-w-7xl mx-auto">
@@ -777,8 +833,8 @@ export default function AdminPage() {
 
       {/* Catalog Tab - Cost Catalog */}
       {activeTab === 'catalog' && (
-      <section>
-        <div className="flex items-center justify-between mb-4">
+      <section className="space-y-6">
+        <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Cost Catalog</h2>
           <button
             onClick={() => {
@@ -795,81 +851,142 @@ export default function AdminPage() {
         {catalogLoading ? (
           <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
         ) : (
-          <div className="space-y-4">
-            {Object.entries(catalogByProvider).map(([provider, entries]) => (
-              <div key={provider} className="bg-card border rounded-lg overflow-hidden">
-                <div className="px-4 py-2 bg-muted/50 border-b">
-                  <p className="font-medium text-sm capitalize">{provider}</p>
-                </div>
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b">
-                      <th className="text-left px-4 py-2 font-medium text-xs text-muted-foreground">Model</th>
-                      <th className="text-left px-4 py-2 font-medium text-xs text-muted-foreground">Operation</th>
-                      <th className="text-right px-4 py-2 font-medium text-xs text-muted-foreground">Input Token</th>
-                      <th className="text-right px-4 py-2 font-medium text-xs text-muted-foreground">Output Token</th>
-                      <th className="text-right px-4 py-2 font-medium text-xs text-muted-foreground">Per Call</th>
-                      <th className="text-right px-4 py-2 font-medium text-xs text-muted-foreground">Markup</th>
-                      <th className="text-right px-4 py-2 font-medium text-xs text-muted-foreground">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {entries.map((entry: CostCatalogEntry) => (
-                      <tr key={entry.id} className="border-b last:border-0">
-                        <td className="px-4 py-2 font-mono text-xs">{entry.model}</td>
-                        <td className="px-4 py-2">{entry.operation}</td>
-                        <td className="text-right px-4 py-2 font-mono text-xs">
-                          {entry.cost_per_input_token ? entry.cost_per_input_token.toFixed(10) : '-'}
-                        </td>
-                        <td className="text-right px-4 py-2 font-mono text-xs">
-                          {entry.cost_per_output_token ? entry.cost_per_output_token.toFixed(10) : '-'}
-                        </td>
-                        <td className="text-right px-4 py-2 font-mono text-xs">
-                          {entry.cost_per_call ? entry.cost_per_call.toFixed(4) : '-'}
-                        </td>
-                        <td className="text-right px-4 py-2">{entry.platform_markup}x</td>
-                        <td className="text-right px-4 py-2">
-                          <div className="flex items-center justify-end gap-1">
+          <div className="space-y-6">
+            {/* Token-based models as cards */}
+            {catalogGroups.tokenModels.length > 0 && (
+              <div className="space-y-3">
+                <p className="text-sm font-medium text-muted-foreground">Token-Based Models</p>
+                <div className="grid grid-cols-1 gap-3">
+                  {catalogGroups.tokenModels.map((group) => {
+                    const markups = group.entries.map((e) => e.platform_markup);
+                    const allSame = markups.every((m) => m === markups[0]);
+                    const inputPrice = group.entries[0].cost_per_input_token;
+                    const outputPrice = group.entries[0].cost_per_output_token;
+
+                    return (
+                      <div key={`${group.provider}::${group.model}`} className="bg-card border rounded-lg px-4 py-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <span className="font-medium text-sm">{group.model}</span>
+                            <span className="text-xs text-muted-foreground">{group.provider}</span>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                              {inputPrice ? (
+                                <span>${(inputPrice * 1_000_000).toFixed(2)}/1M in</span>
+                              ) : null}
+                              {outputPrice ? (
+                                <span>${(outputPrice * 1_000_000).toFixed(2)}/1M out</span>
+                              ) : null}
+                            </div>
                             <button
                               onClick={() => {
-                                setEditingEntry(entry);
-                                setCatalogForm({
-                                  provider: entry.provider,
-                                  model: entry.model,
-                                  operation: entry.operation,
-                                  cost_per_input_token: entry.cost_per_input_token || 0,
-                                  cost_per_output_token: entry.cost_per_output_token || 0,
-                                  cost_per_call: entry.cost_per_call || 0,
-                                  platform_markup: entry.platform_markup,
+                                setEditingModel({ provider: group.provider, model: group.model });
+                                setModelEditForm({
+                                  cost_per_input_token: inputPrice || 0,
+                                  cost_per_output_token: outputPrice || 0,
+                                  cost_per_call: group.entries[0].cost_per_call || 0,
+                                  operations: group.entries.map((e) => ({
+                                    operation: e.operation,
+                                    platform_markup: e.platform_markup,
+                                  })),
                                 });
-                                setShowCatalogForm(true);
+                                setSetAllMarkup('');
                               }}
-                              className="p-1 text-muted-foreground hover:text-foreground"
+                              className="p-1.5 text-muted-foreground hover:text-foreground rounded-md hover:bg-muted"
+                              title="Edit model pricing"
                             >
                               <Pencil className="h-3.5 w-3.5" />
                             </button>
-                            <button
-                              onClick={() => {
-                                if (confirm('Delete this catalog entry?')) {
-                                  deleteCatalogMutation.mutate(entry.id);
-                                }
-                              }}
-                              className="p-1 text-muted-foreground hover:text-red-500"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
                           </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5 mt-2">
+                          {allSame ? (
+                            <span className="px-2 py-0.5 text-xs bg-muted rounded-full">
+                              All: {markups[0]}x ({group.entries.length} ops)
+                            </span>
+                          ) : (
+                            group.entries.map((e) => (
+                              <span key={e.id} className="px-2 py-0.5 text-xs bg-muted rounded-full">
+                                {e.operation} {e.platform_markup}x
+                              </span>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            ))}
+            )}
+
+            {/* Per-call entries as compact table */}
+            {catalogGroups.perCallEntries.length > 0 && (
+              <div className="space-y-3">
+                <p className="text-sm font-medium text-muted-foreground">Per-Call Models</p>
+                <div className="bg-card border rounded-lg overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/50">
+                        <th className="text-left px-4 py-2 font-medium text-xs text-muted-foreground">Model</th>
+                        <th className="text-left px-4 py-2 font-medium text-xs text-muted-foreground">Operation</th>
+                        <th className="text-right px-4 py-2 font-medium text-xs text-muted-foreground">Cost/Call</th>
+                        <th className="text-right px-4 py-2 font-medium text-xs text-muted-foreground">Markup</th>
+                        <th className="text-right px-4 py-2 font-medium text-xs text-muted-foreground">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {catalogGroups.perCallEntries.map((entry: CostCatalogEntry) => (
+                        <tr key={entry.id} className="border-b last:border-0">
+                          <td className="px-4 py-2 font-mono text-xs">{entry.provider}/{entry.model}</td>
+                          <td className="px-4 py-2 text-xs">{entry.operation}</td>
+                          <td className="text-right px-4 py-2 font-mono text-xs">
+                            ${entry.cost_per_call?.toFixed(4) ?? '0'}
+                          </td>
+                          <td className="text-right px-4 py-2 text-xs">{entry.platform_markup}x</td>
+                          <td className="text-right px-4 py-2">
+                            <div className="flex items-center justify-end gap-1">
+                              <button
+                                onClick={() => {
+                                  setEditingEntry(entry);
+                                  setCatalogForm({
+                                    provider: entry.provider,
+                                    model: entry.model,
+                                    operation: entry.operation,
+                                    cost_per_input_token: entry.cost_per_input_token || 0,
+                                    cost_per_output_token: entry.cost_per_output_token || 0,
+                                    cost_per_call: entry.cost_per_call || 0,
+                                    platform_markup: entry.platform_markup,
+                                  });
+                                  setShowCatalogForm(true);
+                                }}
+                                className="p-1 text-muted-foreground hover:text-foreground"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (confirm('Delete this catalog entry?')) {
+                                    deleteCatalogMutation.mutate(entry.id);
+                                  }
+                                }}
+                                className="p-1 text-muted-foreground hover:text-red-500"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Catalog Form Dialog */}
+        {/* Single entry form dialog (for per-call entries and new entries) */}
         {showCatalogForm && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowCatalogForm(false)}>
             <div className="bg-card border rounded-lg p-6 w-[480px] space-y-4" onClick={(e) => e.stopPropagation()}>
@@ -964,6 +1081,131 @@ export default function AdminPage() {
                   className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
                 >
                   {saveCatalogMutation.isPending ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Model edit dialog (for token-based models) */}
+        {editingModel && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setEditingModel(null)}>
+            <div className="bg-card border rounded-lg p-6 w-[520px] space-y-4 max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+              <h3 className="font-semibold">
+                Edit {editingModel.model}
+                <span className="text-sm font-normal text-muted-foreground ml-2">{editingModel.provider}</span>
+              </h3>
+
+              {/* Base pricing */}
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-xs font-medium">Cost/Input Token</label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={modelEditForm.cost_per_input_token}
+                    onChange={(e) => setModelEditForm({ ...modelEditForm, cost_per_input_token: parseFloat(e.target.value) || 0 })}
+                    className="w-full mt-1 px-2 py-1.5 bg-background border rounded-md text-sm font-mono"
+                  />
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    ${(modelEditForm.cost_per_input_token * 1_000_000).toFixed(2)}/1M
+                  </p>
+                </div>
+                <div>
+                  <label className="text-xs font-medium">Cost/Output Token</label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={modelEditForm.cost_per_output_token}
+                    onChange={(e) => setModelEditForm({ ...modelEditForm, cost_per_output_token: parseFloat(e.target.value) || 0 })}
+                    className="w-full mt-1 px-2 py-1.5 bg-background border rounded-md text-sm font-mono"
+                  />
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    ${(modelEditForm.cost_per_output_token * 1_000_000).toFixed(2)}/1M
+                  </p>
+                </div>
+                <div>
+                  <label className="text-xs font-medium">Cost/Call</label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={modelEditForm.cost_per_call}
+                    onChange={(e) => setModelEditForm({ ...modelEditForm, cost_per_call: parseFloat(e.target.value) || 0 })}
+                    className="w-full mt-1 px-2 py-1.5 bg-background border rounded-md text-sm font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* Set All Markups */}
+              <div className="flex items-center gap-2 pt-1">
+                <label className="text-xs font-medium whitespace-nowrap">Set All Markups</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={setAllMarkup}
+                  onChange={(e) => setSetAllMarkup(e.target.value)}
+                  placeholder="e.g. 2.0"
+                  className="w-24 px-2 py-1 bg-background border rounded-md text-sm"
+                />
+                <button
+                  onClick={() => {
+                    const v = parseFloat(setAllMarkup);
+                    if (!v || v <= 0) { toast.error('Enter a valid markup'); return; }
+                    setModelEditForm({
+                      ...modelEditForm,
+                      operations: modelEditForm.operations.map((op) => ({ ...op, platform_markup: v })),
+                    });
+                    setSetAllMarkup('');
+                  }}
+                  className="px-2 py-1 text-xs bg-muted rounded-md hover:bg-muted/80"
+                >
+                  Apply
+                </button>
+              </div>
+
+              {/* Operations list */}
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-muted-foreground">Per-Operation Markup</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {modelEditForm.operations.map((op, idx) => (
+                    <div key={op.operation} className="flex items-center gap-2 bg-muted/30 rounded-md px-2 py-1.5">
+                      <span className="text-xs flex-1 truncate">{op.operation}</span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={op.platform_markup}
+                        onChange={(e) => {
+                          const ops = [...modelEditForm.operations];
+                          ops[idx] = { ...ops[idx], platform_markup: parseFloat(e.target.value) || 1.0 };
+                          setModelEditForm({ ...modelEditForm, operations: ops });
+                        }}
+                        className="w-16 px-1.5 py-0.5 bg-background border rounded text-xs text-right"
+                      />
+                      <span className="text-xs text-muted-foreground">x</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex gap-2 justify-end pt-2">
+                <button onClick={() => setEditingModel(null)} className="px-4 py-2 text-sm border rounded-md">
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    bulkUpdateMutation.mutate({
+                      provider: editingModel.provider,
+                      model: editingModel.model,
+                      cost_per_input_token: modelEditForm.cost_per_input_token,
+                      cost_per_output_token: modelEditForm.cost_per_output_token,
+                      cost_per_call: modelEditForm.cost_per_call,
+                      operations: modelEditForm.operations,
+                    });
+                  }}
+                  disabled={bulkUpdateMutation.isPending}
+                  className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
+                >
+                  {bulkUpdateMutation.isPending ? 'Saving...' : 'Save'}
                 </button>
               </div>
             </div>

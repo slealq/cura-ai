@@ -66,9 +66,9 @@ DEFAULT_BASE_MODEL = "nano-banana-pro"
 DEFAULT_PROVIDER_CONFIG = {
     "vision_provider": "openai",
     "embedding_provider": "openai",
-    "openai_vision_model": "gpt-4o",
+    "openai_vision_model": "gpt-4o-mini",
     "openai_embedding_model": "text-embedding-3-small",
-    "anthropic_vision_model": "claude-sonnet-4-20250514",
+    "anthropic_vision_model": "claude-3-haiku-20240307",
     "fal_vision_model": "x-ai/grok-4-fast",
     "max_tokens_tagging": 1000,
     "max_tokens_description": 3000,

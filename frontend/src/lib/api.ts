@@ -29,6 +29,7 @@ import type {
   LoraEvaluation,
   LoraListResponse,
   LoraModel,
+  ModelBulkUpdateRequest,
   PipelineStats,
   PlatformUsageSummary,
   PromptPreset,
@@ -1249,6 +1250,11 @@ export const billingApi = {
 
   adminDeleteCatalogEntry: async (id: number): Promise<void> => {
     await api.delete(`/billing/admin/catalog/${id}`);
+  },
+
+  adminBulkUpdateModel: async (data: ModelBulkUpdateRequest): Promise<CostCatalogEntry[]> => {
+    const { data: result } = await api.put('/billing/admin/catalog/model-bulk', data);
+    return result;
   },
 
   adminGetLogs: async (params?: {

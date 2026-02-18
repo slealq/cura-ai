@@ -45,12 +45,12 @@ class Settings(BaseSettings):
 
     # OpenAI
     openai_api_key: str = ""
-    openai_vision_model: str = "gpt-4o"
+    openai_vision_model: str = "gpt-4o-mini"
     openai_embedding_model: str = "text-embedding-3-small"
 
     # Anthropic
     anthropic_api_key: str = ""
-    anthropic_vision_model: str = "claude-sonnet-4-20250514"
+    anthropic_vision_model: str = "claude-3-haiku-20240307"
 
     # fal.ai
     fal_api_key: str = ""

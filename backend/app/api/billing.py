@@ -6,9 +6,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.api.settings import (
+    CURATED_OPENAI_VISION_MODELS,
+    _get_anthropic_models,
+    _get_fal_models,
+)
 from app.core.security import get_current_user, require_admin
 from app.db.base import get_db
-from app.models.billing import UsageRecord
+from app.models.billing import CostCatalog, UsageRecord
 from app.models.user import User
 from app.services.billing_service import BillingService
 
@@ -57,6 +62,20 @@ class CatalogEntryRequest(BaseModel):
     cost_per_output_token: float | None = 0
     cost_per_call: float | None = 0
     platform_markup: float = 2.0
+
+
+class OperationMarkup(BaseModel):
+    operation: str
+    platform_markup: float
+
+
+class ModelBulkUpdateRequest(BaseModel):
+    provider: str
+    model: str
+    cost_per_input_token: float | None = 0
+    cost_per_output_token: float | None = 0
+    cost_per_call: float | None = 0
+    operations: list[OperationMarkup]
 
 
 class CatalogEntryResponse(BaseModel):
@@ -194,8 +213,8 @@ def get_generation_costs(
 
 
 class VisionCostsResponse(BaseModel):
-    """Estimated per-call vision cost in sparks by provider and mode."""
-    costs: dict[str, dict[str, float]]
+    """Estimated per-call vision cost in sparks by provider → model → mode."""
+    costs: dict[str, dict[str, dict[str, float]]]
 
 
 # Typical token estimates for vision calls.
@@ -216,11 +235,12 @@ _VISION_INPUT_TOKENS = {
 # fal.ai charges ~1.8x more than raw OpenRouter token cost (their intermediary markup)
 _FAL_INTERMEDIARY_MARKUP = Decimal("1.8")
 
-# Map provider → (catalog_provider, catalog_model)
-_VISION_PROVIDER_MAP = {
-    "openai": ("openai", "gpt-4o"),
-    "anthropic": ("anthropic", "claude-sonnet-4-20250514"),
-    "fal": ("fal", "x-ai/grok-4-fast"),
+# Map provider → (catalog_provider, list of vision model IDs)
+# Curated lists imported from app.api.settings at top of file.
+_VISION_PROVIDER_MODELS = {
+    "openai": ("openai", [m.id for m in CURATED_OPENAI_VISION_MODELS]),
+    "anthropic": ("anthropic", [m.id for m in _get_anthropic_models()]),
+    "fal": ("fal", [m.id for m in _get_fal_models() if "vision" in m.capabilities]),
 }
 
 
@@ -229,28 +249,29 @@ def get_vision_costs(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Get estimated per-call vision cost in sparks for each provider and mode."""
+    """Get estimated per-call vision cost in sparks: provider → model → mode."""
     svc = BillingService(db, user_id=0)
-    result: dict[str, dict[str, float]] = {}
+    result: dict[str, dict[str, dict[str, float]]] = {}
 
-    for provider_key, (cat_provider, cat_model) in _VISION_PROVIDER_MAP.items():
-        costs: dict[str, float] = {}
+    for provider_key, (cat_provider, model_ids) in _VISION_PROVIDER_MODELS.items():
+        provider_costs: dict[str, dict[str, float]] = {}
         input_tokens = _VISION_INPUT_TOKENS.get(provider_key, 1200)
-        for mode, output_tokens in _VISION_OUTPUT_TOKENS.items():
-            # tag and describe have catalog entries; custom uses describe pricing
-            operation = "tag" if mode == "tag" else "describe"
-            entry = svc._get_catalog_entry(cat_provider, cat_model, operation)
-            if entry and entry.cost_per_input_token and entry.cost_per_output_token:
-                raw = (entry.cost_per_input_token * input_tokens
-                       + entry.cost_per_output_token * output_tokens)
-                # fal.ai adds its own intermediary markup on top of OpenRouter
-                if provider_key == "fal":
-                    raw = raw * _FAL_INTERMEDIARY_MARKUP
-                charged = raw * entry.platform_markup
-                costs[mode] = round(float(charged * Decimal("1000")), 1)
-            else:
-                costs[mode] = 0
-        result[provider_key] = costs
+        for model_id in model_ids:
+            costs: dict[str, float] = {}
+            for mode, output_tokens in _VISION_OUTPUT_TOKENS.items():
+                operation = "tag" if mode == "tag" else "describe"
+                entry = svc._get_catalog_entry(cat_provider, model_id, operation)
+                if entry and entry.cost_per_input_token and entry.cost_per_output_token:
+                    raw = (entry.cost_per_input_token * input_tokens
+                           + entry.cost_per_output_token * output_tokens)
+                    if provider_key == "fal":
+                        raw = raw * _FAL_INTERMEDIARY_MARKUP
+                    charged = raw * entry.platform_markup
+                    costs[mode] = round(float(charged * Decimal("1000")), 1)
+                else:
+                    costs[mode] = 0
+            provider_costs[model_id] = costs
+        result[provider_key] = provider_costs
 
     return {"costs": result}
 
@@ -390,6 +411,50 @@ def admin_get_catalog(
         }
         for e in entries
     ]
+
+
+@router.put("/admin/catalog/model-bulk", response_model=list[CatalogEntryResponse])
+def admin_bulk_update_model(
+    body: ModelBulkUpdateRequest,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Update all catalog entries for a model atomically."""
+    # Build lookup of existing entries for this provider/model
+    existing = db.query(CostCatalog).filter(
+        CostCatalog.provider == body.provider,
+        CostCatalog.model == body.model,
+    ).all()
+    existing_map = {e.operation: e.id for e in existing}
+
+    results = []
+    for op_markup in body.operations:
+        entry_id = existing_map.get(op_markup.operation)
+        entry = BillingService.upsert_catalog_entry(
+            db,
+            provider=body.provider,
+            model=body.model,
+            operation=op_markup.operation,
+            cost_per_input_token=Decimal(str(body.cost_per_input_token)) if body.cost_per_input_token else None,
+            cost_per_output_token=Decimal(str(body.cost_per_output_token)) if body.cost_per_output_token else None,
+            cost_per_call=Decimal(str(body.cost_per_call)) if body.cost_per_call else None,
+            platform_markup=Decimal(str(op_markup.platform_markup)),
+            entry_id=entry_id,
+        )
+        results.append({
+            "id": entry.id,
+            "provider": entry.provider,
+            "model": entry.model,
+            "operation": entry.operation,
+            "cost_per_input_token": float(entry.cost_per_input_token) if entry.cost_per_input_token else None,
+            "cost_per_output_token": float(entry.cost_per_output_token) if entry.cost_per_output_token else None,
+            "cost_per_call": float(entry.cost_per_call) if entry.cost_per_call else None,
+            "platform_markup": float(entry.platform_markup),
+            "is_active": entry.is_active,
+            "created_at": entry.created_at.isoformat(),
+            "updated_at": entry.updated_at.isoformat(),
+        })
+    return results
 
 
 @router.post("/admin/catalog", response_model=CatalogEntryResponse)

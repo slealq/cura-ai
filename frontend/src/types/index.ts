@@ -512,13 +512,22 @@ export interface CostCatalogEntry {
   updated_at: string;
 }
 
+export interface ModelBulkUpdateRequest {
+  provider: string;
+  model: string;
+  cost_per_input_token: number;
+  cost_per_output_token: number;
+  cost_per_call: number;
+  operations: { operation: string; platform_markup: number }[];
+}
+
 export interface GenerationCosts {
   costs: Record<string, Record<string, number>>;
   expand_prompt_cost: number;
 }
 
 export interface VisionCosts {
-  costs: Record<string, Record<string, number>>;
+  costs: Record<string, Record<string, Record<string, number>>>;
 }
 
 export interface PlatformUsageSummary {

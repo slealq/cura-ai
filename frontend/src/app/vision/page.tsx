@@ -90,7 +90,7 @@ export default function VisionPage() {
     staleTime: 60_000,
   });
 
-  const currentCost = visionCosts?.costs?.[provider]?.[mode] ?? null;
+  const currentCost = visionCosts?.costs?.[provider]?.[selectedModel]?.[mode] ?? null;
 
   // Load active preset prompts on mount
   useEffect(() => {

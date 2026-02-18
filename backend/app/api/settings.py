@@ -530,11 +530,9 @@ async def get_provider_models(provider: str, db: Session = Depends(get_db), curr
 
 
 CURATED_OPENAI_VISION_MODELS = [
-    ProviderModelInfo(id="gpt-4o", name="GPT-4o", capabilities=["vision", "chat"]),
     ProviderModelInfo(id="gpt-4o-mini", name="GPT-4o Mini", capabilities=["vision", "chat"]),
-    ProviderModelInfo(id="gpt-4.1", name="GPT-4.1", capabilities=["vision", "chat"]),
-    ProviderModelInfo(id="gpt-5", name="GPT-5", capabilities=["vision", "chat"]),
-    ProviderModelInfo(id="gpt-5.1", name="GPT-5.1", capabilities=["vision", "chat"]),
+    ProviderModelInfo(id="gpt-4o", name="GPT-4o", capabilities=["vision", "chat"]),
+    ProviderModelInfo(id="gpt-5-mini", name="GPT-5 Mini", capabilities=["vision", "chat"]),
     ProviderModelInfo(id="gpt-5.2", name="GPT-5.2", capabilities=["vision", "chat"]),
 ]
 
@@ -581,11 +579,10 @@ async def _get_openai_models(db: Session, user_id: int) -> list[ProviderModelInf
 def _get_anthropic_models() -> list[ProviderModelInfo]:
     """Return curated list of Anthropic Claude models with vision support."""
     return [
-        ProviderModelInfo(id="claude-sonnet-4-20250514", name="Claude Sonnet 4", capabilities=["vision", "chat"]),
-        ProviderModelInfo(id="claude-haiku-4-20250414", name="Claude Haiku 4", capabilities=["vision", "chat"]),
-        ProviderModelInfo(id="claude-3-5-sonnet-20241022", name="Claude 3.5 Sonnet", capabilities=["vision", "chat"]),
-        ProviderModelInfo(id="claude-3-5-haiku-20241022", name="Claude 3.5 Haiku", capabilities=["vision", "chat"]),
-        ProviderModelInfo(id="claude-3-haiku-20240307", name="Claude 3 Haiku", capabilities=["vision", "chat"]),
+        ProviderModelInfo(id="claude-3-haiku-20240307", name="Claude Haiku 3", capabilities=["vision", "chat"]),
+        ProviderModelInfo(id="claude-haiku-4-5-20251001", name="Claude Haiku 4.5", capabilities=["vision", "chat"]),
+        ProviderModelInfo(id="claude-sonnet-4-6", name="Claude Sonnet 4.6", capabilities=["vision", "chat"]),
+        ProviderModelInfo(id="claude-opus-4-6", name="Claude Opus 4.6", capabilities=["vision", "chat"]),
     ]
 
 
