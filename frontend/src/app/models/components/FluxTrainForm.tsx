@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
+import { Slider } from '@/components/Slider';
 import SharedTrainFields, { type SourceType } from './SharedTrainFields';
 import type { Folder, Cluster } from '@/types';
 
@@ -106,13 +107,12 @@ export default function FluxTrainForm({
         <label className="block text-sm font-medium mb-1">
           Training Steps: {steps}
         </label>
-        <input
-          type="range"
+        <Slider
           min={100}
           max={4000}
           step={100}
           value={steps}
-          onChange={(e) => setSteps(parseInt(e.target.value))}
+          onChange={(v) => setSteps(v)}
           className="w-full"
         />
         <div className="flex justify-between text-[10px] text-muted-foreground">

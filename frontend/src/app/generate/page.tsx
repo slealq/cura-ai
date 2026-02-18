@@ -9,6 +9,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import GeneratedImageCard from '@/components/GeneratedImageCard';
 import { cn } from '@/lib/utils';
+import { Slider } from '@/components/Slider';
 
 const SIZE_PRESETS = [
   { label: '1024 x 1024', w: 1024, h: 1024 },
@@ -420,12 +421,11 @@ function GeneratePageInner() {
                       <label className="block text-xs text-muted-foreground mb-1">
                         Scale: {sel.scale.toFixed(1)}
                       </label>
-                      <input
-                        type="range"
+                      <Slider
                         min={0}
                         max={20}
                         value={Math.round(sel.scale * 10)}
-                        onChange={(e) => updateLoraScale(idx, parseInt(e.target.value) / 10)}
+                        onChange={(v) => updateLoraScale(idx, v / 10)}
                         className="w-full"
                       />
                     </div>
@@ -612,12 +612,11 @@ function GeneratePageInner() {
                   <label className="block text-xs text-muted-foreground mb-1">
                     Steps: {steps}
                   </label>
-                  <input
-                    type="range"
+                  <Slider
                     min={1}
                     max={50}
                     value={steps}
-                    onChange={(e) => setSteps(parseInt(e.target.value))}
+                    onChange={(v) => setSteps(v)}
                     className="w-full"
                   />
                 </div>
@@ -629,12 +628,11 @@ function GeneratePageInner() {
                   <label className="block text-xs text-muted-foreground mb-1">
                     Guidance: {guidance.toFixed(1)}
                   </label>
-                  <input
-                    type="range"
+                  <Slider
                     min={0}
                     max={200}
                     value={Math.round(guidance * 10)}
-                    onChange={(e) => setGuidance(parseInt(e.target.value) / 10)}
+                    onChange={(v) => setGuidance(v / 10)}
                     className="w-full"
                   />
                 </div>

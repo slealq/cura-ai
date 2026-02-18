@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import SharedTrainFields, { type SourceType } from './SharedTrainFields';
+import { Slider } from '@/components/Slider';
 import type { Folder, Cluster } from '@/types';
 
 export interface QwenTrainData {
@@ -104,13 +105,12 @@ export default function QwenTrainForm({
         <label className="block text-sm font-medium mb-1">
           Training Steps: {steps}
         </label>
-        <input
-          type="range"
+        <Slider
           min={100}
           max={30000}
           step={100}
           value={steps}
-          onChange={(e) => setSteps(parseInt(e.target.value))}
+          onChange={(v) => setSteps(v)}
           className="w-full"
         />
         <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -123,12 +123,11 @@ export default function QwenTrainForm({
         <label className="block text-sm font-medium mb-1">
           Learning Rate: {learningRate.toFixed(4)}
         </label>
-        <input
-          type="range"
+        <Slider
           min={1}
           max={50}
           value={Math.round(learningRate * 10000)}
-          onChange={(e) => setLearningRate(parseInt(e.target.value) / 10000)}
+          onChange={(v) => setLearningRate(v / 10000)}
           className="w-full"
         />
         <div className="flex justify-between text-[10px] text-muted-foreground">

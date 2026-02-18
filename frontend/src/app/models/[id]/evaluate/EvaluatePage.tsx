@@ -16,6 +16,7 @@ import {
 import { toast } from 'sonner';
 import Link from 'next/link';
 import { cn, formatDate, useRouteParam } from '@/lib/utils';
+import { Slider } from '@/components/Slider';
 
 const statusBadge: Record<string, { color: string; label: string }> = {
   pending: { color: 'text-gray-500 bg-gray-100 dark:bg-gray-900/50', label: 'Pending' },
@@ -140,12 +141,11 @@ export default function EvaluatePage() {
         <div>
           <label className="text-sm font-medium">Sample Count</label>
           <div className="flex items-center gap-3 mt-1">
-            <input
-              type="range"
+            <Slider
               min={1}
               max={50}
               value={sampleCount}
-              onChange={(e) => setSampleCount(Number(e.target.value))}
+              onChange={(v) => setSampleCount(v)}
               className="flex-1"
             />
             <span className="text-sm font-mono w-8 text-right">{sampleCount}</span>
@@ -159,12 +159,11 @@ export default function EvaluatePage() {
         <div>
           <label className="text-sm font-medium">Creative Prompts</label>
           <div className="flex items-center gap-3 mt-1">
-            <input
-              type="range"
+            <Slider
               min={0}
               max={20}
               value={creativeCount}
-              onChange={(e) => setCreativeCount(Number(e.target.value))}
+              onChange={(v) => setCreativeCount(v)}
               className="flex-1"
             />
             <span className="text-sm font-mono w-8 text-right">{creativeCount}</span>

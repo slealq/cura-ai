@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/contexts/ThemeContext';
 import type { ClusteringConfig, GenerationConfig, ProviderConfig, ProviderModel, TrainingConfig, PromptPreset } from '@/types';
+import { Slider } from '@/components/Slider';
 
 function PromptSuggest({
   promptType,
@@ -692,13 +693,12 @@ function GenerationSettings() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Steps: {trainDraft.steps ?? 0}</label>
-              <input
-                type="range"
+              <Slider
                 min={100}
                 max={trainStepsMax}
                 step={100}
                 value={trainDraft.steps ?? 1000}
-                onChange={(e) => setTrainDraft({ ...trainDraft, steps: parseInt(e.target.value) })}
+                onChange={(v) => setTrainDraft({ ...trainDraft, steps: v })}
                 className="w-full"
               />
               <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -711,12 +711,11 @@ function GenerationSettings() {
                 <label className="text-xs text-muted-foreground mb-1 block">
                   Learning Rate: {(trainDraft.learning_rate ?? 0.0005).toFixed(4)}
                 </label>
-                <input
-                  type="range"
+                <Slider
                   min={1}
                   max={50}
                   value={Math.round((trainDraft.learning_rate ?? 0.0005) * 10000)}
-                  onChange={(e) => setTrainDraft({ ...trainDraft, learning_rate: parseInt(e.target.value) / 10000 })}
+                  onChange={(v) => setTrainDraft({ ...trainDraft, learning_rate: v / 10000 })}
                   className="w-full"
                 />
                 <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -771,58 +770,53 @@ function GenerationSettings() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Width: {genDraft.width}</label>
-              <input
-                type="range"
+              <Slider
                 min={256}
                 max={2048}
                 step={64}
                 value={genDraft.width}
-                onChange={(e) => setGenDraft({ ...genDraft, width: parseInt(e.target.value) })}
+                onChange={(v) => setGenDraft({ ...genDraft, width: v })}
                 className="w-full"
               />
             </div>
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Height: {genDraft.height}</label>
-              <input
-                type="range"
+              <Slider
                 min={256}
                 max={2048}
                 step={64}
                 value={genDraft.height}
-                onChange={(e) => setGenDraft({ ...genDraft, height: parseInt(e.target.value) })}
+                onChange={(v) => setGenDraft({ ...genDraft, height: v })}
                 className="w-full"
               />
             </div>
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Steps: {genDraft.num_inference_steps}</label>
-              <input
-                type="range"
+              <Slider
                 min={1}
                 max={50}
                 value={genDraft.num_inference_steps}
-                onChange={(e) => setGenDraft({ ...genDraft, num_inference_steps: parseInt(e.target.value) })}
+                onChange={(v) => setGenDraft({ ...genDraft, num_inference_steps: v })}
                 className="w-full"
               />
             </div>
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Guidance: {genDraft.guidance_scale.toFixed(1)}</label>
-              <input
-                type="range"
+              <Slider
                 min={0}
                 max={200}
                 value={Math.round(genDraft.guidance_scale * 10)}
-                onChange={(e) => setGenDraft({ ...genDraft, guidance_scale: parseInt(e.target.value) / 10 })}
+                onChange={(v) => setGenDraft({ ...genDraft, guidance_scale: v / 10 })}
                 className="w-full"
               />
             </div>
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Default LoRA Scale: {genDraft.default_lora_scale.toFixed(1)}</label>
-              <input
-                type="range"
+              <Slider
                 min={0}
                 max={20}
                 value={Math.round(genDraft.default_lora_scale * 10)}
-                onChange={(e) => setGenDraft({ ...genDraft, default_lora_scale: parseInt(e.target.value) / 10 })}
+                onChange={(v) => setGenDraft({ ...genDraft, default_lora_scale: v / 10 })}
                 className="w-full"
               />
             </div>
@@ -981,14 +975,11 @@ function ClusteringSettings() {
                   Components (output dims): {draft.umap_n_components}
                   <Hint text="Number of dimensions after reduction. Lower values (5-10) create tighter, more distinct clusters but may lose nuance. Higher values (15-30) preserve more detail. Start with 10-15 for ~1000 images." />
                 </label>
-                <input
-                  type="range"
+                <Slider
                   min={2}
                   max={50}
                   value={draft.umap_n_components}
-                  onChange={(e) =>
-                    update({ umap_n_components: parseInt(e.target.value) })
-                  }
+                  onChange={(v) => update({ umap_n_components: v })}
                   className="w-full"
                 />
                 <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -1002,14 +993,11 @@ function ClusteringSettings() {
                   Neighbors: {draft.umap_n_neighbors}
                   <Hint text="How many nearby points UMAP considers when building its graph. Low values (5-10) focus on very local structure, creating many small tight clusters. High values (30-50) capture broader patterns, merging similar groups. For ~900 images, 10-20 is a good range." />
                 </label>
-                <input
-                  type="range"
+                <Slider
                   min={2}
                   max={100}
                   value={draft.umap_n_neighbors}
-                  onChange={(e) =>
-                    update({ umap_n_neighbors: parseInt(e.target.value) })
-                  }
+                  onChange={(v) => update({ umap_n_neighbors: v })}
                   className="w-full"
                 />
                 <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -1023,14 +1011,11 @@ function ClusteringSettings() {
                   Min Distance: {draft.umap_min_dist.toFixed(2)}
                   <Hint text="How tightly UMAP packs points together. 0.0 allows maximum compression, producing dense clumps that are easier to cluster. Higher values (0.3-0.5) spread points out more evenly. For clustering, keep this at or near 0.0." />
                 </label>
-                <input
-                  type="range"
+                <Slider
                   min={0}
                   max={100}
                   value={Math.round(draft.umap_min_dist * 100)}
-                  onChange={(e) =>
-                    update({ umap_min_dist: parseInt(e.target.value) / 100 })
-                  }
+                  onChange={(v) => update({ umap_min_dist: v / 100 })}
                   className="w-full"
                 />
                 <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -1070,16 +1055,11 @@ function ClusteringSettings() {
                   Min Cluster Size: {draft.hdbscan_min_cluster_size}
                   <Hint text="The smallest group of images that can form a cluster. Increase this if you're getting too many tiny clusters. Decrease if meaningful small groups are being treated as noise. For ~900 images, try 10-30." />
                 </label>
-                <input
-                  type="range"
+                <Slider
                   min={2}
                   max={100}
                   value={draft.hdbscan_min_cluster_size}
-                  onChange={(e) =>
-                    update({
-                      hdbscan_min_cluster_size: parseInt(e.target.value),
-                    })
-                  }
+                  onChange={(v) => update({ hdbscan_min_cluster_size: v })}
                   className="w-full"
                 />
                 <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -1093,14 +1073,11 @@ function ClusteringSettings() {
                   Min Samples: {draft.hdbscan_min_samples}
                   <Hint text="How conservative the clustering is. Higher values require denser neighborhoods to form a cluster, pushing more borderline images into noise. Lower values are more permissive. Try keeping this at or below min_cluster_size." />
                 </label>
-                <input
-                  type="range"
+                <Slider
                   min={1}
                   max={50}
                   value={draft.hdbscan_min_samples}
-                  onChange={(e) =>
-                    update({ hdbscan_min_samples: parseInt(e.target.value) })
-                  }
+                  onChange={(v) => update({ hdbscan_min_samples: v })}
                   className="w-full"
                 />
                 <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -1151,14 +1128,11 @@ function ClusteringSettings() {
                 Max Clusters: {draft.kmeans_max_clusters}
                 <Hint text="Upper bound for automatic K selection. The algorithm tests K=2 up to this value (capped at 20 for speed) and picks the K with the best silhouette score. Set higher if you expect many distinct groups in your collection." />
               </label>
-              <input
-                type="range"
+              <Slider
                 min={2}
                 max={200}
                 value={draft.kmeans_max_clusters}
-                onChange={(e) =>
-                  update({ kmeans_max_clusters: parseInt(e.target.value) })
-                }
+                onChange={(v) => update({ kmeans_max_clusters: v })}
                 className="w-full max-w-md"
               />
               <div className="flex justify-between text-[10px] text-muted-foreground max-w-md">
@@ -1419,13 +1393,12 @@ function VisionModelSettings() {
                 Tagging: {draft.max_tokens_tagging}
                 <Hint text="Token limit for image tagging responses. Default: 1000." />
               </label>
-              <input
-                type="range"
+              <Slider
                 min={100}
                 max={4000}
                 step={100}
                 value={draft.max_tokens_tagging}
-                onChange={(e) => setDraft({ ...draft, max_tokens_tagging: parseInt(e.target.value) })}
+                onChange={(v) => setDraft({ ...draft, max_tokens_tagging: v })}
                 className="w-full"
               />
               <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -1438,13 +1411,12 @@ function VisionModelSettings() {
                 Description: {draft.max_tokens_description}
                 <Hint text="Token limit for image description responses. Default: 3000." />
               </label>
-              <input
-                type="range"
+              <Slider
                 min={500}
                 max={8000}
                 step={100}
                 value={draft.max_tokens_description}
-                onChange={(e) => setDraft({ ...draft, max_tokens_description: parseInt(e.target.value) })}
+                onChange={(v) => setDraft({ ...draft, max_tokens_description: v })}
                 className="w-full"
               />
               <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -1582,13 +1554,12 @@ function LanguageModelSettings() {
                 Summarization: {draft.max_tokens_summarization}
                 <Hint text="Token limit for cluster summarization responses. Default: 500." />
               </label>
-              <input
-                type="range"
+              <Slider
                 min={100}
                 max={2000}
                 step={50}
                 value={draft.max_tokens_summarization}
-                onChange={(e) => setDraft({ ...draft, max_tokens_summarization: parseInt(e.target.value) })}
+                onChange={(v) => setDraft({ ...draft, max_tokens_summarization: v })}
                 className="w-full"
               />
               <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -1601,13 +1572,12 @@ function LanguageModelSettings() {
                 Expansion: {draft.max_tokens_expansion}
                 <Hint text="Token limit for prompt expansion (Generate page). Default: 500." />
               </label>
-              <input
-                type="range"
+              <Slider
                 min={100}
                 max={2000}
                 step={50}
                 value={draft.max_tokens_expansion}
-                onChange={(e) => setDraft({ ...draft, max_tokens_expansion: parseInt(e.target.value) })}
+                onChange={(v) => setDraft({ ...draft, max_tokens_expansion: v })}
                 className="w-full"
               />
               <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -1620,13 +1590,12 @@ function LanguageModelSettings() {
                 Suggestion: {draft.max_tokens_suggestion}
                 <Hint text="Token limit for prompt library AI suggestions. Default: 2000." />
               </label>
-              <input
-                type="range"
+              <Slider
                 min={500}
                 max={4000}
                 step={100}
                 value={draft.max_tokens_suggestion}
-                onChange={(e) => setDraft({ ...draft, max_tokens_suggestion: parseInt(e.target.value) })}
+                onChange={(v) => setDraft({ ...draft, max_tokens_suggestion: v })}
                 className="w-full"
               />
               <div className="flex justify-between text-[10px] text-muted-foreground">
