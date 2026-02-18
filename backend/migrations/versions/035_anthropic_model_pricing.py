@@ -2,7 +2,7 @@
 
 Add entries for claude-3-haiku-20240307, claude-haiku-4-5-20251001,
 claude-sonnet-4-6, and claude-opus-4-6 across all LLM operations.
-Existing claude-sonnet-4-20250514 entries kept for historical records.
+Legacy claude-sonnet-4-20250514 entries removed by migration 036.
 
 Revision ID: 035_anthropic_model_pricing
 Revises: 034_add_mini_model_llm_ops

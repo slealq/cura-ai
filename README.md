@@ -525,9 +525,9 @@ Key-value store for application configuration (clustering config, provider confi
 | `SECRET_KEY` | `change-me-in-production` | Encryption key for stored API keys |
 | `DEFAULT_VISION_PROVIDER` | `openai` | Vision provider (openai/anthropic) |
 | `DEFAULT_EMBEDDING_PROVIDER` | `openai` | Embedding provider |
-| `OPENAI_VISION_MODEL` | `gpt-4o` | OpenAI vision model |
+| `OPENAI_VISION_MODEL` | `gpt-4o-mini` | OpenAI vision model |
 | `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model |
-| `ANTHROPIC_VISION_MODEL` | `claude-sonnet-4-20250514` | Anthropic vision model |
+| `ANTHROPIC_VISION_MODEL` | `claude-3-haiku-20240307` | Anthropic vision model |
 | `STORAGE_BACKEND` | `local` | Storage backend (local/s3/gcs) |
 | `LOCAL_STORAGE_PATH` | `./storage` | Local image storage path |
 | `WATCH_FOLDER_PATH` | `./watch_folder` | Folder watcher path |
