@@ -121,8 +121,9 @@ def upgrade() -> None:
             )
 
     # --- Seed cost catalog ---
+    # Format: (provider, model, operation, cost_per_input_token, cost_per_output_token, cost_per_call, markup)
     catalog_entries = [
-        # OpenAI GPT-4o operations
+        # OpenAI GPT-4o operations (per-token pricing)
         ("openai", "gpt-4o", "tag", "0.0000025", "0.00001", "0", "2.0"),
         ("openai", "gpt-4o", "describe", "0.0000025", "0.00001", "0", "2.0"),
         ("openai", "gpt-4o", "evaluate", "0.0000025", "0.00001", "0", "2.0"),
@@ -132,17 +133,34 @@ def upgrade() -> None:
         ("openai", "gpt-4o", "generate_prompts", "0.0000025", "0.00001", "0", "2.0"),
         # OpenAI embeddings
         ("openai", "text-embedding-3-small", "embed", "0.00000002", "0", "0", "2.0"),
-        # Anthropic operations
+        # Anthropic operations (per-token pricing)
         ("anthropic", "claude-sonnet-4-20250514", "tag", "0.000003", "0.000015", "0", "2.0"),
         ("anthropic", "claude-sonnet-4-20250514", "describe", "0.000003", "0.000015", "0", "2.0"),
         ("anthropic", "claude-sonnet-4-20250514", "evaluate", "0.000003", "0.000015", "0", "2.0"),
         ("anthropic", "claude-sonnet-4-20250514", "summarize", "0.000003", "0.000015", "0", "2.0"),
-        # fal.ai operations (per-call pricing, wildcard model)
-        ("fal", "*", "generate", "0", "0", "0.04", "2.0"),
-        ("fal", "*", "train", "0", "0", "5.00", "2.0"),
-        ("fal", "*", "edit", "0", "0", "0.03", "2.0"),
-        ("fal", "openrouter/*", "tag", "0", "0", "0.02", "2.0"),
-        ("fal", "openrouter/*", "describe", "0", "0", "0.02", "2.0"),
+        # fal.ai generation (per-call, varies by model — ~1MP default resolution)
+        ("fal", "fal-ai/flux-lora", "generate", "0", "0", "0.035", "2.0"),
+        ("fal", "fal-ai/flux/dev", "generate", "0", "0", "0.025", "2.0"),
+        ("fal", "fal-ai/qwen-image-2512/lora", "generate", "0", "0", "0.035", "2.0"),
+        ("fal", "fal-ai/qwen-image-2512", "generate", "0", "0", "0.02", "2.0"),
+        ("fal", "fal-ai/nano-banana-pro", "generate", "0", "0", "0.15", "2.0"),
+        # fal.ai training (per-call — cost represents ~1000 steps default)
+        ("fal", "fal-ai/flux-lora-fast-training", "train", "0", "0", "2.00", "2.0"),
+        ("fal", "fal-ai/qwen-image-2512-trainer-v2", "train", "0", "0", "1.90", "2.0"),
+        # fal.ai edit (per-call, varies by model)
+        ("fal", "fal-ai/qwen-image-max/edit", "edit", "0", "0", "0.075", "2.0"),
+        ("fal", "fal-ai/kling-image/o3/image-to-image", "edit", "0", "0", "0.028", "2.0"),
+        ("fal", "fal-ai/wan-25-preview/image-to-image", "edit", "0", "0", "0.05", "2.0"),
+        ("fal", "xai/grok-imagine-image/edit", "edit", "0", "0", "0.022", "2.0"),
+        ("fal", "half-moon-ai/ai-face-swap/faceswapimage", "edit", "0", "0", "0.009", "2.0"),
+        ("fal", "fal-ai/nano-banana-pro/edit", "edit", "0", "0", "0.15", "2.0"),
+        # fal.ai OpenRouter vision (per-token: $0.20/1M input, $0.50/1M output)
+        ("fal", "x-ai/grok-4-fast", "tag", "0.0000002", "0.0000005", "0", "2.0"),
+        ("fal", "x-ai/grok-4-fast", "describe", "0.0000002", "0.0000005", "0", "2.0"),
+        ("fal", "x-ai/grok-4-fast", "evaluate", "0.0000002", "0.0000005", "0", "2.0"),
+        ("fal", "x-ai/grok-4-fast", "evaluate_creative", "0.0000002", "0.0000005", "0", "2.0"),
+        ("fal", "x-ai/grok-4-fast", "summarize_eval", "0.0000002", "0.0000005", "0", "2.0"),
+        ("fal", "x-ai/grok-4-fast", "generate_prompts", "0.0000002", "0.0000005", "0", "2.0"),
     ]
     for provider, model, operation, cpit, cpot, cpc, markup in catalog_entries:
         conn.execute(
