@@ -34,6 +34,15 @@ class BillingService:
     def __init__(self, db: Session, user_id: int):
         self.db = db
         self.user_id = user_id
+        self._user_email: str | None = None
+
+    @property
+    def _email(self) -> str:
+        """Lazily fetch and cache the user's email for logging."""
+        if self._user_email is None:
+            user = self.db.query(User.email).filter(User.id == self.user_id).first()
+            self._user_email = user.email if user else f"uid:{self.user_id}"
+        return self._user_email
 
     # --- Balance methods ---
 
@@ -178,19 +187,44 @@ class BillingService:
         entry = self._get_catalog_entry(provider, model, operation)
         if not entry:
             logger.warning(
-                f"No cost catalog entry for {provider}/{model}/{operation} — charging 0"
+                "BILLING MISS | user=%s provider=%s model=%s op=%s "
+                "in_tok=%s out_tok=%s — no catalog entry, charging 0",
+                self._email, provider, model, operation,
+                input_tokens, output_tokens,
             )
             return Decimal("0"), Decimal("0")
 
-        raw_cost = Decimal("0")
-        if entry.cost_per_call and entry.cost_per_call > 0:
-            raw_cost += entry.cost_per_call
-        if input_tokens and entry.cost_per_input_token:
-            raw_cost += entry.cost_per_input_token * input_tokens
-        if output_tokens and entry.cost_per_output_token:
-            raw_cost += entry.cost_per_output_token * output_tokens
+        input_cost = Decimal("0")
+        output_cost = Decimal("0")
+        call_cost = Decimal("0")
 
+        if entry.cost_per_call and entry.cost_per_call > 0:
+            call_cost = entry.cost_per_call
+        if input_tokens and entry.cost_per_input_token:
+            input_cost = entry.cost_per_input_token * input_tokens
+        if output_tokens and entry.cost_per_output_token:
+            output_cost = entry.cost_per_output_token * output_tokens
+
+        raw_cost = input_cost + output_cost + call_cost
         charged_cost = raw_cost * entry.platform_markup
+        sparks = charged_cost * USD_TO_SPARKS
+
+        logger.info(
+            "BILLING | user=%s %s/%s op=%s "
+            "in_tok=%s out_tok=%s "
+            "rates(in=%.10f out=%.10f call=%.6f) "
+            "raw($%.8f = in:$%.8f + out:$%.8f + call:$%.8f) "
+            "markup=%.1fx charged=$%.8f sparks=%.2f",
+            self._email, provider, model, operation,
+            input_tokens, output_tokens,
+            float(entry.cost_per_input_token or 0),
+            float(entry.cost_per_output_token or 0),
+            float(entry.cost_per_call or 0),
+            float(raw_cost), float(input_cost), float(output_cost), float(call_cost),
+            float(entry.platform_markup),
+            float(charged_cost), float(sparks),
+        )
+
         return raw_cost, charged_cost
 
     def _get_catalog_entry(
