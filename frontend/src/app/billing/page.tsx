@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Loader2, CreditCard, TrendingDown, ArrowUpRight, ArrowDownRight } from 'lucide-react';
+import { Loader2, Zap, TrendingDown, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 import { billingApi } from '@/lib/api';
 import { cn, formatDateCompact, formatNumber } from '@/lib/utils';
 import type { BalanceTransaction } from '@/types';
@@ -50,15 +50,15 @@ export default function BillingPage() {
           <Loader2 className="h-6 w-6 animate-spin mx-auto" />
         ) : balance ? (
           <>
-            <CreditCard className="h-10 w-10 mx-auto text-muted-foreground mb-2" />
-            <p className="text-sm text-muted-foreground mb-1">Available Credits</p>
+            <Zap className="h-10 w-10 mx-auto text-amber-400 mb-2" />
+            <p className="text-sm text-muted-foreground mb-1">Available Sparks</p>
             <p className={cn(
               'text-5xl font-bold',
               balance.balance < 10 ? 'text-red-500' : 'text-foreground'
             )}>
               {formatNumber(balance.balance)}
             </p>
-            <p className="text-xs text-muted-foreground mt-2">1 credit = $0.01 USD</p>
+            <p className="text-xs text-muted-foreground mt-2">1 spark = $0.001 USD</p>
           </>
         ) : null}
       </div>
@@ -93,7 +93,7 @@ export default function BillingPage() {
                   <TrendingDown className="h-4 w-4 text-muted-foreground" />
                   <p className="text-sm text-muted-foreground">Total Spent</p>
                 </div>
-                <p className="text-2xl font-bold mt-1">{formatNumber(usage.total_cost)} credits</p>
+                <p className="text-2xl font-bold mt-1">{formatNumber(usage.total_cost)} sparks</p>
               </div>
               <div className="bg-card border rounded-lg p-4">
                 <p className="text-sm text-muted-foreground">API Calls</p>

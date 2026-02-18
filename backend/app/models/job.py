@@ -1,8 +1,9 @@
 """Job model for tracking pipeline processing jobs."""
 import enum
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Index, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -75,6 +76,9 @@ class Job(Base):
     parameters: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Cost tracking
+    charged_cost: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
 
     # Logs
     logs: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)

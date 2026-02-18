@@ -89,6 +89,11 @@ class PlatformSummaryResponse(BaseModel):
     record_count: int
 
 
+class GenerationCostsResponse(BaseModel):
+    """Per-image generation cost in sparks for each base model."""
+    costs: dict[str, dict[str, int]]
+
+
 # --- User endpoints ---
 
 @router.get("/balance", response_model=BalanceResponse)
@@ -138,6 +143,15 @@ def get_usage(
     end = datetime.fromisoformat(end_date) if end_date else None
     svc = BillingService(db, current_user.id)
     return svc.get_usage_summary(start_date=start, end_date=end)
+
+
+@router.get("/generation-costs", response_model=GenerationCostsResponse)
+def get_generation_costs(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get per-image generation cost in sparks for each base model."""
+    return {"costs": BillingService.get_generation_costs(db)}
 
 
 # --- Admin endpoints ---

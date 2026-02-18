@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type {
   AdminUserBalance,
+  APIKeyInfo,
   AuthUser,
   BatchJobImage,
   BatchUploadResponse,
@@ -17,6 +18,7 @@ import type {
   GeneratedImage,
   GeneratedImageListResponse,
   GenerationConfig,
+  GenerationCosts,
   Image,
   ImageListResponse,
   Job,
@@ -129,7 +131,7 @@ api.interceptors.response.use(
 
     // Handle 402 Insufficient Credits
     if (error.response?.status === 402) {
-      error.message = 'Insufficient credits. Please add credits to continue.';
+      error.message = 'Out of sparks! Please add more to continue.';
       return Promise.reject(error);
     }
 
@@ -788,6 +790,26 @@ export const settingsApi = {
     return data;
   },
 
+  // Platform API keys (admin)
+  getApiKeys: async (): Promise<APIKeyInfo[]> => {
+    const { data } = await api.get('/settings/api-keys');
+    return data;
+  },
+
+  saveApiKey: async (provider: string, key: string): Promise<APIKeyInfo> => {
+    const { data } = await api.put(`/settings/api-keys/${provider}`, { key });
+    return data;
+  },
+
+  validateApiKey: async (provider: string): Promise<APIKeyInfo> => {
+    const { data } = await api.post(`/settings/api-keys/${provider}/validate`);
+    return data;
+  },
+
+  deleteApiKey: async (provider: string): Promise<void> => {
+    await api.delete(`/settings/api-keys/${provider}`);
+  },
+
   // Provider config
   getProviderConfig: async (): Promise<ProviderConfig> => {
     const { data } = await api.get('/settings/providers');
@@ -891,6 +913,12 @@ export const generationApi = {
 
   downloadAllLoraWeights: async (): Promise<{ status: string; count: number }> => {
     const { data } = await api.post('/generation/lora/download-all-weights');
+    return data;
+  },
+
+  // Prompt expansion
+  expandPrompt: async (prompt: string): Promise<{ expanded_prompt: string }> => {
+    const { data } = await api.post('/generation/expand-prompt', { prompt });
     return data;
   },
 
@@ -1157,6 +1185,11 @@ export const billingApi = {
 
   getTransactions: async (skip = 0, limit = 50): Promise<TransactionListResponse> => {
     const { data } = await api.get('/billing/transactions', { params: { skip, limit } });
+    return data;
+  },
+
+  getGenerationCosts: async (): Promise<GenerationCosts> => {
+    const { data } = await api.get('/billing/generation-costs');
     return data;
   },
 

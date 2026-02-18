@@ -18,6 +18,10 @@ from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
+# Balance is denominated in sparks; cost catalog prices are in USD.
+# 1 spark = $0.001, so multiply USD by 1000 to get sparks.
+USD_TO_SPARKS = Decimal("1000")
+
 
 class InsufficientBalanceError(Exception):
     """Raised when a user has insufficient credits for an operation."""
@@ -153,8 +157,9 @@ class BillingService:
         self.db.flush()
 
         if charged_cost > 0:
+            spark_amount = charged_cost * USD_TO_SPARKS
             self.debit_usage(
-                amount=charged_cost,
+                amount=spark_amount,
                 description=f"{operation} via {provider}/{model}",
                 usage_record_id=record.id,
             )
@@ -276,10 +281,11 @@ class BillingService:
         by_provider: dict[str, float] = {}
 
         for r in records:
-            total_cost += r.charged_cost
+            sparks = r.charged_cost * USD_TO_SPARKS
+            total_cost += sparks
             op_key = r.operation
-            by_operation[op_key] = by_operation.get(op_key, 0) + float(r.charged_cost)
-            by_provider[r.provider] = by_provider.get(r.provider, 0) + float(r.charged_cost)
+            by_operation[op_key] = by_operation.get(op_key, 0) + float(sparks)
+            by_provider[r.provider] = by_provider.get(r.provider, 0) + float(sparks)
 
         return {
             "total_cost": float(total_cost),
@@ -287,6 +293,42 @@ class BillingService:
             "by_provider": by_provider,
             "record_count": len(records),
         }
+
+    # --- Cost estimation ---
+
+    # Maps frontend base_model → (provider, fal_model_id, operation) for catalog lookup
+    GENERATION_MODEL_MAP: dict[str, dict[str, tuple[str, str, str]]] = {
+        "flux-dev": {
+            "without_lora": ("fal", "fal-ai/flux/dev", "generate"),
+            "with_lora": ("fal", "fal-ai/flux-lora", "generate"),
+        },
+        "qwen-2.5": {
+            "without_lora": ("fal", "fal-ai/qwen-image-2512", "generate"),
+            "with_lora": ("fal", "fal-ai/qwen-image-2512/lora", "generate"),
+        },
+        "nano-banana-pro": {
+            "without_lora": ("fal", "fal-ai/nano-banana-pro", "generate"),
+        },
+    }
+
+    @staticmethod
+    def get_generation_costs(db: Session) -> dict[str, dict[str, int]]:
+        """Get per-image generation costs in sparks for each base model."""
+        svc = BillingService(db, user_id=0)  # user_id not used for catalog lookup
+        result: dict[str, dict[str, int]] = {}
+
+        for base_model, variants in BillingService.GENERATION_MODEL_MAP.items():
+            costs: dict[str, int] = {}
+            for variant_key, (provider, model, operation) in variants.items():
+                entry = svc._get_catalog_entry(provider, model, operation)
+                if entry and entry.cost_per_call:
+                    charged_usd = entry.cost_per_call * entry.platform_markup
+                    costs[variant_key] = int(charged_usd * USD_TO_SPARKS)
+                else:
+                    costs[variant_key] = 0
+            result[base_model] = costs
+
+        return result
 
     # --- Admin / reporting (class methods, no user_id filter) ---
 
@@ -369,7 +411,7 @@ class BillingService:
             .group_by(UsageRecord.user_id)
             .all()
         )
-        spent_map = {r.user_id: {"total_spent": float(r.total_spent or 0), "last_activity": r.last_activity} for r in spent_query}
+        spent_map = {r.user_id: {"total_spent": float((r.total_spent or 0) * USD_TO_SPARKS), "last_activity": r.last_activity} for r in spent_query}
 
         output = []
         for user, balance in results:
@@ -413,12 +455,13 @@ class BillingService:
         for r in records:
             total_raw += r.raw_cost
             total_charged += r.charged_cost
-            by_provider[r.provider] = by_provider.get(r.provider, 0) + float(r.charged_cost)
-            by_operation[r.operation] = by_operation.get(r.operation, 0) + float(r.charged_cost)
+            sparks = r.charged_cost * USD_TO_SPARKS
+            by_provider[r.provider] = by_provider.get(r.provider, 0) + float(sparks)
+            by_operation[r.operation] = by_operation.get(r.operation, 0) + float(sparks)
 
         return {
             "total_raw_cost": float(total_raw),
-            "total_charged": float(total_charged),
+            "total_charged": float(total_charged * USD_TO_SPARKS),
             "margin": float(total_charged - total_raw),
             "by_provider": by_provider,
             "by_operation": by_operation,

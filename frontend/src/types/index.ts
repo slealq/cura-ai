@@ -82,6 +82,7 @@ export interface Job {
   image_id: number | null;
   image_filename: string | null;
   image_thumbnail: string | null;
+  charged_cost: number | null;
 }
 
 export interface StepResponse {
@@ -508,6 +509,10 @@ export interface CostCatalogEntry {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface GenerationCosts {
+  costs: Record<string, Record<string, number>>;
 }
 
 export interface PlatformUsageSummary {

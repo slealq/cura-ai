@@ -36,6 +36,30 @@ def _get_db() -> Session:
     return SessionLocal()
 
 
+def _record_job_cost(db: Session, job_id: int | None, user_id: int | None, operation: str) -> None:
+    """Copy charged_cost (converted to sparks) from the most recent UsageRecord to the Job row."""
+    if not job_id or not user_id:
+        return
+    try:
+        from decimal import Decimal
+
+        from app.models.billing import UsageRecord
+        from app.services.billing_service import USD_TO_SPARKS
+        usage = (
+            db.query(UsageRecord)
+            .filter(UsageRecord.user_id == user_id, UsageRecord.operation == operation)
+            .order_by(UsageRecord.created_at.desc())
+            .first()
+        )
+        if usage:
+            job = db.query(Job).filter(Job.id == job_id).first()
+            if job:
+                job.charged_cost = Decimal(str(usage.charged_cost)) * USD_TO_SPARKS
+                db.commit()
+    except Exception as e:
+        logger.warning(f"Failed to record job cost for job {job_id}: {e}")
+
+
 def _update_job_status(db: Session, job_id: int | None, status: JobStatus, **kwargs):
     """Helper to update job status fields."""
     if not job_id:
@@ -452,6 +476,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
             progress=1,
             result={"lora_url": result.lora_url, "request_id": request_id},
         )
+        _record_job_cost(db, job_id, user_id, "train")
 
         # Best-effort download of weights — training already succeeded
         try:
@@ -592,6 +617,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
         )
 
         _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
+        _record_job_cost(db, job_id, user_id, "generate")
 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(
@@ -922,6 +948,7 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
         )
 
         _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
+        _record_job_cost(db, job_id, user_id, "edit")
 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(

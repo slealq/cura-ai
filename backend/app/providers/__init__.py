@@ -67,6 +67,22 @@ def _resolve_config(db: Session | None, user_id: int | None = None):
             from app.services.billing_service import BillingService
             BillingService(db, user_id).check_balance_or_raise()
 
+        # Override env var keys with active DB-stored platform keys
+        try:
+            from app.models.api_key import APIKey
+            from app.services.encryption import decrypt_api_key
+
+            platform_keys = db.query(APIKey).filter(APIKey.status == "active").all()
+            for pk in platform_keys:
+                try:
+                    decrypted = decrypt_api_key(pk.encrypted_key)
+                    if decrypted:
+                        keys[pk.provider] = decrypted
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         settings_service = get_settings_service(db, user_id) if user_id else None
         provider_config = settings_service.get_provider_config() if settings_service else {}
 

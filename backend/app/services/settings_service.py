@@ -61,7 +61,7 @@ DEFAULT_EDIT_CONFIGS = {
     },
 }
 
-DEFAULT_BASE_MODEL = "flux-dev"
+DEFAULT_BASE_MODEL = "nano-banana-pro"
 
 DEFAULT_PROVIDER_CONFIG = {
     "vision_provider": "openai",

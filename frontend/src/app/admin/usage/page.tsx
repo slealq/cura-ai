@@ -3,12 +3,12 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { notFound } from 'next/navigation';
-import { Loader2, Plus, Pencil, Trash2 } from 'lucide-react';
+import { Loader2, Plus, Pencil, Trash2, RefreshCw, Eye, EyeOff, Key } from 'lucide-react';
 import { toast } from 'sonner';
-import { billingApi } from '@/lib/api';
+import { billingApi, settingsApi } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn, formatDateCompact, formatNumber } from '@/lib/utils';
-import type { AdminUserBalance, CostCatalogEntry } from '@/types';
+import type { AdminUserBalance, APIKeyInfo, CostCatalogEntry } from '@/types';
 
 type DateRange = '7d' | '30d' | '90d' | 'all';
 
@@ -38,6 +38,11 @@ export default function AdminUsagePage() {
     cost_per_call: 0,
     platform_markup: 1.0,
   });
+  const [editingProvider, setEditingProvider] = useState<string | null>(null);
+  const [keyInput, setKeyInput] = useState('');
+  const [showKeyInput, setShowKeyInput] = useState(false);
+
+  const isAdmin = user?.role === 'admin';
 
   // 404 for non-admins
   if (user && user.role !== 'admin') {
@@ -61,17 +66,54 @@ export default function AdminUsagePage() {
     queryFn: billingApi.adminGetCatalog,
   });
 
+  const { data: apiKeys, isLoading: apiKeysLoading } = useQuery({
+    queryKey: ['settings', 'api-keys'],
+    queryFn: settingsApi.getApiKeys,
+    enabled: isAdmin,
+  });
+
+  const saveKeyMutation = useMutation({
+    mutationFn: ({ provider, key }: { provider: string; key: string }) =>
+      settingsApi.saveApiKey(provider, key),
+    onSuccess: () => {
+      toast.success('API key saved and validated');
+      queryClient.invalidateQueries({ queryKey: ['settings', 'api-keys'] });
+      setEditingProvider(null);
+      setKeyInput('');
+      setShowKeyInput(false);
+    },
+    onError: () => toast.error('Failed to save API key'),
+  });
+
+  const validateKeyMutation = useMutation({
+    mutationFn: (provider: string) => settingsApi.validateApiKey(provider),
+    onSuccess: (data: APIKeyInfo) => {
+      toast.success(`Key re-validated: ${data.status}`);
+      queryClient.invalidateQueries({ queryKey: ['settings', 'api-keys'] });
+    },
+    onError: () => toast.error('Failed to validate API key'),
+  });
+
+  const deleteKeyMutation = useMutation({
+    mutationFn: (provider: string) => settingsApi.deleteApiKey(provider),
+    onSuccess: () => {
+      toast.success('API key deleted');
+      queryClient.invalidateQueries({ queryKey: ['settings', 'api-keys'] });
+    },
+    onError: () => toast.error('Failed to delete API key'),
+  });
+
   const addCreditsMutation = useMutation({
     mutationFn: ({ userId, amount, description }: { userId: number; amount: number; description: string }) =>
       billingApi.adminAddCredits(userId, amount, description),
     onSuccess: () => {
-      toast.success('Credits added successfully');
+      toast.success('Sparks added successfully');
       queryClient.invalidateQueries({ queryKey: ['billing'] });
       setCreditUserId(null);
       setCreditAmount('');
       setCreditDescription('');
     },
-    onError: () => toast.error('Failed to add credits'),
+    onError: () => toast.error('Failed to add sparks'),
   });
 
   const saveCatalogMutation = useMutation({
@@ -129,6 +171,141 @@ export default function AdminUsagePage() {
         </div>
       </div>
 
+      {/* Platform API Keys */}
+      <section>
+        <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+          <Key className="h-5 w-5" /> Platform API Keys
+        </h2>
+        {apiKeysLoading ? (
+          <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {(apiKeys || []).map((info: APIKeyInfo) => {
+              const providerLabels: Record<string, string> = { openai: 'OpenAI', anthropic: 'Anthropic', fal: 'fal.ai' };
+              const label = providerLabels[info.provider] || info.provider;
+              const isEditing = editingProvider === info.provider;
+
+              const statusColor: Record<string, string> = {
+                active: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
+                invalid: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
+                quota_exceeded: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400',
+                env_var: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
+                not_configured: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
+                unknown: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
+              };
+              const statusLabel: Record<string, string> = {
+                active: 'Active',
+                invalid: 'Invalid',
+                quota_exceeded: 'Quota Exceeded',
+                env_var: 'Env Var',
+                not_configured: 'Not Set',
+                unknown: 'Unknown',
+              };
+
+              return (
+                <div key={info.provider} className="bg-card border rounded-lg p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-medium">{label}</h3>
+                    <span className={cn('px-2 py-0.5 rounded-full text-xs font-medium', statusColor[info.status] || statusColor.unknown)}>
+                      {statusLabel[info.status] || info.status}
+                    </span>
+                  </div>
+
+                  {info.key_suffix && (
+                    <p className="text-sm text-muted-foreground font-mono">...{info.key_suffix}</p>
+                  )}
+
+                  {info.last_validated_at && (
+                    <p className="text-xs text-muted-foreground">
+                      Validated: {formatDateCompact(info.last_validated_at)}
+                    </p>
+                  )}
+
+                  {info.last_error && info.status !== 'env_var' && (
+                    <p className="text-xs text-red-500 truncate" title={info.last_error}>{info.last_error}</p>
+                  )}
+
+                  {isEditing ? (
+                    <div className="space-y-2">
+                      <div className="relative">
+                        <input
+                          type={showKeyInput ? 'text' : 'password'}
+                          value={keyInput}
+                          onChange={(e) => setKeyInput(e.target.value)}
+                          placeholder="Enter API key..."
+                          className="w-full px-3 py-2 pr-9 bg-background border rounded-md text-sm font-mono"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowKeyInput(!showKeyInput)}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        >
+                          {showKeyInput ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => {
+                            if (!keyInput.trim()) {
+                              toast.error('Please enter an API key');
+                              return;
+                            }
+                            saveKeyMutation.mutate({ provider: info.provider, key: keyInput.trim() });
+                          }}
+                          disabled={saveKeyMutation.isPending}
+                          className="flex-1 px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
+                        >
+                          {saveKeyMutation.isPending ? 'Validating...' : 'Save & Validate'}
+                        </button>
+                        <button
+                          onClick={() => { setEditingProvider(null); setKeyInput(''); setShowKeyInput(false); }}
+                          className="px-3 py-1.5 text-xs border rounded-md"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => { setEditingProvider(info.provider); setKeyInput(''); setShowKeyInput(false); }}
+                        className="p-1.5 text-muted-foreground hover:text-foreground rounded-md hover:bg-muted"
+                        title="Edit key"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      {info.status !== 'not_configured' && info.status !== 'env_var' && (
+                        <>
+                          <button
+                            onClick={() => validateKeyMutation.mutate(info.provider)}
+                            disabled={validateKeyMutation.isPending}
+                            className="p-1.5 text-muted-foreground hover:text-foreground rounded-md hover:bg-muted disabled:opacity-50"
+                            title="Re-validate"
+                          >
+                            <RefreshCw className={cn('h-3.5 w-3.5', validateKeyMutation.isPending && 'animate-spin')} />
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (confirm(`Delete the stored ${label} key? Will fall back to env var if set.`)) {
+                                deleteKeyMutation.mutate(info.provider);
+                              }
+                            }}
+                            className="p-1.5 text-muted-foreground hover:text-red-500 rounded-md hover:bg-muted"
+                            title="Delete key"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
       {/* Platform Summary */}
       <section>
         <h2 className="text-lg font-semibold mb-4">Platform Summary</h2>
@@ -143,7 +320,7 @@ export default function AdminUsagePage() {
               </div>
               <div className="bg-card border rounded-lg p-4">
                 <p className="text-sm text-muted-foreground">Charged to Users</p>
-                <p className="text-2xl font-bold">{formatNumber(summary.total_charged)} credits</p>
+                <p className="text-2xl font-bold">{formatNumber(summary.total_charged)} sparks</p>
               </div>
               <div className="bg-card border rounded-lg p-4">
                 <p className="text-sm text-muted-foreground">Margin</p>
@@ -170,7 +347,7 @@ export default function AdminUsagePage() {
                           <div className="flex-1 bg-muted rounded-full h-2 overflow-hidden">
                             <div className="bg-primary h-full rounded-full" style={{ width: `${pct}%` }} />
                           </div>
-                          <span className="text-sm font-medium w-24 text-right">{formatNumber(cost)} credits</span>
+                          <span className="text-sm font-medium w-24 text-right">{formatNumber(cost)} sparks</span>
                         </div>
                       );
                     })}
@@ -238,7 +415,7 @@ export default function AdminUsagePage() {
                         }}
                         className="inline-flex items-center gap-1 px-2 py-1 text-xs bg-primary text-primary-foreground rounded hover:bg-primary/90"
                       >
-                        <Plus className="h-3 w-3" /> Credits
+                        <Plus className="h-3 w-3" /> Sparks
                       </button>
                     </td>
                   </tr>
@@ -252,7 +429,7 @@ export default function AdminUsagePage() {
         {creditUserId !== null && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setCreditUserId(null)}>
             <div className="bg-card border rounded-lg p-6 w-96 space-y-4" onClick={(e) => e.stopPropagation()}>
-              <h3 className="font-semibold">Add Credits</h3>
+              <h3 className="font-semibold">Add Sparks</h3>
               <p className="text-sm text-muted-foreground">
                 User: {sortedUsers.find((u: AdminUserBalance) => u.user_id === creditUserId)?.email}
               </p>
@@ -292,7 +469,7 @@ export default function AdminUsagePage() {
                   disabled={addCreditsMutation.isPending}
                   className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
                 >
-                  {addCreditsMutation.isPending ? 'Adding...' : 'Add Credits'}
+                  {addCreditsMutation.isPending ? 'Adding...' : 'Add Sparks'}
                 </button>
               </div>
             </div>

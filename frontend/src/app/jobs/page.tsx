@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Play, XCircle, RefreshCw, Tag, FileText, Cpu, Sparkles, Check, AlertTriangle, RotateCcw, Wrench } from 'lucide-react';
+import { Loader2, Play, XCircle, RefreshCw, Tag, FileText, Cpu, Sparkles, Check, AlertTriangle, RotateCcw, Wrench, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { jobsApi, clustersApi, imagesApi, generationApi } from '@/lib/api';
 import { cn, formatDate, getStatusColor } from '@/lib/utils';
@@ -324,6 +324,12 @@ export default function JobsPage() {
                   Progress
                 </th>
                 <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">
+                  Model
+                </th>
+                <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">
+                  Cost
+                </th>
+                <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">
                   Created
                 </th>
                 <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">
@@ -383,6 +389,12 @@ export default function JobsPage() {
                   </td>
                   <td className="px-4 py-3 text-sm">
                     <JobProgress job={job} />
+                  </td>
+                  <td className="px-4 py-3 text-sm text-muted-foreground">
+                    <JobModel job={job} />
+                  </td>
+                  <td className="px-4 py-3 text-sm">
+                    <JobCost job={job} />
                   </td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">
                     {formatDate(job.created_at)}
@@ -607,6 +619,48 @@ function LoraJobActions({
   }
 
   return null;
+}
+
+const MODEL_DISPLAY_NAMES: Record<string, string> = {
+  'flux-dev': 'Flux Dev',
+  'qwen-2.5': 'Qwen 2.5',
+  'fal-ai/nano-banana-pro': 'Nano Banana',
+  'qwen-image-max-edit': 'Qwen Max Edit',
+  'kling-image-o3': 'Kling O3',
+  'wan-25-preview': 'Wan 2.5',
+  'grok-imagine-edit': 'Grok Edit',
+  'face-swap': 'Face Swap',
+  'nano-banana-edit': 'Nano Banana Edit',
+};
+
+function JobModel({ job }: { job: Job }) {
+  const params = job.parameters as Record<string, unknown> | null;
+  const baseModel = params?.base_model as string | undefined;
+  const editModel = params?.edit_model as string | undefined;
+  const model = baseModel || editModel;
+
+  if (!model) return <span className="text-xs text-muted-foreground">-</span>;
+
+  const displayName = MODEL_DISPLAY_NAMES[model] || model;
+  return (
+    <span className="text-xs font-medium text-muted-foreground" title={model}>
+      {displayName}
+    </span>
+  );
+}
+
+function JobCost({ job }: { job: Job }) {
+  if (job.charged_cost == null) return <span className="text-xs text-muted-foreground">-</span>;
+
+  // charged_cost is stored in sparks
+  const sparks = Math.round(job.charged_cost);
+
+  return (
+    <span className="inline-flex items-center gap-0.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+      <Zap className="h-3 w-3" />
+      {sparks}
+    </span>
+  );
 }
 
 function JobProgress({ job }: { job: Job }) {

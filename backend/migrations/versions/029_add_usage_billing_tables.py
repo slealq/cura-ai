@@ -143,7 +143,7 @@ def upgrade() -> None:
         ("fal", "fal-ai/flux/dev", "generate", "0", "0", "0.025", "2.0"),
         ("fal", "fal-ai/qwen-image-2512/lora", "generate", "0", "0", "0.035", "2.0"),
         ("fal", "fal-ai/qwen-image-2512", "generate", "0", "0", "0.02", "2.0"),
-        ("fal", "fal-ai/nano-banana-pro", "generate", "0", "0", "0.15", "2.0"),
+        ("fal", "fal-ai/nano-banana-pro", "generate", "0", "0", "0.039", "2.0"),
         # fal.ai training (per-call — cost represents ~1000 steps default)
         ("fal", "fal-ai/flux-lora-fast-training", "train", "0", "0", "2.00", "2.0"),
         ("fal", "fal-ai/qwen-image-2512-trainer-v2", "train", "0", "0", "1.90", "2.0"),
@@ -153,7 +153,7 @@ def upgrade() -> None:
         ("fal", "fal-ai/wan-25-preview/image-to-image", "edit", "0", "0", "0.05", "2.0"),
         ("fal", "xai/grok-imagine-image/edit", "edit", "0", "0", "0.022", "2.0"),
         ("fal", "half-moon-ai/ai-face-swap/faceswapimage", "edit", "0", "0", "0.009", "2.0"),
-        ("fal", "fal-ai/nano-banana-pro/edit", "edit", "0", "0", "0.15", "2.0"),
+        ("fal", "fal-ai/nano-banana-pro/edit", "edit", "0", "0", "0.039", "2.0"),
         # fal.ai OpenRouter vision (per-token: $0.20/1M input, $0.50/1M output)
         ("fal", "x-ai/grok-4-fast", "tag", "0.0000002", "0.0000005", "0", "2.0"),
         ("fal", "x-ai/grok-4-fast", "describe", "0.0000002", "0.0000005", "0", "2.0"),

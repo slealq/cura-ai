@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useRef, Suspense } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { generationApi, settingsApi } from '@/lib/api';
-import { Loader2, Sparkles, ChevronDown, ChevronUp, X, Plus, Trash2 } from 'lucide-react';
+import { generationApi, settingsApi, billingApi } from '@/lib/api';
+import { Loader2, Sparkles, ChevronDown, ChevronUp, X, Plus, Trash2, Zap, Wand2 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -21,7 +21,7 @@ const SIZE_PRESETS = [
 
 const BASE_MODELS = [
   { value: 'flux-dev', label: 'Flux', defaultGuidance: 3.5, hasLora: true, hasStepsGuidance: true, hasWidthHeight: true, usesResolutionAspect: false, hasSafetyTolerance: false, hasWebSearch: false, maxImages: 8 },
-  { value: 'qwen-2.5', label: 'Qwen 2.5', defaultGuidance: 4.0, hasLora: true, hasStepsGuidance: true, hasWidthHeight: true, usesResolutionAspect: false, hasSafetyTolerance: false, hasWebSearch: false, maxImages: 8 },
+  { value: 'qwen-2.5', label: 'Qwen Image 2512', defaultGuidance: 4.0, hasLora: true, hasStepsGuidance: true, hasWidthHeight: true, usesResolutionAspect: false, hasSafetyTolerance: false, hasWebSearch: false, maxImages: 8 },
   { value: 'nano-banana-pro', label: 'Nano Banana Pro', defaultGuidance: 0, hasLora: false, hasStepsGuidance: false, hasWidthHeight: false, usesResolutionAspect: true, hasSafetyTolerance: true, hasWebSearch: true, maxImages: 4 },
 ];
 
@@ -70,12 +70,12 @@ function GeneratePageInner() {
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [baseModel, setBaseModel] = useState('flux-dev');
+  const [baseModel, setBaseModel] = useState('nano-banana-pro');
   const [loraSelections, setLoraSelections] = useState<Array<{ id: number; scale: number }>>([]);
   const [width, setWidth] = useState(1024);
   const [height, setHeight] = useState(1024);
   const [steps, setSteps] = useState(28);
-  const [guidance, setGuidance] = useState(3.5);
+  const [guidance, setGuidance] = useState(0);
   const [seed, setSeed] = useState<string>('');
   const [numImages, setNumImages] = useState(1);
   const [resolution, setResolution] = useState('1K');
@@ -178,6 +178,23 @@ function GeneratePageInner() {
     refetchInterval: 3000,
   });
 
+  // Fetch generation costs for cost estimate display
+  const { data: generationCosts } = useQuery({
+    queryKey: ['generation-costs'],
+    queryFn: () => billingApi.getGenerationCosts(),
+    staleTime: 5 * 60 * 1000, // costs don't change often
+  });
+
+  // Compute estimated cost in sparks
+  const estimatedCostPerImage = (() => {
+    if (!generationCosts?.costs) return null;
+    const modelCosts = generationCosts.costs[baseModel];
+    if (!modelCosts) return null;
+    const hasLora = modelCaps.hasLora && loraSelections.length > 0;
+    return hasLora ? (modelCosts.with_lora ?? null) : (modelCosts.without_lora ?? null);
+  })();
+  const totalEstimatedCost = estimatedCostPerImage != null ? estimatedCostPerImage * numImages : null;
+
   // Generate mutation
   const deleteMutation = useMutation({
     mutationFn: generationApi.deleteImage,
@@ -186,6 +203,17 @@ function GeneratePageInner() {
     },
     onError: (err: Error) => {
       toast.error(`Delete failed: ${err.message}`);
+    },
+  });
+
+  const expandMutation = useMutation({
+    mutationFn: (promptText: string) => generationApi.expandPrompt(promptText),
+    onSuccess: (data) => {
+      setPrompt(data.expanded_prompt);
+      toast.success('Prompt expanded');
+    },
+    onError: (err: Error) => {
+      toast.error(`Expand failed: ${err.message}`);
     },
   });
 
@@ -277,6 +305,20 @@ function GeneratePageInner() {
               }
             }}
           />
+          <div className="flex justify-end mt-1">
+            <button
+              onClick={() => expandMutation.mutate(prompt.trim())}
+              disabled={expandMutation.isPending || !prompt.trim()}
+              className="flex items-center gap-1.5 px-3 py-1 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
+            >
+              {expandMutation.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Wand2 className="h-3.5 w-3.5" />
+              )}
+              Expand
+            </button>
+          </div>
         </div>
 
         {/* Model selector + LoRA + quick params */}
@@ -379,19 +421,27 @@ function GeneratePageInner() {
             </select>
           </div>
 
-          {/* Generate button */}
-          <button
-            onClick={handleGenerate}
-            disabled={generateMutation.isPending || !prompt.trim()}
-            className="flex items-center gap-2 px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 font-medium"
-          >
-            {generateMutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Sparkles className="h-4 w-4" />
+          {/* Generate button + cost estimate */}
+          <div className="flex items-end gap-3">
+            <button
+              onClick={handleGenerate}
+              disabled={generateMutation.isPending || !prompt.trim()}
+              className="flex items-center gap-2 px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 font-medium"
+            >
+              {generateMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Sparkles className="h-4 w-4" />
+              )}
+              Generate
+            </button>
+            {totalEstimatedCost != null && (
+              <span className="inline-flex items-center gap-1 text-sm text-amber-600 dark:text-amber-400 font-medium pb-2">
+                <Zap className="h-3.5 w-3.5" />
+                {totalEstimatedCost}{numImages > 1 && <span className="text-xs text-muted-foreground font-normal">({estimatedCostPerImage} x {numImages})</span>}
+              </span>
             )}
-            Generate
-          </button>
+          </div>
         </div>
 
         {/* Advanced toggle */}

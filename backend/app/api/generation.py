@@ -26,6 +26,18 @@ router = APIRouter(prefix="/generation", tags=["generation"])
 # --- Schemas ---
 
 
+class ExpandPromptRequest(BaseModel):
+    """Request to expand a terse prompt into a detailed image generation prompt."""
+
+    prompt: str = Field(..., min_length=1)
+
+
+class ExpandPromptResponse(BaseModel):
+    """Response with the expanded prompt."""
+
+    expanded_prompt: str
+
+
 class TrainLoraRequest(BaseModel):
     """Request to start LoRA training from a folder or cluster."""
 
@@ -328,6 +340,76 @@ def _gen_to_response(gen, db: Session) -> GeneratedImageResponse:
     )
 
 
+# --- Prompt Expansion ---
+
+
+@router.post("/expand-prompt", response_model=ExpandPromptResponse)
+async def expand_prompt(
+    request: ExpandPromptRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Expand a terse prompt into a detailed image generation prompt using AI."""
+    from openai import AsyncOpenAI
+
+    from app.providers import _resolve_config
+    from app.services.billing_service import BillingService, InsufficientBalanceError
+
+    try:
+        BillingService(db, current_user.id).check_balance_or_raise()
+    except InsufficientBalanceError:
+        raise HTTPException(status_code=402, detail="Insufficient credits")
+
+    keys, _ = _resolve_config(db, current_user.id)
+    openai_key = keys.get("openai")
+    if not openai_key:
+        raise HTTPException(status_code=400, detail="OpenAI API key not configured on the platform.")
+
+    client = AsyncOpenAI(api_key=openai_key)
+
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a prompt engineer for AI image generation. "
+                        "The user will give you a short, terse image idea. "
+                        "Expand it into a single vivid paragraph suitable for an image generation model. "
+                        "Add details about composition, lighting, style, mood, colors, and textures "
+                        "while preserving the user's original intent. "
+                        "Return ONLY the expanded prompt text with no commentary or explanation."
+                    ),
+                },
+                {"role": "user", "content": request.prompt},
+            ],
+            max_tokens=500,
+        )
+
+        expanded = response.choices[0].message.content or ""
+        usage = response.usage
+
+        # Record billing
+        if usage:
+            billing = BillingService(db, current_user.id)
+            billing.record_usage(
+                operation="expand_prompt",
+                provider="openai",
+                model="gpt-4o-mini",
+                input_tokens=usage.prompt_tokens,
+                output_tokens=usage.completion_tokens,
+            )
+
+        return ExpandPromptResponse(expanded_prompt=expanded.strip())
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to expand prompt: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to expand prompt: {str(e)}")
+
+
 # --- LoRA Routes ---
 
 
@@ -340,7 +422,7 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db), c
         raise HTTPException(status_code=400, detail="Provide either folder_id or cluster_id, not both")
 
     image_count = 0
-    job_params: dict = {"trigger_word": request.trigger_word or ""}
+    job_params: dict = {"trigger_word": request.trigger_word or "", "base_model": request.base_model}
 
     if request.folder_id:
         from app.models.folder import Folder, FolderImage
@@ -923,6 +1005,7 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
             parameters={
                 "prompt": request.prompt[:200],
                 "num_images": request.num_images,
+                "base_model": effective_base_model,
                 "lora_model_id": first_lora_id,
                 **({"loras": loras_for_params} if loras_for_params else {}),
             },

@@ -132,6 +132,7 @@ class JobResponse(BaseModel):
     image_id: int | None = None
     image_filename: str | None = None
     image_thumbnail: str | None = None
+    charged_cost: float | None = None
 
     class Config:
         from_attributes = True

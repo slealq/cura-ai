@@ -17,6 +17,7 @@ import {
   LogOut,
   CreditCard,
   BarChart3,
+  Zap,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { cn, formatNumber } from '@/lib/utils';
@@ -53,6 +54,47 @@ const navigation = [
   { name: 'Debug', href: '/debug', icon: Bug },
   { name: 'Settings', href: '/settings', icon: Settings },
 ];
+
+function getSparkTier(balance: number) {
+  if (balance <= 0) return { label: 'Empty', color: 'text-red-500', bg: 'bg-red-500', glow: 'shadow-red-500/40', barBg: 'bg-red-500/15', pct: 0 };
+  if (balance < 50) return { label: 'Low', color: 'text-orange-400', bg: 'bg-orange-400', glow: 'shadow-orange-400/40', barBg: 'bg-orange-400/15', pct: Math.max(5, (balance / 50) * 15) };
+  if (balance < 500) return { label: 'Warm', color: 'text-amber-400', bg: 'bg-amber-400', glow: 'shadow-amber-400/30', barBg: 'bg-amber-400/15', pct: 15 + ((balance - 50) / 450) * 25 };
+  if (balance < 2000) return { label: 'Charged', color: 'text-yellow-400', bg: 'bg-yellow-400', glow: 'shadow-yellow-400/30', barBg: 'bg-yellow-400/10', pct: 40 + ((balance - 500) / 1500) * 25 };
+  if (balance < 5000) return { label: 'Supercharged', color: 'text-emerald-400', bg: 'bg-emerald-400', glow: 'shadow-emerald-400/30', barBg: 'bg-emerald-400/10', pct: 65 + ((balance - 2000) / 3000) * 20 };
+  return { label: 'Overloaded', color: 'text-cyan-400', bg: 'bg-cyan-400', glow: 'shadow-cyan-400/40', barBg: 'bg-cyan-400/10', pct: Math.min(100, 85 + ((balance - 5000) / 10000) * 15) };
+}
+
+function SparkBalance({ balance }: { balance: number }) {
+  const tier = getSparkTier(balance);
+  return (
+    <div className={cn(
+      'rounded-lg border border-border px-3 py-2.5 transition-all',
+      'hover:border-border/80 hover:bg-muted/30',
+      tier.barBg,
+    )}>
+      <div className="flex items-center justify-between mb-1.5">
+        <div className="flex items-center gap-1.5">
+          <Zap className={cn('h-3.5 w-3.5', tier.color, balance > 0 && 'drop-shadow-sm')} />
+          <span className={cn('text-[11px] font-semibold uppercase tracking-wider', tier.color)}>
+            {tier.label}
+          </span>
+        </div>
+        <span className="text-xs text-muted-foreground font-medium">
+          sparks
+        </span>
+      </div>
+      <div className="text-lg font-bold tracking-tight leading-none mb-1.5">
+        {formatNumber(balance)}
+      </div>
+      <div className="h-1 rounded-full bg-muted/50 overflow-hidden">
+        <div
+          className={cn('h-full rounded-full transition-all duration-700 ease-out', tier.bg)}
+          style={{ width: `${tier.pct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
 
 export default function Sidebar() {
   const pathname = usePathname();
@@ -102,6 +144,12 @@ export default function Sidebar() {
         </Link>
       </div>
 
+      {balanceData && (
+        <Link href="/billing" className="block mx-4 mt-4 group">
+          <SparkBalance balance={balanceData.balance} />
+        </Link>
+      )}
+
       <nav className="flex-1 p-4 space-y-1">
         {navItems.map((item) => {
           const isActive =
@@ -146,17 +194,6 @@ export default function Sidebar() {
                 <LogOut className="h-4 w-4" />
               </button>
             </div>
-            {balanceData && (
-              <Link
-                href="/billing"
-                className={cn(
-                  'block text-xs font-medium px-1',
-                  balanceData.balance < 10 ? 'text-red-500' : 'text-muted-foreground',
-                )}
-              >
-                Credits: {formatNumber(balanceData.balance)}
-              </Link>
-            )}
           </div>
         )}
       </div>

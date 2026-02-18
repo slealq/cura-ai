@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_admin
 from app.db.base import get_db
 from app.models.api_key import APIProvider
 from app.models.user import User
@@ -377,6 +377,114 @@ def _api_key_to_response(key) -> APIKeyResponse:
     )
 
 
+ENV_VAR_MAP = {
+    APIProvider.OPENAI: app_settings.openai_api_key,
+    APIProvider.ANTHROPIC: app_settings.anthropic_api_key,
+    APIProvider.FAL: app_settings.fal_api_key,
+}
+
+
+@router.get("/api-keys", response_model=list[APIKeyResponse])
+async def list_api_keys(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """List platform API key status for all providers (admin only)."""
+    from app.services.api_key_service import get_api_key_service
+
+    service = get_api_key_service(db, current_user.id)
+    results = []
+    for provider in APIProvider:
+        key = service.get_key(provider)
+        if key:
+            results.append(_api_key_to_response(key))
+        else:
+            env_val = ENV_VAR_MAP.get(provider) or None
+            if env_val:
+                results.append(APIKeyResponse(
+                    provider=provider.value,
+                    key_suffix=env_val[-4:] if len(env_val) >= 4 else env_val,
+                    status="env_var",
+                    last_validated_at=None,
+                    last_error="Configured via environment variable",
+                ))
+            else:
+                results.append(APIKeyResponse(
+                    provider=provider.value,
+                    key_suffix=None,
+                    status="not_configured",
+                    last_validated_at=None,
+                    last_error=None,
+                ))
+    return results
+
+
+@router.put("/api-keys/{provider}", response_model=APIKeyResponse)
+async def save_api_key(
+    provider: str,
+    request: APIKeySaveRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Save and validate a platform API key (admin only)."""
+    from app.services.api_key_service import get_api_key_service
+
+    try:
+        api_provider = APIProvider(provider)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+
+    service = get_api_key_service(db, current_user.id)
+    key, _result = await service.validate_and_save_key(api_provider, request.key)
+    return _api_key_to_response(key)
+
+
+@router.post("/api-keys/{provider}/validate", response_model=APIKeyResponse)
+async def validate_api_key(
+    provider: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Re-validate an existing platform API key (admin only)."""
+    from app.services.api_key_service import get_api_key_service
+
+    try:
+        api_provider = APIProvider(provider)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+
+    service = get_api_key_service(db, current_user.id)
+    existing = service.get_key(api_provider)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"No stored key for {provider}")
+
+    decrypted = service.get_decrypted_key(api_provider)
+    if not decrypted:
+        raise HTTPException(status_code=500, detail="Failed to decrypt stored key")
+
+    key, _result = await service.validate_and_save_key(api_provider, decrypted)
+    return _api_key_to_response(key)
+
+
+@router.delete("/api-keys/{provider}", status_code=204)
+async def delete_api_key(
+    provider: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Delete a platform API key (admin only)."""
+    from app.services.api_key_service import get_api_key_service
+
+    try:
+        api_provider = APIProvider(provider)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+
+    service = get_api_key_service(db, current_user.id)
+    if not service.delete_key(api_provider):
+        raise HTTPException(status_code=404, detail=f"No stored key for {provider}")
+
+
 # --- Provider config endpoints ---
 
 
@@ -442,6 +550,8 @@ async def _get_openai_models(db: Session, user_id: int) -> list[ProviderModelInf
 
     key_service = get_aks(db, user_id)
     api_key = key_service.resolve_key(APIProvider.OPENAI)
+    if not api_key:
+        api_key = app_settings.openai_api_key or None
     if not api_key:
         return CURATED_OPENAI_VISION_MODELS + FALLBACK_EMBEDDING_MODELS
 
