@@ -211,8 +211,8 @@ cura azure setup     # Generate .env.cloud from Azure secrets
 | Command | What it does |
 |---|---|
 | `cura azure status` | Shows state of PostgreSQL, Redis, and all 4 Container Apps (replica counts, min/max) |
-| `cura azure stop` | Scales Container Apps to 0/0, stops PostgreSQL, deletes Redis (Basic SKU has no stop). Saves Redis key to `.redis-key-dev` |
-| `cura azure start` | Starts PostgreSQL (~1-2 min), recreates Redis Basic C0 (~5-10 min), updates Container App secrets with new Redis connection, scales apps back (backend 1/3, workers 1/2 or 1/1), polls for backend health, adds DB firewall rule for current IP |
+| `cura azure stop` | Deactivates Container App revisions (guarantees 0 replicas, including Celery workers), stops PostgreSQL, deletes Redis (Basic SKU has no stop). Saves Redis key to `.redis-key-dev` |
+| `cura azure start` | Starts PostgreSQL (~1-2 min), recreates Redis Basic C0 (~5-10 min), updates Container App secrets with new Redis connection, reactivates Container App revisions, scales apps back (backend 1/3, workers 1/2 or 1/1), polls for backend health, adds DB firewall rule for current IP |
 
 ### Deploying to PROD (Azure)
 
