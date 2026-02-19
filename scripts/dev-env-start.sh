@@ -79,7 +79,30 @@ for APP in "${APPS[@]}"; do
 done
 echo "  Secrets updated."
 
-# 4. Scale Container Apps back up
+# 4. Reactivate Container App revisions (if deactivated by stop script)
+echo ""
+echo "--- Reactivating Container App revisions ---"
+for APP in "${APPS[@]}"; do
+    # Find the latest revision (even if inactive)
+    REVISION=$(az containerapp revision list --resource-group "$RG" --name "$APP" \
+        --query "sort_by([],&properties.createdTime)[-1].name" -o tsv 2>/dev/null || echo "")
+    if [ -n "$REVISION" ]; then
+        IS_ACTIVE=$(az containerapp revision show --resource-group "$RG" --name "$APP" \
+            --revision "$REVISION" --query "properties.active" -o tsv 2>/dev/null || echo "false")
+        if [ "$IS_ACTIVE" = "false" ]; then
+            echo "  Reactivating $APP revision: $REVISION"
+            az containerapp revision activate --resource-group "$RG" --name "$APP" \
+                --revision "$REVISION" -o none
+        else
+            echo "  $APP revision already active."
+        fi
+    else
+        echo "  WARNING: No revision found for $APP"
+    fi
+done
+echo "  All revisions reactivated."
+
+# 5. Scale Container Apps back up
 echo ""
 echo "--- Scaling Container Apps ---"
 # Match actual Azure config: backend 1/3, workers 1/2, clustering 1/1, generation 1/2
@@ -102,7 +125,7 @@ for PID in "${PIDS[@]}"; do
 done
 echo "  All Container Apps scaled."
 
-# 5. Health check
+# 6. Health check
 echo ""
 echo "--- Waiting for backend health check ---"
 for i in $(seq 1 30); do
@@ -119,7 +142,7 @@ for i in $(seq 1 30); do
     sleep 10
 done
 
-# 6. Add DB firewall rule for current IP
+# 7. Add DB firewall rule for current IP
 echo ""
 echo "--- Adding DB firewall rule for current IP ---"
 MY_IP=$(curl -s ifconfig.me)

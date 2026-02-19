@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Stop all Azure DEV environment resources to save costs.
-# - Scales Container Apps to 0/0
+# - Deactivates Container App revisions (stops all replicas, including Celery workers)
 # - Stops PostgreSQL Flexible Server
 # - Deletes Redis (Basic SKU has no stop/start — recreate via dev-env-start.sh)
 set -euo pipefail
@@ -12,20 +12,30 @@ APPS=("cae-imggen-dev-backend" "cae-imggen-dev-celery-worker" "cae-imggen-dev-ce
 
 echo "=== Stopping Azure DEV Environment ==="
 
-# 1. Scale Container Apps to 0/0 (parallel)
+# 1. Deactivate all Container App revisions (parallel)
+# Scaling to min=0 alone doesn't stop Celery workers (they're not HTTP-triggered).
+# Deactivating the active revision guarantees 0 running replicas.
 echo ""
-echo "--- Scaling Container Apps to 0/0 ---"
+echo "--- Deactivating Container App revisions ---"
 PIDS=()
 for APP in "${APPS[@]}"; do
-    echo "  Scaling $APP to min=0 max=0..."
-    az containerapp update --resource-group "$RG" --name "$APP" \
-        --min-replicas 0 --max-replicas 0 -o none &
+    (
+        REVISION=$(az containerapp revision list --resource-group "$RG" --name "$APP" \
+            --query "[?properties.active].name" -o tsv 2>/dev/null || echo "")
+        if [ -n "$REVISION" ]; then
+            echo "  Deactivating $APP revision: $REVISION"
+            az containerapp revision deactivate --resource-group "$RG" --name "$APP" \
+                --revision "$REVISION" -o none
+        else
+            echo "  $APP: no active revision (already deactivated)"
+        fi
+    ) &
     PIDS+=($!)
 done
 for PID in "${PIDS[@]}"; do
     wait "$PID"
 done
-echo "  All Container Apps scaled to 0."
+echo "  All Container App revisions deactivated."
 
 # 2. Stop PostgreSQL
 echo ""
