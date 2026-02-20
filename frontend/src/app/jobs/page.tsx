@@ -9,6 +9,16 @@ import { jobsApi, imagesApi, generationApi } from '@/lib/api';
 import { cn, formatDate, getStatusColor } from '@/lib/utils';
 import type { BatchJobImage, Job } from '@/types';
 
+const JOB_TYPE_LABELS: Record<string, string> = {
+  reprocess: 'Describe',
+  batch_reprocess: 'Batch Describe',
+  batch_describe: 'Batch Describe',
+};
+
+function jobTypeLabel(jobType: string): string {
+  return JOB_TYPE_LABELS[jobType] || jobType.replace('_', ' ');
+}
+
 export default function JobsPage() {
   const queryClient = useQueryClient();
 
@@ -114,7 +124,7 @@ export default function JobsPage() {
                 <tr key={job.id} className="hover:bg-muted/30">
                   <td className="px-4 py-3 text-sm font-mono">{job.id}</td>
                   <td className="px-4 py-3 text-sm">
-                    <span className="capitalize">{job.job_type.replace('_', ' ')}</span>
+                    <span className="capitalize">{jobTypeLabel(job.job_type)}</span>
                     {job.job_type === 'lora_train' && job.parameters?.lora_model_id != null && (
                       <Link
                         href={`/models/${String(job.parameters.lora_model_id)}`}

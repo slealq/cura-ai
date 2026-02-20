@@ -14,9 +14,18 @@ export function getStoredTimezone(): string {
   }
 }
 
+/** Parse an API date string as UTC. The backend stores UTC but returns naive
+ *  ISO strings (no Z suffix), so JS would otherwise treat them as local time. */
+function parseUTC(date: string): Date {
+  if (date.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(date)) {
+    return new Date(date);
+  }
+  return new Date(date + 'Z');
+}
+
 export function formatDate(date: string | null): string {
   if (!date) return 'N/A';
-  return new Date(date).toLocaleDateString('en-US', {
+  return parseUTC(date).toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
@@ -28,7 +37,7 @@ export function formatDate(date: string | null): string {
 
 export function formatTimestamp(date: string | null): string {
   if (!date) return 'N/A';
-  const d = new Date(date);
+  const d = parseUTC(date);
   const tz = getStoredTimezone();
   const parts = new Intl.DateTimeFormat('en-US', {
     hour: '2-digit',
@@ -46,7 +55,7 @@ export function formatTimestamp(date: string | null): string {
 
 export function formatDateCompact(date: string | null): string {
   if (!date) return 'N/A';
-  const d = new Date(date);
+  const d = parseUTC(date);
   const tz = getStoredTimezone();
   const now = new Date();
 

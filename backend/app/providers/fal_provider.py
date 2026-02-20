@@ -168,6 +168,7 @@ class FalTrainer(BaseTrainer):
                 endpoint,
                 request_id,
             )
+            fal_cost = result.get("cost")
 
             lora_url = result.get("diffusers_lora_file", {}).get("url", "")
             if not lora_url:
@@ -181,6 +182,7 @@ class FalTrainer(BaseTrainer):
                 model=endpoint,
                 operation="get_training_result",
                 duration_ms=round(elapsed, 1),
+                provider_cost=fal_cost,
                 success=True,
             )
 
@@ -311,6 +313,7 @@ class FalGenerator(BaseGenerator):
                 time.sleep(poll_interval)
 
             result = handle.get()
+            fal_cost = result.get("cost")
 
             # Extract image URL and download
             images = result.get("images", [])
@@ -337,6 +340,7 @@ class FalGenerator(BaseGenerator):
                 model=endpoint,
                 operation="generate",
                 duration_ms=round(elapsed, 1),
+                provider_cost=fal_cost,
                 success=True,
                 extra={"seed": result_seed, "lora_count": len(loras) if loras else 0, "base_model": self.base_model, "request_id": request_id},
             )
@@ -533,6 +537,7 @@ class FalEditor(BaseEditor):
                 time.sleep(poll_interval)
 
             result = handle.get()
+            fal_cost = result.get("cost")
 
             # Face swap returns singular "image", others return "images" array
             if self.config.get("uses_face_swap"):
@@ -567,6 +572,7 @@ class FalEditor(BaseEditor):
                 model=endpoint,
                 operation="edit",
                 duration_ms=round(elapsed, 1),
+                provider_cost=fal_cost,
                 success=True,
                 extra={"seed": result_seed, "edit_model": self.edit_model, "request_id": request_id},
             )

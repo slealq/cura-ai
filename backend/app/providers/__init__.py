@@ -105,33 +105,46 @@ def _token_config(config: dict) -> dict:
     }
 
 
+def _temperature_config(config: dict) -> float:
+    """Read vision_temperature from provider config."""
+    return float(config.get("vision_temperature", 1.0))
+
+
 def get_tagger(
     provider: Literal["openai", "anthropic", "fal"] | None = None,
     db: Session | None = None,
     user_id: int | None = None,
     model: str | None = None,
+    temperature: float | None = None,
+    max_tokens_override: int | None = None,
 ) -> BaseTagger:
     """Get tagger instance for the specified provider."""
     keys, config = _resolve_config(db, user_id)
-    max_tokens = _token_config(config)
+    tok = _token_config(config)
+    if max_tokens_override is not None:
+        tok["tag"] = max_tokens_override
+    temp = temperature if temperature is not None else _temperature_config(config)
     provider = provider or config.get("vision_provider") or settings.default_vision_provider
     if provider == "openai":
         return OpenAITagger(
             api_key=keys.get("openai"),
             model=model or config.get("openai_vision_model"),
-            max_tokens=max_tokens,
+            max_tokens=tok,
+            temperature=temp,
         )
     elif provider == "anthropic":
         return AnthropicTagger(
             api_key=keys.get("anthropic"),
             model=model or config.get("anthropic_vision_model"),
-            max_tokens=max_tokens,
+            max_tokens=tok,
+            temperature=temp,
         )
     elif provider == "fal":
         return FalVisionTagger(
             api_key=keys.get("fal"),
             model=model or config.get("fal_vision_model"),
-            max_tokens=max_tokens,
+            max_tokens=tok,
+            temperature=temp,
         )
     else:
         raise ValueError(f"Unknown tagger provider: {provider}")
@@ -142,28 +155,36 @@ def get_describer(
     db: Session | None = None,
     user_id: int | None = None,
     model: str | None = None,
+    temperature: float | None = None,
+    max_tokens_override: int | None = None,
 ) -> BaseDescriber:
     """Get describer instance for the specified provider."""
     keys, config = _resolve_config(db, user_id)
-    max_tokens = _token_config(config)
+    tok = _token_config(config)
+    if max_tokens_override is not None:
+        tok["describe"] = max_tokens_override
+    temp = temperature if temperature is not None else _temperature_config(config)
     provider = provider or config.get("vision_provider") or settings.default_vision_provider
     if provider == "openai":
         return OpenAIDescriber(
             api_key=keys.get("openai"),
             model=model or config.get("openai_vision_model"),
-            max_tokens=max_tokens,
+            max_tokens=tok,
+            temperature=temp,
         )
     elif provider == "anthropic":
         return AnthropicDescriber(
             api_key=keys.get("anthropic"),
             model=model or config.get("anthropic_vision_model"),
-            max_tokens=max_tokens,
+            max_tokens=tok,
+            temperature=temp,
         )
     elif provider == "fal":
         return FalVisionDescriber(
             api_key=keys.get("fal"),
             model=model or config.get("fal_vision_model"),
-            max_tokens=max_tokens,
+            max_tokens=tok,
+            temperature=temp,
         )
     else:
         raise ValueError(f"Unknown describer provider: {provider}")

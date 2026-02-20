@@ -68,10 +68,11 @@ def _to_data_uri(image_data: bytes, mime_type: str) -> str:
 class FalVisionTagger(BaseTagger):
     """fal.ai OpenRouter vision-based image tagger."""
 
-    def __init__(self, api_key: str | None = None, model: str | None = None, max_tokens: dict | None = None):
+    def __init__(self, api_key: str | None = None, model: str | None = None, max_tokens: dict | None = None, temperature: float | None = None):
         _ensure_fal_key(api_key)
         self.model = model or DEFAULT_FAL_VISION_MODEL
         self.token_limit = (max_tokens or {}).get("tag", 1000)
+        self.temperature = temperature
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30),
            retry=lambda retry_state: not isinstance(retry_state.outcome.exception(), AIContentError) if retry_state.outcome and retry_state.outcome.failed else True)
@@ -84,16 +85,20 @@ class FalVisionTagger(BaseTagger):
 
         data_uri = _to_data_uri(image_data, mime_type)
 
+        args = {
+            "image_urls": [data_uri],
+            "prompt": tag_prompt,
+            "model": self.model,
+            "max_tokens": self.token_limit,
+        }
+        if self.temperature is not None:
+            args["temperature"] = self.temperature
+
         start = time.monotonic()
         try:
             result = _fal_submit_and_poll(
                 FAL_OPENROUTER_ENDPOINT,
-                arguments={
-                    "image_urls": [data_uri],
-                    "prompt": tag_prompt,
-                    "model": self.model,
-                    "max_tokens": self.token_limit,
-                },
+                arguments=args,
             )
             elapsed = (time.monotonic() - start) * 1000
             content = result.get("output", "")
@@ -103,13 +108,13 @@ class FalVisionTagger(BaseTagger):
                 message=f"fal.ai OpenRouter tagging completed ({self.model})",
                 provider="fal", model=self.model, operation="tag",
                 duration_ms=round(elapsed, 1),
-                input_tokens=usage.get("input_tokens"),
-                output_tokens=usage.get("output_tokens"),
+                input_tokens=usage.get("prompt_tokens") or usage.get("input_tokens"),
+                output_tokens=usage.get("completion_tokens") or usage.get("output_tokens"),
+                provider_cost=usage.get("cost"),
                 success=True,
                 extra={
                     "request_prompt": tag_prompt,
                     "response_content": content,
-                    "cost": usage.get("cost"),
                 },
             )
         except Exception as e:
@@ -165,10 +170,11 @@ class FalVisionTagger(BaseTagger):
 class FalVisionDescriber(BaseDescriber):
     """fal.ai OpenRouter vision-based image describer."""
 
-    def __init__(self, api_key: str | None = None, model: str | None = None, max_tokens: dict | None = None):
+    def __init__(self, api_key: str | None = None, model: str | None = None, max_tokens: dict | None = None, temperature: float | None = None):
         _ensure_fal_key(api_key)
         self.model = model or DEFAULT_FAL_VISION_MODEL
         self.token_limit = (max_tokens or {}).get("describe", 3000)
+        self.temperature = temperature
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30),
            retry=lambda retry_state: not isinstance(retry_state.outcome.exception(), AIContentError) if retry_state.outcome and retry_state.outcome.failed else True)
@@ -181,16 +187,20 @@ class FalVisionDescriber(BaseDescriber):
 
         data_uri = _to_data_uri(image_data, mime_type)
 
+        args = {
+            "image_urls": [data_uri],
+            "prompt": description_prompt,
+            "model": self.model,
+            "max_tokens": self.token_limit,
+        }
+        if self.temperature is not None:
+            args["temperature"] = self.temperature
+
         start = time.monotonic()
         try:
             result = _fal_submit_and_poll(
                 FAL_OPENROUTER_ENDPOINT,
-                arguments={
-                    "image_urls": [data_uri],
-                    "prompt": description_prompt,
-                    "model": self.model,
-                    "max_tokens": self.token_limit,
-                },
+                arguments=args,
             )
             elapsed = (time.monotonic() - start) * 1000
             content = result.get("output", "")
@@ -200,13 +210,13 @@ class FalVisionDescriber(BaseDescriber):
                 message=f"fal.ai OpenRouter describe completed ({self.model})",
                 provider="fal", model=self.model, operation="describe",
                 duration_ms=round(elapsed, 1),
-                input_tokens=usage.get("input_tokens"),
-                output_tokens=usage.get("output_tokens"),
+                input_tokens=usage.get("prompt_tokens") or usage.get("input_tokens"),
+                output_tokens=usage.get("completion_tokens") or usage.get("output_tokens"),
+                provider_cost=usage.get("cost"),
                 success=True,
                 extra={
                     "request_prompt": description_prompt,
                     "response_content": content,
-                    "cost": usage.get("cost"),
                 },
             )
         except Exception as e:
@@ -293,10 +303,10 @@ class FalVisionEvaluator(BaseEvaluator):
                 message=f"fal.ai OpenRouter evaluate completed ({self.model})",
                 provider="fal", model=self.model, operation="evaluate",
                 duration_ms=round(elapsed, 1),
-                input_tokens=usage.get("input_tokens"),
-                output_tokens=usage.get("output_tokens"),
+                input_tokens=usage.get("prompt_tokens") or usage.get("input_tokens"),
+                output_tokens=usage.get("completion_tokens") or usage.get("output_tokens"),
+                provider_cost=usage.get("cost"),
                 success=True,
-                extra={"cost": usage.get("cost")},
             )
         except Exception as e:
             elapsed = (time.monotonic() - start) * 1000
@@ -351,10 +361,10 @@ class FalVisionEvaluator(BaseEvaluator):
                 message=f"fal.ai OpenRouter creative evaluate completed ({self.model})",
                 provider="fal", model=self.model, operation="evaluate_creative",
                 duration_ms=round(elapsed, 1),
-                input_tokens=usage.get("input_tokens"),
-                output_tokens=usage.get("output_tokens"),
+                input_tokens=usage.get("prompt_tokens") or usage.get("input_tokens"),
+                output_tokens=usage.get("completion_tokens") or usage.get("output_tokens"),
+                provider_cost=usage.get("cost"),
                 success=True,
-                extra={"cost": usage.get("cost")},
             )
         except Exception as e:
             elapsed = (time.monotonic() - start) * 1000
@@ -423,10 +433,10 @@ class FalVisionEvaluator(BaseEvaluator):
                 message=f"fal.ai OpenRouter assessment summary completed ({self.model})",
                 provider="fal", model=self.model, operation="summarize_eval",
                 duration_ms=round(elapsed, 1),
-                input_tokens=usage.get("input_tokens"),
-                output_tokens=usage.get("output_tokens"),
+                input_tokens=usage.get("prompt_tokens") or usage.get("input_tokens"),
+                output_tokens=usage.get("completion_tokens") or usage.get("output_tokens"),
+                provider_cost=usage.get("cost"),
                 success=True,
-                extra={"cost": usage.get("cost")},
             )
         except Exception as e:
             elapsed = (time.monotonic() - start) * 1000
@@ -477,10 +487,10 @@ class FalVisionEvaluator(BaseEvaluator):
                 message=f"fal.ai OpenRouter creative prompt generation completed ({self.model})",
                 provider="fal", model=self.model, operation="generate_prompts",
                 duration_ms=round(elapsed, 1),
-                input_tokens=usage.get("input_tokens"),
-                output_tokens=usage.get("output_tokens"),
+                input_tokens=usage.get("prompt_tokens") or usage.get("input_tokens"),
+                output_tokens=usage.get("completion_tokens") or usage.get("output_tokens"),
+                provider_cost=usage.get("cost"),
                 success=True,
-                extra={"cost": usage.get("cost")},
             )
         except Exception as e:
             elapsed = (time.monotonic() - start) * 1000

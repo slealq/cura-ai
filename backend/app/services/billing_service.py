@@ -145,10 +145,18 @@ class BillingService:
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         pipeline_log_id: int | None = None,
+        provider_cost: float | None = None,
+        defer_debit: bool = False,
     ) -> UsageRecord:
-        """Record a usage event: look up cost, create record, debit balance."""
+        """Record a usage event: look up cost, create record, debit balance.
+
+        When defer_debit=True, the UsageRecord is created but the balance
+        debit is skipped — the caller is responsible for debiting later
+        (e.g. finalize_pipeline_billing).
+        """
         raw_cost, charged_cost, detail = self._calculate_cost(
-            provider, model, operation, input_tokens, output_tokens
+            provider, model, operation, input_tokens, output_tokens,
+            provider_cost=provider_cost,
         )
 
         record = UsageRecord(
@@ -166,7 +174,7 @@ class BillingService:
         self.db.add(record)
         self.db.flush()
 
-        if charged_cost > 0:
+        if charged_cost > 0 and not defer_debit:
             spark_amount = charged_cost * USD_TO_SPARKS
             self.debit_usage(
                 amount=spark_amount,
@@ -183,9 +191,43 @@ class BillingService:
         operation: str,
         input_tokens: int | None,
         output_tokens: int | None,
+        provider_cost: float | None = None,
     ) -> tuple[Decimal, Decimal, dict | None]:
-        """Calculate raw and charged cost from catalog. Returns (raw_cost, charged_cost, detail)."""
+        """Calculate raw and charged cost from catalog or provider-reported cost.
+
+        If provider_cost is given, use it as raw_cost and apply only
+        platform_markup from the catalog (default 2.0x if no entry).
+        Otherwise, compute from per-token/per-call catalog rates.
+        """
         entry = self._get_catalog_entry(provider, model, operation)
+
+        # --- Provider-reported cost path (e.g. fal.ai) ---
+        if provider_cost is not None:
+            raw_cost = Decimal(str(provider_cost))
+            markup = entry.platform_markup if entry else Decimal("2.0")
+            charged_cost = raw_cost * markup
+            sparks = charged_cost * USD_TO_SPARKS
+
+            logger.info(
+                "BILLING | user=%s %s/%s op=%s "
+                "in_tok=%s out_tok=%s "
+                "provider_cost=$%.8f markup=%.1fx "
+                "charged=$%.8f sparks=%.2f (source=provider)",
+                self._email, provider, model, operation,
+                input_tokens, output_tokens,
+                float(raw_cost), float(markup),
+                float(charged_cost), float(sparks),
+            )
+
+            detail = {
+                "cost_source": "provider",
+                "provider_cost": float(raw_cost),
+                "platform_markup": float(markup),
+                "sparks": float(sparks),
+            }
+            return raw_cost, charged_cost, detail
+
+        # --- Catalog-based cost path ---
         if not entry:
             logger.warning(
                 "BILLING MISS | user=%s provider=%s model=%s op=%s "
@@ -227,6 +269,7 @@ class BillingService:
         )
 
         detail = {
+            "cost_source": "catalog",
             "cost_per_input_token": float(entry.cost_per_input_token or 0),
             "cost_per_output_token": float(entry.cost_per_output_token or 0),
             "cost_per_call": float(entry.cost_per_call or 0),
@@ -567,6 +610,8 @@ def record_usage_standalone(
     input_tokens: int | None,
     output_tokens: int | None,
     pipeline_log_id: int | None,
+    provider_cost: float | None = None,
+    defer_debit: bool = False,
 ) -> None:
     """Record usage in its own session. Called from write_log after-hook."""
     db = SessionLocal()
@@ -579,9 +624,80 @@ def record_usage_standalone(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             pipeline_log_id=pipeline_log_id,
+            provider_cost=provider_cost,
+            defer_debit=defer_debit,
         )
+        # Ensure the UsageRecord is committed even when charged_cost=0
+        # or defer_debit=True (record_usage only commits via debit_usage
+        # when cost > 0 and not deferred).
+        db.commit()
     except Exception as e:
         logger.warning(f"Failed to record usage for user {user_id}: {e}")
         db.rollback()
     finally:
         db.close()
+
+
+def finalize_pipeline_billing(
+    db: Session,
+    user_id: int,
+    job_id: int | None,
+    image_filename: str | None = None,
+) -> Decimal:
+    """Aggregate deferred usage records for a pipeline job into one debit.
+
+    Looks up all UsageRecords linked to this job's pipeline logs, sums the
+    charged_cost, creates ONE BalanceTransaction, and sets job.charged_cost.
+    Returns total sparks charged.
+    """
+    if not job_id:
+        return Decimal("0")
+
+    from app.models.job import Job
+    from app.models.pipeline_log import PipelineLog
+
+    # Find usage records linked to this job via pipeline_log_id → pipeline_logs.job_id
+    usage_records = (
+        db.query(UsageRecord)
+        .join(PipelineLog, UsageRecord.pipeline_log_id == PipelineLog.id)
+        .filter(PipelineLog.job_id == job_id, UsageRecord.user_id == user_id)
+        .order_by(UsageRecord.created_at)
+        .all()
+    )
+
+    if not usage_records:
+        return Decimal("0")
+
+    total_charged = sum((r.charged_cost for r in usage_records), Decimal("0"))
+    total_sparks = total_charged * USD_TO_SPARKS
+
+    # Build breakdown: "tag: 1.5 + describe: 4.2 + embed: 0.02"
+    breakdown_parts = []
+    for r in usage_records:
+        sparks = r.charged_cost * USD_TO_SPARKS
+        breakdown_parts.append(f"{r.operation}: {float(sparks):.2f}")
+    breakdown = " + ".join(breakdown_parts)
+
+    filename_part = f" {image_filename}" if image_filename else ""
+    description = f"Describe{filename_part} ({breakdown} sparks)"
+
+    # Create ONE combined debit transaction
+    if total_sparks > 0:
+        svc = BillingService(db, user_id)
+        svc.debit_usage(
+            amount=total_sparks,
+            description=description,
+        )
+
+    # Set job.charged_cost
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if job:
+        job.charged_cost = total_sparks
+        db.commit()
+
+    logger.info(
+        "BILLING FINALIZE | user_id=%s job=%s sparks=%.2f breakdown=[%s]",
+        user_id, job_id, float(total_sparks), breakdown,
+    )
+
+    return total_sparks

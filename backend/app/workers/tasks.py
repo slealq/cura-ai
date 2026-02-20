@@ -12,8 +12,8 @@ from app.db.base import SessionLocal
 from app.models import Image, ImageStatus, Job, JobStatus
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers import get_cluster_summarizer, get_describer, get_embedder, get_tagger
-from app.services.billing_context import set_billing_user
-from app.services.billing_service import InsufficientBalanceError
+from app.services.billing_context import set_billing_deferred, set_billing_user
+from app.services.billing_service import InsufficientBalanceError, finalize_pipeline_billing
 from app.services.cluster_service import get_cluster_service
 from app.services.clustering import get_clustering_service
 from app.services.image_service import get_image_service
@@ -448,6 +448,7 @@ def process_ingest_batch(
 def tag_image(
     self, image_id: int, user_id: int, tag_prompt: str | None = None,
     job_id: int | None = None, provider: str | None = None, model: str | None = None,
+    temperature: float | None = None, max_tokens_override: int | None = None,
 ) -> dict:
     """
     Tag an image with categorization tags.
@@ -482,7 +483,7 @@ def tag_image(
             tag_prompt = compose_tag_prompt(tag_prompt)
 
         # Tag image
-        tagger = get_tagger(provider=provider, model=model, db=db, user_id=user_id)
+        tagger = get_tagger(provider=provider, model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_override)
         tag_start = time.monotonic()
         result = run_async(tagger.tag_image(image_data, image.mime_type, tag_prompt))
         tagging_duration_ms = round((time.monotonic() - tag_start) * 1000)
@@ -533,6 +534,7 @@ def tag_image(
 def describe_image(
     self, image_id: int, user_id: int, description_prompt: str | None = None,
     job_id: int | None = None, provider: str | None = None, model: str | None = None,
+    temperature: float | None = None, max_tokens_override: int | None = None,
 ) -> dict:
     """
     Generate a detailed description for an image.
@@ -566,7 +568,7 @@ def describe_image(
             description_prompt = compose_description_prompt(description_prompt)
 
         # Generate description
-        describer = get_describer(provider=provider, model=model, db=db, user_id=user_id)
+        describer = get_describer(provider=provider, model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_override)
         desc_start = time.monotonic()
         result = run_async(describer.describe_image(image_data, image.mime_type, description_prompt))
         caption_duration_ms = round((time.monotonic() - desc_start) * 1000)
@@ -992,6 +994,8 @@ def process_image_pipeline(
     self, image_id: int, user_id: int, tag_prompt: str | None = None,
     description_prompt: str | None = None, job_id: int | None = None,
     provider: str | None = None, model: str | None = None,
+    temperature: float | None = None, max_tokens_tag: int | None = None,
+    max_tokens_describe: int | None = None,
 ) -> dict:
     """
     Run full pipeline for a single image: tag -> describe -> embed.
@@ -1002,7 +1006,9 @@ def process_image_pipeline(
               task_name="process_image_pipeline", image_id=image_id, job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
     set_billing_user(user_id)
+    set_billing_deferred(True)
     db = get_db()
+    image_filename = None
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
 
@@ -1011,6 +1017,8 @@ def process_image_pipeline(
 
         if not image:
             return {"status": "error", "message": "Image not found"}
+
+        image_filename = image.filename
 
         # Get image data once
         image_data = run_async(image_service.get_image_data(image_id))
@@ -1029,13 +1037,13 @@ def process_image_pipeline(
             description_prompt = compose_description_prompt(description_prompt)
 
         # Tag
-        tagger = get_tagger(provider=provider, model=model, db=db, user_id=user_id)
+        tagger = get_tagger(provider=provider, model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_tag)
         tag_start = time.monotonic()
         tag_result = run_async(tagger.tag_image(image_data, image.mime_type, tag_prompt))
         tagging_duration_ms = round((time.monotonic() - tag_start) * 1000)
 
         # Describe
-        describer = get_describer(provider=provider, model=model, db=db, user_id=user_id)
+        describer = get_describer(provider=provider, model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_describe)
         desc_start = time.monotonic()
         description_result = run_async(describer.describe_image(image_data, image.mime_type, description_prompt))
         caption_duration_ms = round((time.monotonic() - desc_start) * 1000)
@@ -1098,6 +1106,12 @@ def process_image_pipeline(
         image_service.update_status(image_id, ImageStatus.FAILED, _unwrap_error(e))
         raise
     finally:
+        # Finalize billing: aggregate deferred usage records into one debit
+        try:
+            finalize_pipeline_billing(db, user_id, job_id, image_filename)
+        except Exception:
+            logger.warning(f"Failed to finalize billing for job {job_id}", exc_info=True)
+        set_billing_deferred(False)
         db.close()
 
 
@@ -1324,6 +1338,8 @@ def run_batch_describe(
     self, job_id: int, user_id: int, image_ids: list[int],
     tag_prompt: str | None = None, description_prompt: str | None = None,
     provider: str | None = None, model: str | None = None,
+    temperature: float | None = None, max_tokens_tag: int | None = None,
+    max_tokens_describe: int | None = None,
 ) -> dict:
     """
     Describe a batch of images: reset each to INGESTED, dispatch process_image_pipeline
@@ -1364,6 +1380,8 @@ def run_batch_describe(
                     process_image_pipeline.delay(
                         image_id, user_id, tag_prompt, description_prompt,
                         provider=provider, model=model,
+                        temperature=temperature, max_tokens_tag=max_tokens_tag,
+                        max_tokens_describe=max_tokens_describe,
                     )
                     queued += 1
                 except Exception as e:

@@ -2,11 +2,12 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Loader2, Sparkles, PenLine, Zap } from 'lucide-react';
+import { Loader2, Sparkles, PenLine, Zap, ChevronDown, ChevronUp } from 'lucide-react';
 import { toast } from 'sonner';
 import { foldersApi, settingsApi, billingApi } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import ModelSelector from '@/components/ModelSelector';
+import { Slider } from '@/components/Slider';
 import type { PromptPreset } from '@/types';
 
 interface DescribeAllDialogProps {
@@ -40,6 +41,10 @@ export default function DescribeAllDialog({ folderId, imageCount, onClose, onSta
   const [descriptionPrompt, setDescriptionPrompt] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const hasInitialized = useRef(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [temperature, setTemperature] = useState<number>(1.0);
+  const [maxTokensTag, setMaxTokensTag] = useState<number>(1000);
+  const [maxTokensDescribe, setMaxTokensDescribe] = useState<number>(3000);
 
   // Auto mode state
   const [autoStep, setAutoStep] = useState<AutoStep>('idle');
@@ -66,7 +71,7 @@ export default function DescribeAllDialog({ folderId, imageCount, onClose, onSta
     queryFn: billingApi.getVisionCosts,
   });
 
-  // Initialize model from provider config
+  // Initialize model and advanced params from provider config
   useEffect(() => {
     if (providerConfig && !hasInitialized.current) {
       hasInitialized.current = true;
@@ -81,6 +86,9 @@ export default function DescribeAllDialog({ folderId, imageCount, onClose, onSta
       } else {
         setModel(VISION_MODELS[0].value);
       }
+      setTemperature(providerConfig.vision_temperature ?? 1.0);
+      setMaxTokensTag(providerConfig.max_tokens_tagging ?? 1000);
+      setMaxTokensDescribe(providerConfig.max_tokens_description ?? 3000);
     }
   }, [providerConfig]);
 
@@ -126,7 +134,7 @@ export default function DescribeAllDialog({ folderId, imageCount, onClose, onSta
     }
   };
 
-  // Compute cost estimate for selected model
+  // Compute cost estimate for selected model (tag + describe + embed)
   const getCostEstimate = (): number | null => {
     if (!visionCosts || !model) return null;
     const selected = VISION_MODELS.find((m) => m.value === model);
@@ -135,8 +143,7 @@ export default function DescribeAllDialog({ folderId, imageCount, onClose, onSta
     if (!providerCosts) return null;
     const modelCosts = providerCosts[model];
     if (!modelCosts) return null;
-    // tag + describe combined cost per image
-    return (modelCosts.tag || 0) + (modelCosts.describe || 0);
+    return modelCosts.total || ((modelCosts.tag || 0) + (modelCosts.describe || 0));
   };
   const costPerImage = getCostEstimate();
 
@@ -149,6 +156,9 @@ export default function DescribeAllDialog({ folderId, imageCount, onClose, onSta
         model: model || undefined,
         tag_prompt: tagPrompt || undefined,
         description_prompt: descriptionPrompt || undefined,
+        temperature,
+        max_tokens_tag: maxTokensTag,
+        max_tokens_describe: maxTokensDescribe,
       });
       onStarted(result.job_id, result.total);
     } catch (err) {
@@ -253,6 +263,72 @@ export default function DescribeAllDialog({ folderId, imageCount, onClose, onSta
                   className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-background resize-none"
                 />
               </div>
+
+              {/* Advanced Parameters */}
+              <button
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {showAdvanced ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                Advanced Parameters
+              </button>
+
+              {showAdvanced && (
+                <div className="border border-border rounded-lg p-3 space-y-3">
+                  <div>
+                    <label className="block text-xs text-muted-foreground mb-1">
+                      Temperature: {temperature.toFixed(1)}
+                    </label>
+                    <Slider
+                      min={0}
+                      max={20}
+                      value={Math.round(temperature * 10)}
+                      onChange={(v) => setTemperature(v / 10)}
+                      className="w-full"
+                    />
+                    <div className="flex justify-between text-[10px] text-muted-foreground">
+                      <span>0.0</span>
+                      <span>2.0</span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-muted-foreground mb-1">
+                        Tag Tokens: {maxTokensTag}
+                      </label>
+                      <Slider
+                        min={100}
+                        max={4000}
+                        step={100}
+                        value={maxTokensTag}
+                        onChange={(v) => setMaxTokensTag(v)}
+                        className="w-full"
+                      />
+                      <div className="flex justify-between text-[10px] text-muted-foreground">
+                        <span>100</span>
+                        <span>4000</span>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-muted-foreground mb-1">
+                        Description Tokens: {maxTokensDescribe}
+                      </label>
+                      <Slider
+                        min={500}
+                        max={8000}
+                        step={100}
+                        value={maxTokensDescribe}
+                        onChange={(v) => setMaxTokensDescribe(v)}
+                        className="w-full"
+                      />
+                      <div className="flex justify-between text-[10px] text-muted-foreground">
+                        <span>500</span>
+                        <span>8000</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Auto-generated explanation */}
               {autoExplanation && (

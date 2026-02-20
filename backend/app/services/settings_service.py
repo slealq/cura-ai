@@ -82,6 +82,7 @@ DEFAULT_PROVIDER_CONFIG = {
     "fal_language_model": "x-ai/grok-4-fast",
     "max_tokens_expansion": 500,
     "max_tokens_suggestion": 2000,
+    "vision_temperature": 1.0,
 }
 
 DEFAULT_CLUSTERING_CONFIG = {

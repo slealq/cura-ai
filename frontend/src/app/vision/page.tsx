@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { visionApi, settingsApi, billingApi } from '@/lib/api';
 import { Loader2, Eye, X, Upload, ImageIcon, Copy, Check, Trash2, ChevronDown, ChevronUp, Save, Zap } from 'lucide-react';
@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import ImagePickerModal from '@/components/ImagePickerModal';
 import ModelSelector from '@/components/ModelSelector';
 import { cn, formatDateCompact } from '@/lib/utils';
+import { Slider } from '@/components/Slider';
 import type { PromptPreset } from '@/types';
 
 const VISION_MODEL_OPTIONS = [
@@ -68,6 +69,10 @@ export default function VisionPage() {
   const [descriptionPrompt, setDescriptionPrompt] = useState('');
   const [promptsModified, setPromptsModified] = useState(false);
 
+  // Advanced parameters
+  const [temperature, setTemperature] = useState<number>(1.0);
+  const [maxTokens, setMaxTokens] = useState<number>(1000);
+
   // Results from server
   const [copiedId, setCopiedId] = useState<number | null>(null);
 
@@ -85,6 +90,12 @@ export default function VisionPage() {
     queryFn: settingsApi.listPresets,
   });
 
+  // Fetch provider config for defaults
+  const { data: providerConfig } = useQuery({
+    queryKey: ['provider-config'],
+    queryFn: settingsApi.getProviderConfig,
+  });
+
   // Fetch vision costs
   const { data: visionCosts } = useQuery({
     queryKey: ['vision-costs'],
@@ -93,6 +104,27 @@ export default function VisionPage() {
   });
 
   const currentCost = visionCosts?.costs?.[provider]?.[selectedModel]?.[mode] ?? null;
+
+  // Initialize from provider config
+  const hasInitConfig = useRef(false);
+  useEffect(() => {
+    if (providerConfig && !hasInitConfig.current) {
+      hasInitConfig.current = true;
+      setTemperature(providerConfig.vision_temperature ?? 1.0);
+      // Set max_tokens based on mode default (tag=tagging, describe=description)
+      setMaxTokens(mode === 'tag' ? (providerConfig.max_tokens_tagging ?? 1000) : (providerConfig.max_tokens_description ?? 3000));
+      // Set model from provider config
+      const prov = providerConfig.vision_provider;
+      const modelId = prov === 'openai'
+        ? providerConfig.openai_vision_model
+        : prov === 'anthropic'
+          ? providerConfig.anthropic_vision_model
+          : providerConfig.fal_vision_model;
+      if (VISION_MODEL_OPTIONS.some((m) => m.id === modelId)) {
+        setSelectedModel(modelId);
+      }
+    }
+  }, [providerConfig, mode]);
 
   // Load active preset prompts on mount
   useEffect(() => {
@@ -190,6 +222,9 @@ export default function VisionPage() {
     } else if (mode === 'describe' && descriptionPrompt.trim()) {
       params.description_prompt = descriptionPrompt.trim();
     }
+
+    params.temperature = temperature;
+    params.max_tokens = maxTokens;
 
     analyzeMutation.mutate(params);
   };
@@ -410,111 +445,151 @@ export default function VisionPage() {
           </div>
         )}
 
-        {/* Prompt configuration (tag & describe modes) */}
-        {mode !== 'custom' && (
-          <button
-            onClick={() => setShowPrompts(!showPrompts)}
-            className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            {showPrompts ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-            Prompt Configuration
-            {promptsModified && (
-              <span className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
-                modified
-              </span>
-            )}
-          </button>
-        )}
+        {/* Advanced Parameters (always visible, not just tag & describe) */}
+        <button
+          onClick={() => setShowPrompts(!showPrompts)}
+          className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          {showPrompts ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          Advanced Parameters
+          {promptsModified && mode !== 'custom' && (
+            <span className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+              modified
+            </span>
+          )}
+        </button>
 
-        {mode !== 'custom' && showPrompts && (
+        {showPrompts && (
           <div className="border border-border rounded-lg p-4 space-y-4">
-            {/* Preset selector */}
-            <div className="flex items-end gap-3">
-              <div className="flex-1 max-w-xs">
-                <label className="block text-xs text-muted-foreground mb-1">Prompt Preset</label>
-                <select
-                  value={selectedPresetId}
-                  onChange={(e) => handlePresetChange(e.target.value)}
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm"
-                >
-                  {(presets || []).map((p: PromptPreset) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}{p.is_default ? ' (active)' : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {promptsModified && (
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => {
-                      const preset = presets?.find((p: PromptPreset) => p.id === selectedPresetId);
-                      if (preset) {
-                        setTagPrompt(preset.tag_prompt);
-                        setDescriptionPrompt(preset.description_prompt);
-                        setPromptsModified(false);
-                      }
-                    }}
-                    className="px-3 py-2 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg transition-colors"
-                  >
-                    Reset
-                  </button>
-                  <button
-                    onClick={() => savePromptMutation.mutate()}
-                    disabled={savePromptMutation.isPending || typeof selectedPresetId !== 'number'}
-                    className="flex items-center gap-1.5 px-3 py-2 text-xs bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 font-medium"
-                  >
-                    {savePromptMutation.isPending ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : (
-                      <Save className="h-3 w-3" />
-                    )}
-                    Save to Preset
-                  </button>
+            {/* Temperature and Max Tokens */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs text-muted-foreground mb-1">
+                  Temperature: {temperature.toFixed(1)}
+                </label>
+                <Slider
+                  min={0}
+                  max={20}
+                  value={Math.round(temperature * 10)}
+                  onChange={(v) => setTemperature(v / 10)}
+                  className="w-full"
+                />
+                <div className="flex justify-between text-[10px] text-muted-foreground">
+                  <span>0.0</span>
+                  <span>2.0</span>
                 </div>
-              )}
+              </div>
+              <div>
+                <label className="block text-xs text-muted-foreground mb-1">
+                  Max Tokens: {maxTokens}
+                </label>
+                <Slider
+                  min={100}
+                  max={8000}
+                  step={100}
+                  value={maxTokens}
+                  onChange={(v) => setMaxTokens(v)}
+                  className="w-full"
+                />
+                <div className="flex justify-between text-[10px] text-muted-foreground">
+                  <span>100</span>
+                  <span>8000</span>
+                </div>
+              </div>
             </div>
 
-            {/* Tag prompt editor */}
-            {showTagPrompt && (
-              <div>
-                <label className="block text-xs text-muted-foreground mb-1">
-                  Tag Prompt Guidance
-                  <span className="text-muted-foreground/60 ml-1">(wrapped in system format template)</span>
-                </label>
-                <textarea
-                  value={tagPrompt}
-                  onChange={(e) => {
-                    setTagPrompt(e.target.value);
-                    setPromptsModified(true);
-                  }}
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-y min-h-[120px] font-mono text-xs leading-relaxed"
-                />
-              </div>
-            )}
+            {/* Prompt editing (tag & describe modes only) */}
+            {mode !== 'custom' && (
+              <>
+                {/* Preset selector */}
+                <div className="flex items-end gap-3">
+                  <div className="flex-1 max-w-xs">
+                    <label className="block text-xs text-muted-foreground mb-1">Prompt Preset</label>
+                    <select
+                      value={selectedPresetId}
+                      onChange={(e) => handlePresetChange(e.target.value)}
+                      className="w-full px-3 py-2 border border-border rounded-lg text-sm"
+                    >
+                      {(presets || []).map((p: PromptPreset) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}{p.is_default ? ' (active)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {promptsModified && (
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          const preset = presets?.find((p: PromptPreset) => p.id === selectedPresetId);
+                          if (preset) {
+                            setTagPrompt(preset.tag_prompt);
+                            setDescriptionPrompt(preset.description_prompt);
+                            setPromptsModified(false);
+                          }
+                        }}
+                        className="px-3 py-2 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg transition-colors"
+                      >
+                        Reset
+                      </button>
+                      <button
+                        onClick={() => savePromptMutation.mutate()}
+                        disabled={savePromptMutation.isPending || typeof selectedPresetId !== 'number'}
+                        className="flex items-center gap-1.5 px-3 py-2 text-xs bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 font-medium"
+                      >
+                        {savePromptMutation.isPending ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Save className="h-3 w-3" />
+                        )}
+                        Save to Preset
+                      </button>
+                    </div>
+                  )}
+                </div>
 
-            {/* Description prompt editor */}
-            {showDescriptionPrompt && (
-              <div>
-                <label className="block text-xs text-muted-foreground mb-1">
-                  Description Prompt Guidance
-                  <span className="text-muted-foreground/60 ml-1">(wrapped in system format template)</span>
-                </label>
-                <textarea
-                  value={descriptionPrompt}
-                  onChange={(e) => {
-                    setDescriptionPrompt(e.target.value);
-                    setPromptsModified(true);
-                  }}
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-y min-h-[120px] font-mono text-xs leading-relaxed"
-                />
-              </div>
-            )}
+                {/* Tag prompt editor */}
+                {showTagPrompt && (
+                  <div>
+                    <label className="block text-xs text-muted-foreground mb-1">
+                      Tag Prompt Guidance
+                      <span className="text-muted-foreground/60 ml-1">(wrapped in system format template)</span>
+                    </label>
+                    <textarea
+                      value={tagPrompt}
+                      onChange={(e) => {
+                        setTagPrompt(e.target.value);
+                        setPromptsModified(true);
+                      }}
+                      className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-y min-h-[120px] font-mono text-xs leading-relaxed"
+                    />
+                  </div>
+                )}
 
-            <p className="text-xs text-muted-foreground">
-              Edit the prompt guidance above, then click &ldquo;Save to Preset&rdquo; to persist changes to the selected preset.
-              Unsaved edits will still be used for the next analysis.
-            </p>
+                {/* Description prompt editor */}
+                {showDescriptionPrompt && (
+                  <div>
+                    <label className="block text-xs text-muted-foreground mb-1">
+                      Description Prompt Guidance
+                      <span className="text-muted-foreground/60 ml-1">(wrapped in system format template)</span>
+                    </label>
+                    <textarea
+                      value={descriptionPrompt}
+                      onChange={(e) => {
+                        setDescriptionPrompt(e.target.value);
+                        setPromptsModified(true);
+                      }}
+                      className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-y min-h-[120px] font-mono text-xs leading-relaxed"
+                    />
+                  </div>
+                )}
+
+                <p className="text-xs text-muted-foreground">
+                  Edit the prompt guidance above, then click &ldquo;Save to Preset&rdquo; to persist changes to the selected preset.
+                  Unsaved edits will still be used for the next analysis.
+                </p>
+              </>
+            )}
           </div>
         )}
       </section>

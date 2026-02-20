@@ -35,6 +35,8 @@ class VisionAnalyzeRequest(BaseModel):
     custom_prompt: str | None = Field(None, max_length=4000)
     tag_prompt: str | None = Field(None, max_length=8000)
     description_prompt: str | None = Field(None, max_length=8000)
+    temperature: float | None = None
+    max_tokens: int | None = None
 
 
 class VisionTagResult(BaseModel):
@@ -166,6 +168,7 @@ async def analyze_image(
                 prompt = settings_service.get_tag_prompt()
             tagger = get_tagger(
                 provider=request.provider, db=db, user_id=current_user.id, model=request.model,
+                temperature=request.temperature, max_tokens_override=request.max_tokens,
             )
             t0 = time.perf_counter()
             result = await tagger.tag_image(image_data, mime_type, prompt)
@@ -191,6 +194,7 @@ async def analyze_image(
                 prompt = settings_service.get_description_prompt()
             describer = get_describer(
                 provider=request.provider, db=db, user_id=current_user.id, model=request.model,
+                temperature=request.temperature, max_tokens_override=request.max_tokens,
             )
             t0 = time.perf_counter()
             result = await describer.describe_image(image_data, mime_type, prompt)
@@ -213,6 +217,7 @@ async def analyze_image(
             prompt = request.custom_prompt
             describer = get_describer(
                 provider=request.provider, db=db, user_id=current_user.id, model=request.model,
+                temperature=request.temperature, max_tokens_override=request.max_tokens,
             )
             t0 = time.perf_counter()
             result = await describer.describe_image(image_data, mime_type, prompt)

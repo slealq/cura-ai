@@ -327,7 +327,7 @@ export const imagesApi = {
 
   reprocess: async (
     id: number,
-    options?: { tag_prompt?: string; description_prompt?: string; provider?: string; model?: string }
+    options?: { tag_prompt?: string; description_prompt?: string; provider?: string; model?: string; temperature?: number; max_tokens_tag?: number; max_tokens_describe?: number }
   ): Promise<StepResponse> => {
     const { data } = await api.post(`/images/${id}/reprocess`, options || {});
     return data;
@@ -335,7 +335,7 @@ export const imagesApi = {
 
   tagImage: async (
     id: number,
-    options?: { tag_prompt?: string; provider?: string; model?: string }
+    options?: { tag_prompt?: string; provider?: string; model?: string; temperature?: number; max_tokens?: number }
   ): Promise<StepResponse> => {
     const { data } = await api.post(`/images/${id}/tag`, options || {});
     return data;
@@ -343,7 +343,7 @@ export const imagesApi = {
 
   describeImage: async (
     id: number,
-    options?: { description_prompt?: string; provider?: string; model?: string }
+    options?: { description_prompt?: string; provider?: string; model?: string; temperature?: number; max_tokens?: number }
   ): Promise<StepResponse> => {
     const { data } = await api.post(`/images/${id}/describe`, options || {});
     return data;
@@ -434,6 +434,9 @@ export const foldersApi = {
       model?: string;
       tag_prompt?: string;
       description_prompt?: string;
+      temperature?: number;
+      max_tokens_tag?: number;
+      max_tokens_describe?: number;
     }
   ): Promise<{ status: string; job_id: number; total: number; message: string }> => {
     const { data } = await api.post(`/folders/${id}/describe`, params);
@@ -1100,6 +1103,8 @@ export const visionApi = {
     custom_prompt?: string;
     tag_prompt?: string;
     description_prompt?: string;
+    temperature?: number;
+    max_tokens?: number;
   }): Promise<{ id: number; mode: string; tags?: string[]; description?: string; model: string; duration_ms?: number }> => {
     const { data } = await api.post('/vision/analyze', params);
     return data;

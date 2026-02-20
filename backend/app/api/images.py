@@ -380,6 +380,9 @@ class ReprocessRequest(BaseModel):
     description_prompt: str | None = None
     provider: str | None = None
     model: str | None = None
+    temperature: float | None = None
+    max_tokens_tag: int | None = None
+    max_tokens_describe: int | None = None
 
 
 @router.post("/{image_id}/reprocess", response_model=StepResponse)
@@ -400,6 +403,9 @@ async def reprocess_image(
     description_prompt = request.description_prompt if request else None
     provider = request.provider if request else None
     model = request.model if request else None
+    temperature = request.temperature if request else None
+    max_tokens_tag = request.max_tokens_tag if request else None
+    max_tokens_describe = request.max_tokens_describe if request else None
 
     # Create job record
     job = Job(
@@ -407,7 +413,7 @@ async def reprocess_image(
         status=JobStatus.PENDING,
         image_id=image_id,
         total_items=1,
-        parameters={"tag_prompt": tag_prompt, "description_prompt": description_prompt, "provider": provider, "model": model},
+        parameters={"tag_prompt": tag_prompt, "description_prompt": description_prompt, "provider": provider, "model": model, "temperature": temperature, "max_tokens_tag": max_tokens_tag, "max_tokens_describe": max_tokens_describe},
         user_id=current_user.id,
     )
     db.add(job)
@@ -416,7 +422,7 @@ async def reprocess_image(
 
     # Reset status and queue for reprocessing
     image_service.update_status(image_id, ImageStatus.INGESTED)
-    task = process_image_pipeline.delay(image_id, tag_prompt=tag_prompt, description_prompt=description_prompt, provider=provider, model=model, job_id=job.id, user_id=current_user.id)
+    task = process_image_pipeline.delay(image_id, tag_prompt=tag_prompt, description_prompt=description_prompt, provider=provider, model=model, temperature=temperature, max_tokens_tag=max_tokens_tag, max_tokens_describe=max_tokens_describe, job_id=job.id, user_id=current_user.id)
     job.celery_task_id = task.id
     db.commit()
 
@@ -429,6 +435,8 @@ class TagRequest(BaseModel):
     tag_prompt: str | None = None
     provider: str | None = None
     model: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
 
 
 class DescribeRequest(BaseModel):
@@ -437,6 +445,8 @@ class DescribeRequest(BaseModel):
     description_prompt: str | None = None
     provider: str | None = None
     model: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
 
 
 TAG_ALLOWED = {ImageStatus.INGESTED, ImageStatus.TAGGED, ImageStatus.DESCRIBED, ImageStatus.EMBEDDED, ImageStatus.CLUSTERED, ImageStatus.FAILED}
@@ -464,20 +474,22 @@ async def tag_image_endpoint(
     tag_prompt = request.tag_prompt if request else None
     provider = request.provider if request else None
     model = request.model if request else None
+    temperature = request.temperature if request else None
+    max_tokens = request.max_tokens if request else None
 
     job = Job(
         job_type=JobType.TAG,
         status=JobStatus.PENDING,
         image_id=image_id,
         total_items=1,
-        parameters={"tag_prompt": tag_prompt, "provider": provider, "model": model},
+        parameters={"tag_prompt": tag_prompt, "provider": provider, "model": model, "temperature": temperature, "max_tokens": max_tokens},
         user_id=current_user.id,
     )
     db.add(job)
     db.commit()
     db.refresh(job)
 
-    task = tag_image.delay(image_id, tag_prompt=tag_prompt, provider=provider, model=model, job_id=job.id, user_id=current_user.id)
+    task = tag_image.delay(image_id, tag_prompt=tag_prompt, provider=provider, model=model, temperature=temperature, max_tokens_override=max_tokens, job_id=job.id, user_id=current_user.id)
     job.celery_task_id = task.id
     db.commit()
 
@@ -504,20 +516,22 @@ async def describe_image_endpoint(
     description_prompt = request.description_prompt if request else None
     provider = request.provider if request else None
     model = request.model if request else None
+    temperature = request.temperature if request else None
+    max_tokens = request.max_tokens if request else None
 
     job = Job(
         job_type=JobType.DESCRIBE,
         status=JobStatus.PENDING,
         image_id=image_id,
         total_items=1,
-        parameters={"description_prompt": description_prompt, "provider": provider, "model": model},
+        parameters={"description_prompt": description_prompt, "provider": provider, "model": model, "temperature": temperature, "max_tokens": max_tokens},
         user_id=current_user.id,
     )
     db.add(job)
     db.commit()
     db.refresh(job)
 
-    task = describe_image.delay(image_id, description_prompt=description_prompt, provider=provider, model=model, job_id=job.id, user_id=current_user.id)
+    task = describe_image.delay(image_id, description_prompt=description_prompt, provider=provider, model=model, temperature=temperature, max_tokens_override=max_tokens, job_id=job.id, user_id=current_user.id)
     job.celery_task_id = task.id
     db.commit()
 

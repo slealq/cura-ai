@@ -249,19 +249,15 @@ class VisionCostsResponse(BaseModel):
 # Output tokens (per mode) are conservative estimates (below max_tokens limits).
 _VISION_OUTPUT_TOKENS = {"tag": 500, "describe": 1500, "custom": 1000}
 
-# Input tokens differ dramatically by provider due to image tokenization:
+# Input tokens differ by provider due to image tokenization:
 #   OpenAI gpt-4o: ~765 tokens per high-detail image + ~400 prompt/system ≈ 1200
 #   Anthropic Claude: similar to OpenAI, ~1200
-#   fal/OpenRouter (Grok): images consume ~50-60K tokens (observed from billing data)
-#     Plus fal.ai adds ~1.8x markup over raw OpenRouter cost.
+#   fal/OpenRouter: Grok reports ~1792 image tokens + ~400 prompt ≈ 2200.
 _VISION_INPUT_TOKENS = {
     "openai": 1200,
     "anthropic": 1200,
-    "fal": 55000,
+    "fal": 2200,
 }
-
-# fal.ai charges ~1.8x more than raw OpenRouter token cost (their intermediary markup)
-_FAL_INTERMEDIARY_MARKUP = Decimal("1.8")
 
 # Map provider → (catalog_provider, list of vision model IDs)
 # Curated lists imported from app.api.settings at top of file.
@@ -272,14 +268,30 @@ _VISION_PROVIDER_MODELS = {
 }
 
 
+# Estimated embed cost: tags + description text is typically ~500 input tokens
+# for text-embedding-3-small.
+_EMBED_INPUT_TOKENS = 500
+
+
 @router.get("/vision-costs", response_model=VisionCostsResponse)
 def get_vision_costs(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Get estimated per-call vision cost in sparks: provider → model → mode."""
+    """Get estimated per-call vision cost in sparks: provider → model → mode.
+
+    Returns tag, describe, embed, and total (tag+describe+embed) per model.
+    """
     svc = BillingService(db, user_id=0)
     result: dict[str, dict[str, dict[str, float]]] = {}
+
+    # Compute embed cost once (always OpenAI text-embedding-3-small)
+    embed_entry = svc._get_catalog_entry("openai", "text-embedding-3-small", "embed")
+    embed_cost_sparks = 0.0
+    if embed_entry and embed_entry.cost_per_input_token:
+        raw = embed_entry.cost_per_input_token * _EMBED_INPUT_TOKENS
+        charged = raw * embed_entry.platform_markup
+        embed_cost_sparks = round(float(charged * Decimal("1000")), 1)
 
     for provider_key, (cat_provider, model_ids) in _VISION_PROVIDER_MODELS.items():
         provider_costs: dict[str, dict[str, float]] = {}
@@ -292,12 +304,12 @@ def get_vision_costs(
                 if entry and entry.cost_per_input_token and entry.cost_per_output_token:
                     raw = (entry.cost_per_input_token * input_tokens
                            + entry.cost_per_output_token * output_tokens)
-                    if provider_key == "fal":
-                        raw = raw * _FAL_INTERMEDIARY_MARKUP
                     charged = raw * entry.platform_markup
                     costs[mode] = round(float(charged * Decimal("1000")), 1)
                 else:
                     costs[mode] = 0
+            costs["embed"] = embed_cost_sparks
+            costs["total"] = round(costs.get("tag", 0) + costs.get("describe", 0) + embed_cost_sparks, 1)
             provider_costs[model_id] = costs
         result[provider_key] = provider_costs
 

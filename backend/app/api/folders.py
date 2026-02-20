@@ -42,6 +42,9 @@ class FolderDescribeRequest(BaseModel):
     model: str | None = None
     tag_prompt: str | None = None
     description_prompt: str | None = None
+    temperature: float | None = None
+    max_tokens_tag: int | None = None
+    max_tokens_describe: int | None = None
 
 
 class AutoPromptGenerateRequest(BaseModel):
@@ -336,6 +339,9 @@ async def describe_folder(
         description_prompt=request.description_prompt,
         provider=request.provider,
         model=request.model,
+        temperature=request.temperature,
+        max_tokens_tag=request.max_tokens_tag,
+        max_tokens_describe=request.max_tokens_describe,
     )
     job.celery_task_id = task.id
     db.commit()

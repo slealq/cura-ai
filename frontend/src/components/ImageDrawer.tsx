@@ -2,16 +2,16 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { X, ExternalLink, RefreshCw, Tag, FileText, Cpu, FolderOpen, Zap } from 'lucide-react';
+import { X, ExternalLink, RefreshCw, FolderOpen, Zap, ChevronDown, ChevronUp } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import type { Image, PromptPreset } from '@/types';
 import { imagesApi, jobsApi, settingsApi, billingApi } from '@/lib/api';
 import { cn, formatDate, formatFileSize } from '@/lib/utils';
-import { hasReachedStatus } from '@/lib/pipeline';
 import ImageCard from './ImageCard';
 import ModelSelector from './ModelSelector';
 import PipelineProgress from './PipelineProgress';
+import { Slider } from './Slider';
 
 const VISION_MODELS = [
   { value: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'openai' },
@@ -35,14 +35,16 @@ interface ImageDrawerProps {
 export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
   const queryClient = useQueryClient();
   const hasInitModel = useRef(false);
-  const [showReprocessDialog, setShowReprocessDialog] = useState(false);
-  const [showTagDialog, setShowTagDialog] = useState(false);
   const [showDescribeDialog, setShowDescribeDialog] = useState(false);
   const [descriptionPrompt, setDescriptionPrompt] = useState('');
   const [tagPrompt, setTagPrompt] = useState('');
   const [selectedModel, setSelectedModel] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [staleSteps, setStaleSteps] = useState<string[]>([]);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [temperature, setTemperature] = useState<number | null>(null);
+  const [maxTokensTag, setMaxTokensTag] = useState<number | null>(null);
+  const [maxTokensDescribe, setMaxTokensDescribe] = useState<number | null>(null);
 
   // Live image data — polls every 3s while processing
   const { data: liveImage } = useQuery({
@@ -136,77 +138,27 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
     }
   }, [providerConfig]);
 
-  const tagMutation = useMutation({
-    mutationFn: (options?: { tag_prompt?: string; provider?: string; model?: string }) =>
-      imagesApi.tagImage(image.id, options),
-    onSuccess: (data) => {
-      toast.success('Tagging started', { description: `Job #${data.job_id}` });
-      setIsProcessing(true);
-      setStaleSteps((prev) =>
-        Array.from(new Set([...prev, 'embedded', 'clustered']))
-      );
-      setShowTagDialog(false);
-      queryClient.invalidateQueries({ queryKey: ['jobs'] });
-    },
-    onError: () => toast.error('Failed to start tagging'),
-  });
-
-  const describeMutation = useMutation({
-    mutationFn: (options?: { description_prompt?: string; provider?: string; model?: string }) =>
-      imagesApi.describeImage(image.id, options),
-    onSuccess: (data) => {
-      toast.success('Describing started', { description: `Job #${data.job_id}` });
-      setIsProcessing(true);
-      setStaleSteps((prev) =>
-        Array.from(new Set([...prev, 'embedded', 'clustered']))
-      );
-      setShowDescribeDialog(false);
-      queryClient.invalidateQueries({ queryKey: ['jobs'] });
-    },
-    onError: () => toast.error('Failed to start describing'),
-  });
-
-  const embedMutation = useMutation({
-    mutationFn: () => imagesApi.embedImage(image.id),
-    onSuccess: (data) => {
-      toast.success('Embedding started', { description: `Job #${data.job_id}` });
-      setIsProcessing(true);
-      setStaleSteps((prev) =>
-        Array.from(new Set([...prev, 'clustered']))
-      );
-      queryClient.invalidateQueries({ queryKey: ['jobs'] });
-    },
-    onError: () => toast.error('Failed to start embedding'),
-  });
-
   const reprocessMutation = useMutation({
     mutationFn: (options: {
       tag_prompt?: string;
       description_prompt?: string;
       provider?: string;
       model?: string;
+      temperature?: number;
+      max_tokens_tag?: number;
+      max_tokens_describe?: number;
     }) => imagesApi.reprocess(image.id, options),
     onSuccess: (data) => {
-      toast.success('Reprocessing started', { description: `Job #${data.job_id}` });
+      toast.success('Describe started', { description: `Job #${data.job_id}` });
       setIsProcessing(true);
       setStaleSteps([]);
-      setShowReprocessDialog(false);
+      setShowDescribeDialog(false);
       queryClient.invalidateQueries({ queryKey: ['jobs'] });
     },
-    onError: () => toast.error('Failed to start reprocessing'),
+    onError: () => toast.error('Failed to start describe'),
   });
 
-  const canTag =
-    liveImage.status === 'failed' ||
-    hasReachedStatus(liveImage.status, 'ingested');
-  const canDescribe =
-    liveImage.status === 'failed' ||
-    hasReachedStatus(liveImage.status, 'tagged');
-  const canEmbed =
-    liveImage.status === 'failed' ||
-    hasReachedStatus(liveImage.status, 'described');
-
-  // Initialize prompts from defaults when dialogs open
+  // Initialize prompts from defaults when dialog opens
   const initPrompts = useCallback(() => {
     if (defaultPrompts) {
       setDescriptionPrompt(defaultPrompts.description_prompt);
@@ -225,28 +177,31 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
       } else {
         setSelectedModel(VISION_MODELS[0].value);
       }
+      // Init advanced params from settings
+      setTemperature(providerConfig.vision_temperature ?? 1.0);
+      setMaxTokensTag(providerConfig.max_tokens_tagging ?? 1000);
+      setMaxTokensDescribe(providerConfig.max_tokens_description ?? 3000);
     }
+    setShowAdvanced(false);
   }, [defaultPrompts, providerConfig]);
 
   useEffect(() => {
-    if (showReprocessDialog || showTagDialog || showDescribeDialog) {
+    if (showDescribeDialog) {
       initPrompts();
     }
-  }, [showReprocessDialog, showTagDialog, showDescribeDialog, initPrompts]);
+  }, [showDescribeDialog, initPrompts]);
 
   // Close on escape key
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (showReprocessDialog) setShowReprocessDialog(false);
-        else if (showTagDialog) setShowTagDialog(false);
-        else if (showDescribeDialog) setShowDescribeDialog(false);
+        if (showDescribeDialog) setShowDescribeDialog(false);
         else onClose();
       }
     };
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [onClose, showReprocessDialog, showTagDialog, showDescribeDialog]);
+  }, [onClose, showDescribeDialog]);
 
   const getModelParams = () => {
     const m = VISION_MODELS.find((v) => v.value === selectedModel);
@@ -256,8 +211,8 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
     };
   };
 
-  // Compute cost for reprocess (tag + describe)
-  const getReprocessCost = (): number | null => {
+  // Compute cost for describe (tag + describe + embed)
+  const getDescribeCost = (): number | null => {
     if (!visionCosts || !selectedModel) return null;
     const m = VISION_MODELS.find((v) => v.value === selectedModel);
     if (!m?.provider) return null;
@@ -265,29 +220,18 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
     if (!provCosts) return null;
     const modelCosts = provCosts[selectedModel];
     if (!modelCosts) return null;
-    return (modelCosts.tag || 0) + (modelCosts.describe || 0);
+    return modelCosts.total || ((modelCosts.tag || 0) + (modelCosts.describe || 0));
   };
-  const reprocessCost = getReprocessCost();
+  const describeCost = getDescribeCost();
 
-  const handleReprocess = () => {
+  const handleDescribeSubmit = () => {
     reprocessMutation.mutate({
       description_prompt: descriptionPrompt || undefined,
       tag_prompt: tagPrompt || undefined,
       ...getModelParams(),
-    });
-  };
-
-  const handleTag = () => {
-    tagMutation.mutate({
-      tag_prompt: tagPrompt || undefined,
-      ...getModelParams(),
-    });
-  };
-
-  const handleDescribe = () => {
-    describeMutation.mutate({
-      description_prompt: descriptionPrompt || undefined,
-      ...getModelParams(),
+      temperature: temperature ?? undefined,
+      max_tokens_tag: maxTokensTag ?? undefined,
+      max_tokens_describe: maxTokensDescribe ?? undefined,
     });
   };
 
@@ -341,43 +285,13 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
             >
               <ExternalLink className="h-4 w-4" />
             </a>
-            {canTag && (
-              <button
-                onClick={() => setShowTagDialog(true)}
-                disabled={tagMutation.isPending || isProcessing}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
-              >
-                <Tag className="h-3.5 w-3.5" />
-                Tag
-              </button>
-            )}
-            {canDescribe && (
-              <button
-                onClick={() => setShowDescribeDialog(true)}
-                disabled={describeMutation.isPending || isProcessing}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
-              >
-                <FileText className="h-3.5 w-3.5" />
-                Describe
-              </button>
-            )}
-            {canEmbed && (
-              <button
-                onClick={() => embedMutation.mutate()}
-                disabled={embedMutation.isPending || isProcessing}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
-              >
-                <Cpu className="h-3.5 w-3.5" />
-                Embed
-              </button>
-            )}
             <button
-              onClick={() => setShowReprocessDialog(true)}
+              onClick={() => setShowDescribeDialog(true)}
               disabled={isProcessing}
               className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
             >
               <RefreshCw className={cn('h-4 w-4', isProcessing && 'animate-spin')} />
-              {isProcessing ? 'Processing...' : 'Reprocess'}
+              {isProcessing ? 'Processing...' : 'Describe'}
             </button>
           </div>
 
@@ -508,75 +422,6 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
         </div>
       </div>
 
-      {/* Tag Dialog */}
-      {showTagDialog && (
-        <>
-          <div
-            className="fixed inset-0 bg-black/50 z-50"
-            onClick={() => setShowTagDialog(false)}
-          />
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div
-              className="bg-card rounded-xl shadow-xl max-w-2xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h3 className="text-lg font-semibold">Tag Image</h3>
-              <p className="text-sm text-muted-foreground">
-                These instructions tell the AI what to look for. JSON formatting and error handling are added automatically.
-              </p>
-
-              {presets && presets.length > 0 && (
-                <div>
-                  <label className="block text-sm font-medium mb-1">Preset</label>
-                  <select
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm"
-                    value=""
-                    onChange={(e) => {
-                      const p = presets.find((pr) => pr.id === Number(e.target.value));
-                      if (p) setTagPrompt(p.tag_prompt);
-                    }}
-                  >
-                    <option value="" disabled>Load from preset...</option>
-                    {presets.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}{p.is_default ? ' (active)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  Tag Instructions
-                </label>
-                <textarea
-                  value={tagPrompt}
-                  onChange={(e) => setTagPrompt(e.target.value)}
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm font-mono resize-y min-h-[200px]"
-                />
-              </div>
-
-              <div className="flex gap-2 justify-end">
-                <button
-                  onClick={() => setShowTagDialog(false)}
-                  className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleTag}
-                  disabled={tagMutation.isPending}
-                  className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
-                >
-                  {tagMutation.isPending ? 'Starting...' : 'Tag'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
-
       {/* Describe Dialog */}
       {showDescribeDialog && (
         <>
@@ -591,76 +436,7 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
             >
               <h3 className="text-lg font-semibold">Describe Image</h3>
               <p className="text-sm text-muted-foreground">
-                These instructions tell the AI how to describe the image. JSON formatting and error handling are added automatically.
-              </p>
-
-              {presets && presets.length > 0 && (
-                <div>
-                  <label className="block text-sm font-medium mb-1">Preset</label>
-                  <select
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm"
-                    value=""
-                    onChange={(e) => {
-                      const p = presets.find((pr) => pr.id === Number(e.target.value));
-                      if (p) setDescriptionPrompt(p.description_prompt);
-                    }}
-                  >
-                    <option value="" disabled>Load from preset...</option>
-                    {presets.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}{p.is_default ? ' (active)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  Description Instructions
-                </label>
-                <textarea
-                  value={descriptionPrompt}
-                  onChange={(e) => setDescriptionPrompt(e.target.value)}
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm font-mono resize-y min-h-[200px]"
-                />
-              </div>
-
-              <div className="flex gap-2 justify-end">
-                <button
-                  onClick={() => setShowDescribeDialog(false)}
-                  className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleDescribe}
-                  disabled={describeMutation.isPending}
-                  className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
-                >
-                  {describeMutation.isPending ? 'Starting...' : 'Describe'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* Reprocess Dialog */}
-      {showReprocessDialog && (
-        <>
-          <div
-            className="fixed inset-0 bg-black/50 z-50"
-            onClick={() => setShowReprocessDialog(false)}
-          />
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div
-              className="bg-card rounded-xl shadow-xl max-w-2xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h3 className="text-lg font-semibold">Reprocess Image</h3>
-              <p className="text-sm text-muted-foreground">
-                These instructions tell the AI what to look for. JSON formatting and error handling are added automatically.
+                Tag, describe, and embed this image using the selected vision model.
               </p>
 
               {presets && presets.length > 0 && (
@@ -697,45 +473,111 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
 
               <div>
                 <label className="block text-sm font-medium mb-2">
-                  Description Instructions
-                </label>
-                <textarea
-                  value={descriptionPrompt}
-                  onChange={(e) => setDescriptionPrompt(e.target.value)}
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm font-mono resize-y min-h-[150px]"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-2">
                   Tag Instructions
                 </label>
                 <textarea
                   value={tagPrompt}
                   onChange={(e) => setTagPrompt(e.target.value)}
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm font-mono resize-y min-h-[150px]"
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm font-mono resize-y min-h-[120px]"
                 />
               </div>
 
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Description Instructions
+                </label>
+                <textarea
+                  value={descriptionPrompt}
+                  onChange={(e) => setDescriptionPrompt(e.target.value)}
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm font-mono resize-y min-h-[120px]"
+                />
+              </div>
+
+              {/* Advanced Parameters */}
+              <button
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {showAdvanced ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                Advanced Parameters
+              </button>
+
+              {showAdvanced && (
+                <div className="border border-border rounded-lg p-4 space-y-3">
+                  <div>
+                    <label className="block text-xs text-muted-foreground mb-1">
+                      Temperature: {(temperature ?? 1.0).toFixed(1)}
+                    </label>
+                    <Slider
+                      min={0}
+                      max={20}
+                      value={Math.round((temperature ?? 1.0) * 10)}
+                      onChange={(v) => setTemperature(v / 10)}
+                      className="w-full"
+                    />
+                    <div className="flex justify-between text-[10px] text-muted-foreground">
+                      <span>0.0</span>
+                      <span>2.0</span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-muted-foreground mb-1">
+                        Tag Tokens: {maxTokensTag ?? 1000}
+                      </label>
+                      <Slider
+                        min={100}
+                        max={4000}
+                        step={100}
+                        value={maxTokensTag ?? 1000}
+                        onChange={(v) => setMaxTokensTag(v)}
+                        className="w-full"
+                      />
+                      <div className="flex justify-between text-[10px] text-muted-foreground">
+                        <span>100</span>
+                        <span>4000</span>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-muted-foreground mb-1">
+                        Description Tokens: {maxTokensDescribe ?? 3000}
+                      </label>
+                      <Slider
+                        min={500}
+                        max={8000}
+                        step={100}
+                        value={maxTokensDescribe ?? 3000}
+                        onChange={(v) => setMaxTokensDescribe(v)}
+                        className="w-full"
+                      />
+                      <div className="flex justify-between text-[10px] text-muted-foreground">
+                        <span>500</span>
+                        <span>8000</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="flex items-center gap-2 justify-end">
-                {reprocessCost !== null && reprocessCost > 0 && (
+                {describeCost !== null && describeCost > 0 && (
                   <span className="inline-flex items-center gap-0.5 text-xs text-amber-600 dark:text-amber-400 mr-auto">
                     <Zap className="h-3 w-3" />
-                    ~{Math.round(reprocessCost)} sparks
+                    ~{Math.round(describeCost)} sparks
                   </span>
                 )}
                 <button
-                  onClick={() => setShowReprocessDialog(false)}
+                  onClick={() => setShowDescribeDialog(false)}
                   className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors"
                 >
                   Cancel
                 </button>
                 <button
-                  onClick={handleReprocess}
+                  onClick={handleDescribeSubmit}
                   disabled={reprocessMutation.isPending}
                   className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
                 >
-                  {reprocessMutation.isPending ? 'Starting...' : 'Reprocess'}
+                  {reprocessMutation.isPending ? 'Starting...' : 'Describe'}
                 </button>
               </div>
             </div>

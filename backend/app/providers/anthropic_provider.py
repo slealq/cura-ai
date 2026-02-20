@@ -63,10 +63,11 @@ def extract_json(text: str) -> dict:
 class AnthropicTagger(BaseTagger):
     """Anthropic Claude vision-based image tagger."""
 
-    def __init__(self, api_key: str | None = None, model: str | None = None, max_tokens: dict | None = None):
+    def __init__(self, api_key: str | None = None, model: str | None = None, max_tokens: dict | None = None, temperature: float | None = None):
         self.client = AsyncAnthropic(api_key=api_key)
         self.model = model or settings.anthropic_vision_model
         self.token_limit = (max_tokens or {}).get("tag", 1000)
+        self.temperature = min(temperature, 1.0) if temperature is not None else None
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10),
            retry=retry_if_not_exception_type(AIContentError))
@@ -89,6 +90,7 @@ class AnthropicTagger(BaseTagger):
             response = await self.client.messages.create(
                 model=self.model,
                 max_tokens=self.token_limit,
+                **({"temperature": self.temperature} if self.temperature is not None else {}),
                 messages=[
                     {
                         "role": "user",
@@ -173,10 +175,11 @@ class AnthropicTagger(BaseTagger):
 class AnthropicDescriber(BaseDescriber):
     """Anthropic Claude vision-based image describer."""
 
-    def __init__(self, api_key: str | None = None, model: str | None = None, max_tokens: dict | None = None):
+    def __init__(self, api_key: str | None = None, model: str | None = None, max_tokens: dict | None = None, temperature: float | None = None):
         self.client = AsyncAnthropic(api_key=api_key)
         self.model = model or settings.anthropic_vision_model
         self.token_limit = (max_tokens or {}).get("describe", 3000)
+        self.temperature = min(temperature, 1.0) if temperature is not None else None
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10),
            retry=retry_if_not_exception_type(AIContentError))
@@ -198,6 +201,7 @@ class AnthropicDescriber(BaseDescriber):
             response = await self.client.messages.create(
                 model=self.model,
                 max_tokens=self.token_limit,
+                **({"temperature": self.temperature} if self.temperature is not None else {}),
                 messages=[
                     {
                         "role": "user",

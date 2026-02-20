@@ -367,6 +367,7 @@ export interface ProviderConfig {
   fal_language_model: string;
   max_tokens_expansion: number;
   max_tokens_suggestion: number;
+  vision_temperature: number;
 }
 
 export interface ProviderModel {

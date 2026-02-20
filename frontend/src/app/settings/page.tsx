@@ -1312,6 +1312,7 @@ function VisionModelSettings() {
       fal_vision_model: 'x-ai/grok-4-fast',
       max_tokens_tagging: 1000,
       max_tokens_description: 3000,
+      vision_temperature: 1.0,
     }),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['provider-config'] });
@@ -1389,17 +1390,34 @@ function VisionModelSettings() {
           </select>
         </div>
 
-        {/* Token Limits */}
+        {/* Model Parameters */}
         <div className="border border-border rounded-lg p-4">
           <h3 className="flex items-center text-sm font-medium mb-3">
-            Token Limits
-            <Hint text="Maximum number of output tokens the AI model can generate for each operation. Increase if responses are being cut off; decrease to save costs." />
+            Model Parameters
+            <Hint text="Control the behavior and output limits of vision AI models." />
           </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="flex items-center text-xs text-muted-foreground mb-1">
-                Tagging: {draft.max_tokens_tagging}
-                <Hint text="Token limit for image tagging responses. Default: 1000." />
+                Temperature: {(draft.vision_temperature ?? 1.0).toFixed(1)}
+                <Hint text="Controls randomness. Lower values (0.0) produce more deterministic outputs. Higher values (1.5-2.0) increase creativity. Anthropic models are clamped to 0-1. Default: 1.0." />
+              </label>
+              <Slider
+                min={0}
+                max={20}
+                value={Math.round((draft.vision_temperature ?? 1.0) * 10)}
+                onChange={(v) => setDraft({ ...draft, vision_temperature: v / 10 })}
+                className="w-full"
+              />
+              <div className="flex justify-between text-[10px] text-muted-foreground">
+                <span>0.0</span>
+                <span>2.0</span>
+              </div>
+            </div>
+            <div>
+              <label className="flex items-center text-xs text-muted-foreground mb-1">
+                Tagging Tokens: {draft.max_tokens_tagging}
+                <Hint text="Maximum output tokens for image tagging. Default: 1000." />
               </label>
               <Slider
                 min={100}
@@ -1416,8 +1434,8 @@ function VisionModelSettings() {
             </div>
             <div>
               <label className="flex items-center text-xs text-muted-foreground mb-1">
-                Description: {draft.max_tokens_description}
-                <Hint text="Token limit for image description responses. Default: 3000." />
+                Description Tokens: {draft.max_tokens_description}
+                <Hint text="Maximum output tokens for image description. Default: 3000." />
               </label>
               <Slider
                 min={500}

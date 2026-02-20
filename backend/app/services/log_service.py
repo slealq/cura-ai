@@ -23,6 +23,7 @@ def write_log(
     duration_ms: float | None = None,
     input_tokens: int | None = None,
     output_tokens: int | None = None,
+    provider_cost: float | None = None,
     success: bool | None = None,
     extra: dict | None = None,
     user_id: int | None = None,
@@ -52,7 +53,7 @@ def write_log(
 
         # Record usage for successful API calls
         if category == LogCategory.API_CALL and success is True:
-            from app.services.billing_context import get_billing_user
+            from app.services.billing_context import get_billing_user, is_billing_deferred
 
             effective_user_id = user_id or get_billing_user()
             if effective_user_id and provider and operation:
@@ -67,6 +68,8 @@ def write_log(
                         input_tokens=input_tokens,
                         output_tokens=output_tokens,
                         pipeline_log_id=entry.id,
+                        provider_cost=provider_cost,
+                        defer_debit=is_billing_deferred(),
                     )
                 except Exception as usage_err:
                     logger.warning(f"Failed to record usage: {usage_err}")
