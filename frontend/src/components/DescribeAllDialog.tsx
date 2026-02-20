@@ -11,6 +11,7 @@ import type { PromptPreset } from '@/types';
 
 interface DescribeAllDialogProps {
   folderId: number;
+  imageCount: number;
   onClose: () => void;
   onStarted: (jobId: number, total: number) => void;
 }
@@ -32,7 +33,7 @@ const VISION_MODELS = [
   { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'fal' },
 ];
 
-export default function DescribeAllDialog({ folderId, onClose, onStarted }: DescribeAllDialogProps) {
+export default function DescribeAllDialog({ folderId, imageCount, onClose, onStarted }: DescribeAllDialogProps) {
   const [mode, setMode] = useState<Mode>('manual');
   const [model, setModel] = useState('');
   const [tagPrompt, setTagPrompt] = useState('');
@@ -338,9 +339,10 @@ export default function DescribeAllDialog({ folderId, onClose, onStarted }: Desc
           {/* Footer */}
           <div className="flex items-center gap-2 justify-end pt-2 border-t border-border">
             {mode === 'manual' && costPerImage !== null && costPerImage > 0 && (
-              <span className="inline-flex items-center gap-0.5 text-xs text-amber-600 dark:text-amber-400 mr-auto">
+              <span className="inline-flex items-center gap-0.5 text-xs text-amber-600 dark:text-amber-400 mr-auto" title={`~${Math.round(costPerImage)} sparks per image`}>
                 <Zap className="h-3 w-3" />
-                ~{Math.round(costPerImage)} sparks/image
+                ~{Math.round(costPerImage * imageCount)} sparks
+                <span className="text-muted-foreground ml-0.5">({Math.round(costPerImage)}/image)</span>
               </span>
             )}
             <button

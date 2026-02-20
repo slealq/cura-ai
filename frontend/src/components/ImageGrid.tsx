@@ -423,6 +423,7 @@ function ImageGridContent({ title, queryKeyPrefix, fetchImages, folderId }: Imag
       {showDescribeAll && folderId && (
         <DescribeAllDialog
           folderId={folderId}
+          imageCount={data?.total ?? 0}
           onClose={() => setShowDescribeAll(false)}
           onStarted={(jobId, total) => {
             setShowDescribeAll(false);
