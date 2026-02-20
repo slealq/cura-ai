@@ -6,7 +6,8 @@ import { visionApi, settingsApi, billingApi } from '@/lib/api';
 import { Loader2, Eye, X, Upload, ImageIcon, Copy, Check, Trash2, ChevronDown, ChevronUp, Save, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import ImagePickerModal from '@/components/ImagePickerModal';
-import { cn } from '@/lib/utils';
+import ModelSelector from '@/components/ModelSelector';
+import { cn, formatDateCompact } from '@/lib/utils';
 import type { PromptPreset } from '@/types';
 
 const VISION_MODEL_OPTIONS = [
@@ -336,18 +337,13 @@ export default function VisionPage() {
 
         {/* Controls row */}
         <div className="flex flex-wrap gap-4 items-end">
-          <div>
-            <label className="block text-xs text-muted-foreground mb-1">Model</label>
-            <select
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              className="px-3 py-2 border border-border rounded-lg text-sm min-w-[200px]"
-            >
-              {VISION_MODEL_OPTIONS.map((m) => (
-                <option key={m.id} value={m.id}>{m.label}</option>
-              ))}
-            </select>
-          </div>
+          <ModelSelector
+            label="Model"
+            models={VISION_MODEL_OPTIONS.map((m) => ({ value: m.id, label: m.label, provider: m.provider }))}
+            value={selectedModel}
+            onChange={(v) => setSelectedModel(v)}
+            size="sm"
+          />
 
           <div>
             <label className="block text-xs text-muted-foreground mb-1">Mode</label>
@@ -555,7 +551,7 @@ export default function VisionPage() {
                     </span>
                   )}
                   <span className="text-xs text-muted-foreground">
-                    {new Date(result.created_at).toLocaleTimeString()}
+                    {formatDateCompact(result.created_at)}
                   </span>
                 </div>
                 <div className="flex items-center gap-1">

@@ -12,6 +12,7 @@ import type {
   ClusterListResponse,
   CostCatalogEntry,
   EditConfig,
+  EditCosts,
   EvaluationListResponse,
   Folder,
   FolderBrief,
@@ -39,6 +40,7 @@ import type {
   StepResponse,
   TokenResponse,
   TrainingConfig,
+  TrainingCosts,
   TransactionListResponse,
   UsageSummary,
   UserBalance,
@@ -325,7 +327,7 @@ export const imagesApi = {
 
   reprocess: async (
     id: number,
-    options?: { tag_prompt?: string; description_prompt?: string }
+    options?: { tag_prompt?: string; description_prompt?: string; provider?: string; model?: string }
   ): Promise<StepResponse> => {
     const { data } = await api.post(`/images/${id}/reprocess`, options || {});
     return data;
@@ -333,7 +335,7 @@ export const imagesApi = {
 
   tagImage: async (
     id: number,
-    options?: { tag_prompt?: string }
+    options?: { tag_prompt?: string; provider?: string; model?: string }
   ): Promise<StepResponse> => {
     const { data } = await api.post(`/images/${id}/tag`, options || {});
     return data;
@@ -341,7 +343,7 @@ export const imagesApi = {
 
   describeImage: async (
     id: number,
-    options?: { description_prompt?: string }
+    options?: { description_prompt?: string; provider?: string; model?: string }
   ): Promise<StepResponse> => {
     const { data } = await api.post(`/images/${id}/describe`, options || {});
     return data;
@@ -726,6 +728,16 @@ export const settingsApi = {
 
   updateBaseModel: async (base_model: string): Promise<{ base_model: string }> => {
     const { data } = await api.put('/settings/base-model', { base_model });
+    return data;
+  },
+
+  getEditModel: async (): Promise<{ edit_model: string }> => {
+    const { data } = await api.get('/settings/edit-model');
+    return data;
+  },
+
+  updateEditModel: async (edit_model: string): Promise<{ edit_model: string }> => {
+    const { data } = await api.put('/settings/edit-model', { edit_model });
     return data;
   },
 
@@ -1198,6 +1210,16 @@ export const billingApi = {
 
   getVisionCosts: async (): Promise<VisionCosts> => {
     const { data } = await api.get('/billing/vision-costs');
+    return data;
+  },
+
+  getEditCosts: async (): Promise<EditCosts> => {
+    const { data } = await api.get('/billing/edit-costs');
+    return data;
+  },
+
+  getTrainingCosts: async (): Promise<TrainingCosts> => {
+    const { data } = await api.get('/billing/training-costs');
     return data;
   },
 

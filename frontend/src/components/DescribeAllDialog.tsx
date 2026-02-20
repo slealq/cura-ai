@@ -1,12 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Loader2, Sparkles, PenLine } from 'lucide-react';
+import { Loader2, Sparkles, PenLine, Zap } from 'lucide-react';
 import { toast } from 'sonner';
-import { foldersApi, settingsApi } from '@/lib/api';
+import { foldersApi, settingsApi, billingApi } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import type { PromptPreset, ProviderModel } from '@/types';
+import ModelSelector from '@/components/ModelSelector';
+import type { PromptPreset } from '@/types';
 
 interface DescribeAllDialogProps {
   folderId: number;
@@ -17,20 +18,27 @@ interface DescribeAllDialogProps {
 type Mode = 'manual' | 'auto';
 type AutoStep = 'idle' | 'analyzing' | 'questions' | 'generating' | 'done';
 
-const VISION_PROVIDERS = [
-  { value: '', label: 'Default (from settings)' },
-  { value: 'openai', label: 'OpenAI' },
-  { value: 'anthropic', label: 'Anthropic' },
-  { value: 'fal', label: 'fal.ai' },
+const VISION_MODELS = [
+  { value: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'openai' },
+  { value: 'gpt-4o', label: 'GPT-4o', provider: 'openai' },
+  { value: 'gpt-5-mini', label: 'GPT-5 Mini', provider: 'openai' },
+  { value: 'gpt-5.2', label: 'GPT-5.2', provider: 'openai' },
+  { value: 'claude-3-haiku-20240307', label: 'Claude Haiku 3', provider: 'anthropic' },
+  { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', provider: 'anthropic' },
+  { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'anthropic' },
+  { value: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'anthropic' },
+  { value: 'x-ai/grok-4-fast', label: 'Grok 4 Fast', provider: 'fal' },
+  { value: 'qwen/qwen3-vl-235b-a22b-instruct', label: 'Qwen3 VL 235B', provider: 'fal' },
+  { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'fal' },
 ];
 
 export default function DescribeAllDialog({ folderId, onClose, onStarted }: DescribeAllDialogProps) {
   const [mode, setMode] = useState<Mode>('manual');
-  const [provider, setProvider] = useState('');
   const [model, setModel] = useState('');
   const [tagPrompt, setTagPrompt] = useState('');
   const [descriptionPrompt, setDescriptionPrompt] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const hasInitialized = useRef(false);
 
   // Auto mode state
   const [autoStep, setAutoStep] = useState<AutoStep>('idle');
@@ -45,14 +53,35 @@ export default function DescribeAllDialog({ folderId, onClose, onStarted }: Desc
     queryFn: () => settingsApi.listPresets(),
   });
 
-  // Load models when provider is selected
-  const { data: models } = useQuery<ProviderModel[]>({
-    queryKey: ['provider-models', provider],
-    queryFn: () => settingsApi.getProviderModels(provider),
-    enabled: !!provider,
+  // Fetch provider config to derive the configured vision model
+  const { data: providerConfig } = useQuery({
+    queryKey: ['provider-config'],
+    queryFn: settingsApi.getProviderConfig,
   });
 
-  const visionModels = models?.filter((m) => m.capabilities.includes('vision')) ?? [];
+  // Fetch vision costs
+  const { data: visionCosts } = useQuery({
+    queryKey: ['vision-costs'],
+    queryFn: billingApi.getVisionCosts,
+  });
+
+  // Initialize model from provider config
+  useEffect(() => {
+    if (providerConfig && !hasInitialized.current) {
+      hasInitialized.current = true;
+      const provider = providerConfig.vision_provider;
+      const modelId = provider === 'openai'
+        ? providerConfig.openai_vision_model
+        : provider === 'anthropic'
+          ? providerConfig.anthropic_vision_model
+          : providerConfig.fal_vision_model;
+      if (VISION_MODELS.some((m) => m.value === modelId)) {
+        setModel(modelId);
+      } else {
+        setModel(VISION_MODELS[0].value);
+      }
+    }
+  }, [providerConfig]);
 
   const handlePresetSelect = (preset: PromptPreset) => {
     setTagPrompt(preset.tag_prompt);
@@ -96,11 +125,26 @@ export default function DescribeAllDialog({ folderId, onClose, onStarted }: Desc
     }
   };
 
+  // Compute cost estimate for selected model
+  const getCostEstimate = (): number | null => {
+    if (!visionCosts || !model) return null;
+    const selected = VISION_MODELS.find((m) => m.value === model);
+    if (!selected?.provider) return null;
+    const providerCosts = visionCosts.costs[selected.provider];
+    if (!providerCosts) return null;
+    const modelCosts = providerCosts[model];
+    if (!modelCosts) return null;
+    // tag + describe combined cost per image
+    return (modelCosts.tag || 0) + (modelCosts.describe || 0);
+  };
+  const costPerImage = getCostEstimate();
+
   const handleSubmit = async () => {
     setSubmitting(true);
+    const selectedModel = VISION_MODELS.find((m) => m.value === model);
     try {
       const result = await foldersApi.describe(folderId, {
-        provider: provider || undefined,
+        provider: selectedModel?.provider || undefined,
         model: model || undefined,
         tag_prompt: tagPrompt || undefined,
         description_prompt: descriptionPrompt || undefined,
@@ -150,35 +194,14 @@ export default function DescribeAllDialog({ folderId, onClose, onStarted }: Desc
 
           {mode === 'manual' && (
             <div className="space-y-4">
-              {/* Provider + Model */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-muted-foreground mb-1">Provider</label>
-                  <select
-                    value={provider}
-                    onChange={(e) => { setProvider(e.target.value); setModel(''); }}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-background"
-                  >
-                    {VISION_PROVIDERS.map((p) => (
-                      <option key={p.value} value={p.value}>{p.label}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-muted-foreground mb-1">Model</label>
-                  <select
-                    value={model}
-                    onChange={(e) => setModel(e.target.value)}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-background"
-                    disabled={!provider}
-                  >
-                    <option value="">Default</option>
-                    {visionModels.map((m) => (
-                      <option key={m.id} value={m.id}>{m.name}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
+              {/* Model */}
+              <ModelSelector
+                label="Model"
+                models={VISION_MODELS}
+                value={model}
+                onChange={(v) => setModel(v)}
+                size="sm"
+              />
 
               {/* Preset selector */}
               {presets && presets.length > 0 && (
@@ -313,7 +336,13 @@ export default function DescribeAllDialog({ folderId, onClose, onStarted }: Desc
           )}
 
           {/* Footer */}
-          <div className="flex gap-2 justify-end pt-2 border-t border-border">
+          <div className="flex items-center gap-2 justify-end pt-2 border-t border-border">
+            {mode === 'manual' && costPerImage !== null && costPerImage > 0 && (
+              <span className="inline-flex items-center gap-0.5 text-xs text-amber-600 dark:text-amber-400 mr-auto">
+                <Zap className="h-3 w-3" />
+                ~{Math.round(costPerImage)} sparks/image
+              </span>
+            )}
             <button
               onClick={onClose}
               className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors"

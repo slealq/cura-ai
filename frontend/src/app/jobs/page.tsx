@@ -3,9 +3,9 @@
 import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Play, XCircle, RefreshCw, Tag, FileText, Cpu, Sparkles, Check, AlertTriangle, RotateCcw, Wrench, Zap } from 'lucide-react';
+import { Loader2, XCircle, Check, RotateCcw, Wrench, Zap } from 'lucide-react';
 import { toast } from 'sonner';
-import { jobsApi, clustersApi, imagesApi, generationApi } from '@/lib/api';
+import { jobsApi, imagesApi, generationApi } from '@/lib/api';
 import { cn, formatDate, getStatusColor } from '@/lib/utils';
 import type { BatchJobImage, Job } from '@/types';
 
@@ -16,92 +16,6 @@ export default function JobsPage() {
     queryKey: ['jobs'],
     queryFn: () => jobsApi.list({ limit: 50 }),
     refetchInterval: 5000,
-  });
-
-  const { data: stats } = useQuery({
-    queryKey: ['pipeline-stats'],
-    queryFn: imagesApi.getStats,
-    refetchInterval: 5000,
-  });
-
-  const triggerPipelineMutation = useMutation({
-    mutationFn: jobsApi.triggerFullPipeline,
-    onSuccess: (data) => {
-      toast.success('Full pipeline started', { description: `Job #${data.job_id}` });
-      queryClient.invalidateQueries({ queryKey: ['jobs'] });
-    },
-    onError: () => toast.error('Failed to start pipeline'),
-  });
-
-  const triggerClusteringMutation = useMutation({
-    mutationFn: () => clustersApi.recluster(),
-    onSuccess: (data) => {
-      toast.success('Clustering started', { description: `Job #${data.job_id}` });
-      queryClient.invalidateQueries({ queryKey: ['jobs'] });
-    },
-    onError: () => toast.error('Failed to start clustering'),
-  });
-
-  const triggerBatchTagMutation = useMutation({
-    mutationFn: jobsApi.triggerBatchTag,
-    onSuccess: (data) => {
-      toast.success('Batch tagging started', {
-        description: data.job_id ? `Job #${data.job_id}` : `${data.total} images`,
-      });
-      queryClient.invalidateQueries({ queryKey: ['jobs'] });
-    },
-    onError: () => toast.error('Failed to start batch tagging'),
-  });
-
-  const triggerBatchDescribeMutation = useMutation({
-    mutationFn: jobsApi.triggerBatchDescribe,
-    onSuccess: (data) => {
-      toast.success('Batch describing started', {
-        description: data.job_id ? `Job #${data.job_id}` : `${data.total} images`,
-      });
-      queryClient.invalidateQueries({ queryKey: ['jobs'] });
-    },
-    onError: () => toast.error('Failed to start batch describing'),
-  });
-
-  const triggerBatchEmbedMutation = useMutation({
-    mutationFn: jobsApi.triggerBatchEmbed,
-    onSuccess: (data) => {
-      toast.success('Batch embedding started', {
-        description: data.job_id ? `Job #${data.job_id}` : `${data.total} images`,
-      });
-      queryClient.invalidateQueries({ queryKey: ['jobs'] });
-    },
-    onError: () => toast.error('Failed to start batch embedding'),
-  });
-
-  const triggerSummarizeAllMutation = useMutation({
-    mutationFn: () => clustersApi.summarizeAll(),
-    onSuccess: (data) => {
-      toast.success('Cluster summarization started', { description: `Job #${data.job_id}` });
-      queryClient.invalidateQueries({ queryKey: ['jobs'] });
-    },
-    onError: () => toast.error('Failed to start summarization'),
-  });
-
-  const reprocessAllMutation = useMutation({
-    mutationFn: jobsApi.reprocessAll,
-    onSuccess: (data) => {
-      toast.success('Reprocessing all images', { description: `Job #${data.job_id}` });
-      queryClient.invalidateQueries({ queryKey: ['jobs'] });
-      queryClient.invalidateQueries({ queryKey: ['pipeline-stats'] });
-    },
-    onError: () => toast.error('Failed to start reprocessing'),
-  });
-
-  const reprocessFailedMutation = useMutation({
-    mutationFn: jobsApi.reprocessFailed,
-    onSuccess: (data) => {
-      toast.success('Reprocessing failed images', { description: `Job #${data.job_id}` });
-      queryClient.invalidateQueries({ queryKey: ['jobs'] });
-      queryClient.invalidateQueries({ queryKey: ['pipeline-stats'] });
-    },
-    onError: () => toast.error('Failed to start reprocessing'),
   });
 
   const cancelJobMutation = useMutation({
@@ -146,151 +60,9 @@ export default function JobsPage() {
     onError: (err: Error) => toast.error('Retry failed', { description: err.message }),
   });
 
-  const hasBatchRunning = jobs?.items.some(
-    (j) => j.job_type === 'batch_reprocess' && (j.status === 'running' || j.status === 'pending')
-  ) ?? false;
-
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Jobs</h1>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => triggerBatchTagMutation.mutate()}
-            disabled={triggerBatchTagMutation.isPending}
-            className={cn(
-              'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
-              'border border-border hover:bg-muted',
-              'disabled:opacity-50 disabled:cursor-not-allowed'
-            )}
-          >
-            <Tag className="h-4 w-4" />
-            Tag All
-          </button>
-
-          <button
-            onClick={() => triggerBatchDescribeMutation.mutate()}
-            disabled={triggerBatchDescribeMutation.isPending}
-            className={cn(
-              'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
-              'border border-border hover:bg-muted',
-              'disabled:opacity-50 disabled:cursor-not-allowed'
-            )}
-          >
-            <FileText className="h-4 w-4" />
-            Describe All
-          </button>
-
-          <button
-            onClick={() => triggerBatchEmbedMutation.mutate()}
-            disabled={triggerBatchEmbedMutation.isPending}
-            className={cn(
-              'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
-              'border border-border hover:bg-muted',
-              'disabled:opacity-50 disabled:cursor-not-allowed'
-            )}
-          >
-            <Cpu className="h-4 w-4" />
-            Embed All
-          </button>
-
-          <div className="w-px h-6 bg-border" />
-
-          <button
-            onClick={() => reprocessAllMutation.mutate()}
-            disabled={reprocessAllMutation.isPending || hasBatchRunning}
-            title={hasBatchRunning ? 'A batch reprocess job is already running' : undefined}
-            className={cn(
-              'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
-              'border border-border hover:bg-muted',
-              'disabled:opacity-50 disabled:cursor-not-allowed'
-            )}
-          >
-            <RefreshCw className={cn('h-4 w-4', reprocessAllMutation.isPending && 'animate-spin')} />
-            Reprocess All
-          </button>
-
-          {stats && stats.failed > 0 && (
-            <button
-              onClick={() => reprocessFailedMutation.mutate()}
-              disabled={reprocessFailedMutation.isPending || hasBatchRunning}
-              title={hasBatchRunning ? 'A batch reprocess job is already running' : undefined}
-              className={cn(
-                'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
-                'border border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/30',
-                'disabled:opacity-50 disabled:cursor-not-allowed'
-              )}
-            >
-              <AlertTriangle className="h-4 w-4" />
-              Reprocess Failed ({stats.failed})
-            </button>
-          )}
-
-          <div className="w-px h-6 bg-border" />
-
-          <button
-            onClick={() => triggerClusteringMutation.mutate()}
-            disabled={triggerClusteringMutation.isPending}
-            className={cn(
-              'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
-              'border border-border hover:bg-muted',
-              'disabled:opacity-50 disabled:cursor-not-allowed'
-            )}
-          >
-            <RefreshCw className={cn('h-4 w-4', triggerClusteringMutation.isPending && 'animate-spin')} />
-            Recluster
-          </button>
-
-          <button
-            onClick={() => triggerSummarizeAllMutation.mutate()}
-            disabled={triggerSummarizeAllMutation.isPending}
-            className={cn(
-              'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
-              'border border-border hover:bg-muted',
-              'disabled:opacity-50 disabled:cursor-not-allowed'
-            )}
-          >
-            <Sparkles className="h-4 w-4" />
-            Summarize All
-          </button>
-
-          <div className="w-px h-6 bg-border" />
-
-          <button
-            onClick={() => triggerPipelineMutation.mutate()}
-            disabled={triggerPipelineMutation.isPending}
-            className={cn(
-              'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-              'bg-primary text-primary-foreground hover:bg-primary/90',
-              'disabled:opacity-50 disabled:cursor-not-allowed'
-            )}
-          >
-            <Play className="h-4 w-4" />
-            Run Full Pipeline
-          </button>
-        </div>
-      </div>
-
-      {/* Pipeline Stats */}
-      {stats && stats.total_images > 0 && (
-        <div className="grid grid-cols-7 gap-3">
-          {[
-            { label: 'Ingested', count: stats.ingested, color: 'bg-gray-100 text-gray-700' },
-            { label: 'Tagged', count: stats.tagged, color: 'bg-blue-100 text-blue-700' },
-            { label: 'Described', count: stats.described, color: 'bg-indigo-100 text-indigo-700' },
-            { label: 'Embedded', count: stats.embedded, color: 'bg-purple-100 text-purple-700' },
-            { label: 'Clustered', count: stats.clustered, color: 'bg-green-100 text-green-700' },
-            { label: 'Failed', count: stats.failed, color: 'bg-red-100 text-red-700' },
-            { label: 'Total', count: stats.total_images, color: 'bg-muted text-foreground' },
-          ].map(({ label, count, color }) => (
-            <div key={label} className={cn('rounded-lg px-4 py-3 text-center', color)}>
-              <div className="text-2xl font-bold">{count}</div>
-              <div className="text-xs font-medium mt-0.5">{label}</div>
-            </div>
-          ))}
-        </div>
-      )}
+      <h1 className="text-2xl font-bold">Jobs</h1>
 
       {isLoading ? (
         <div className="flex items-center justify-center h-64">

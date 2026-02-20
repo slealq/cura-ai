@@ -1,13 +1,14 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { editApi } from '@/lib/api';
-import { Loader2, Pencil, ChevronDown, ChevronUp, X, Upload, ImageIcon } from 'lucide-react';
+import { editApi, settingsApi, billingApi } from '@/lib/api';
+import { Loader2, Pencil, ChevronDown, ChevronUp, X, Upload, ImageIcon, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import GeneratedImageCard from '@/components/GeneratedImageCard';
 import ImagePickerModal from '@/components/ImagePickerModal';
+import ModelSelector from '@/components/ModelSelector';
 import { cn } from '@/lib/utils';
 
 const SIZE_PRESETS = [
@@ -90,6 +91,7 @@ function formatDuration(createdAt: string, completedAt: string | null): string |
 
 export default function EditPage() {
   const queryClient = useQueryClient();
+  const hasInitEditModel = useRef(false);
 
   // Form state
   const [prompt, setPrompt] = useState('');
@@ -113,6 +115,28 @@ export default function EditPage() {
   const [enableWebSearch, setEnableWebSearch] = useState(false);
   // Face swap state
   const [enableOcclusionPrevention, setEnableOcclusionPrevention] = useState(false);
+
+  // Fetch default edit model from settings
+  const { data: editModelData } = useQuery({
+    queryKey: ['edit-model'],
+    queryFn: settingsApi.getEditModel,
+  });
+
+  // Fetch edit costs
+  const { data: editCosts } = useQuery({
+    queryKey: ['edit-costs'],
+    queryFn: billingApi.getEditCosts,
+  });
+
+  // Initialize edit model from settings
+  useEffect(() => {
+    if (editModelData && !hasInitEditModel.current) {
+      hasInitEditModel.current = true;
+      if (EDIT_MODELS.some((m) => m.value === editModelData.edit_model)) {
+        setEditModel(editModelData.edit_model);
+      }
+    }
+  }, [editModelData]);
 
   const isKling = editModel === 'kling-image';
   const isFaceSwap = editModel === 'face-swap';
@@ -453,18 +477,13 @@ export default function EditPage() {
         {/* Controls row */}
         <div className="flex flex-wrap gap-4 items-end">
           {/* Edit model */}
-          <div>
-            <label className="block text-xs text-muted-foreground mb-1">Model</label>
-            <select
-              value={editModel}
-              onChange={(e) => setEditModel(e.target.value)}
-              className="px-3 py-2 border border-border rounded-lg text-sm"
-            >
-              {EDIT_MODELS.map((m) => (
-                <option key={m.value} value={m.value}>{m.label}</option>
-              ))}
-            </select>
-          </div>
+          <ModelSelector
+            label="Model"
+            models={EDIT_MODELS}
+            value={editModel}
+            onChange={(v) => setEditModel(v)}
+            size="sm"
+          />
 
           {/* Num images (hidden for face swap) */}
           {!isFaceSwap && (
@@ -482,19 +501,27 @@ export default function EditPage() {
             </div>
           )}
 
-          {/* Edit button */}
-          <button
-            onClick={handleEdit}
-            disabled={editMutation.isPending || (!isFaceSwap && !prompt.trim()) || sources.length === 0 || (isFaceSwap && sources.length !== 2)}
-            className="flex items-center gap-2 px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 font-medium"
-          >
-            {editMutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Pencil className="h-4 w-4" />
+          {/* Edit button + cost */}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleEdit}
+              disabled={editMutation.isPending || (!isFaceSwap && !prompt.trim()) || sources.length === 0 || (isFaceSwap && sources.length !== 2)}
+              className="flex items-center gap-2 px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 font-medium"
+            >
+              {editMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Pencil className="h-4 w-4" />
+              )}
+              Edit
+            </button>
+            {editCosts?.costs[editModel] != null && editCosts.costs[editModel] > 0 && (
+              <span className="inline-flex items-center gap-0.5 text-xs text-amber-600 dark:text-amber-400">
+                <Zap className="h-3 w-3" />
+                ~{editCosts.costs[editModel] * numImages} sparks
+              </span>
             )}
-            Edit
-          </button>
+          </div>
         </div>
 
         {/* Advanced toggle (hidden for face swap) */}

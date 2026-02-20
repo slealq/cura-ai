@@ -212,6 +212,34 @@ def get_generation_costs(
     }
 
 
+class EditCostsResponse(BaseModel):
+    """Per-call edit cost in sparks by edit model."""
+    costs: dict[str, int]
+
+
+class TrainingCostsResponse(BaseModel):
+    """Per-job training cost in sparks by base model."""
+    costs: dict[str, int]
+
+
+@router.get("/edit-costs", response_model=EditCostsResponse)
+def get_edit_costs(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get per-call edit cost in sparks for each edit model."""
+    return {"costs": BillingService.get_edit_costs(db)}
+
+
+@router.get("/training-costs", response_model=TrainingCostsResponse)
+def get_training_costs(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get per-job training cost in sparks for each base model."""
+    return {"costs": BillingService.get_training_costs(db)}
+
+
 class VisionCostsResponse(BaseModel):
     """Estimated per-call vision cost in sparks by provider → model → mode."""
     costs: dict[str, dict[str, dict[str, float]]]

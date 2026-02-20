@@ -1,16 +1,31 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { X, ExternalLink, RefreshCw, Tag, FileText, Cpu, FolderOpen } from 'lucide-react';
+import { X, ExternalLink, RefreshCw, Tag, FileText, Cpu, FolderOpen, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import type { Image, PromptPreset } from '@/types';
-import { imagesApi, jobsApi, settingsApi } from '@/lib/api';
+import { imagesApi, jobsApi, settingsApi, billingApi } from '@/lib/api';
 import { cn, formatDate, formatFileSize } from '@/lib/utils';
 import { hasReachedStatus } from '@/lib/pipeline';
 import ImageCard from './ImageCard';
+import ModelSelector from './ModelSelector';
 import PipelineProgress from './PipelineProgress';
+
+const VISION_MODELS = [
+  { value: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'openai' },
+  { value: 'gpt-4o', label: 'GPT-4o', provider: 'openai' },
+  { value: 'gpt-5-mini', label: 'GPT-5 Mini', provider: 'openai' },
+  { value: 'gpt-5.2', label: 'GPT-5.2', provider: 'openai' },
+  { value: 'claude-3-haiku-20240307', label: 'Claude Haiku 3', provider: 'anthropic' },
+  { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', provider: 'anthropic' },
+  { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'anthropic' },
+  { value: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'anthropic' },
+  { value: 'x-ai/grok-4-fast', label: 'Grok 4 Fast', provider: 'fal' },
+  { value: 'qwen/qwen3-vl-235b-a22b-instruct', label: 'Qwen3 VL 235B', provider: 'fal' },
+  { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'fal' },
+];
 
 interface ImageDrawerProps {
   image: Image;
@@ -19,11 +34,13 @@ interface ImageDrawerProps {
 
 export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
   const queryClient = useQueryClient();
+  const hasInitModel = useRef(false);
   const [showReprocessDialog, setShowReprocessDialog] = useState(false);
   const [showTagDialog, setShowTagDialog] = useState(false);
   const [showDescribeDialog, setShowDescribeDialog] = useState(false);
   const [descriptionPrompt, setDescriptionPrompt] = useState('');
   const [tagPrompt, setTagPrompt] = useState('');
+  const [selectedModel, setSelectedModel] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [staleSteps, setStaleSteps] = useState<string[]>([]);
 
@@ -89,8 +106,38 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
     queryFn: settingsApi.listPresets,
   });
 
+  // Provider config for settings-driven model default
+  const { data: providerConfig } = useQuery({
+    queryKey: ['provider-config'],
+    queryFn: settingsApi.getProviderConfig,
+  });
+
+  // Vision costs
+  const { data: visionCosts } = useQuery({
+    queryKey: ['vision-costs'],
+    queryFn: billingApi.getVisionCosts,
+  });
+
+  // Initialize selectedModel from provider config
+  useEffect(() => {
+    if (providerConfig && !hasInitModel.current) {
+      hasInitModel.current = true;
+      const provider = providerConfig.vision_provider;
+      const modelId = provider === 'openai'
+        ? providerConfig.openai_vision_model
+        : provider === 'anthropic'
+          ? providerConfig.anthropic_vision_model
+          : providerConfig.fal_vision_model;
+      if (VISION_MODELS.some((m) => m.value === modelId)) {
+        setSelectedModel(modelId);
+      } else {
+        setSelectedModel(VISION_MODELS[0].value);
+      }
+    }
+  }, [providerConfig]);
+
   const tagMutation = useMutation({
-    mutationFn: (options?: { tag_prompt?: string }) =>
+    mutationFn: (options?: { tag_prompt?: string; provider?: string; model?: string }) =>
       imagesApi.tagImage(image.id, options),
     onSuccess: (data) => {
       toast.success('Tagging started', { description: `Job #${data.job_id}` });
@@ -105,7 +152,7 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
   });
 
   const describeMutation = useMutation({
-    mutationFn: (options?: { description_prompt?: string }) =>
+    mutationFn: (options?: { description_prompt?: string; provider?: string; model?: string }) =>
       imagesApi.describeImage(image.id, options),
     onSuccess: (data) => {
       toast.success('Describing started', { description: `Job #${data.job_id}` });
@@ -136,6 +183,8 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
     mutationFn: (options: {
       tag_prompt?: string;
       description_prompt?: string;
+      provider?: string;
+      model?: string;
     }) => imagesApi.reprocess(image.id, options),
     onSuccess: (data) => {
       toast.success('Reprocessing started', { description: `Job #${data.job_id}` });
@@ -163,7 +212,21 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
       setDescriptionPrompt(defaultPrompts.description_prompt);
       setTagPrompt(defaultPrompts.tag_prompt);
     }
-  }, [defaultPrompts]);
+    // Reset model to configured default
+    if (providerConfig) {
+      const provider = providerConfig.vision_provider;
+      const modelId = provider === 'openai'
+        ? providerConfig.openai_vision_model
+        : provider === 'anthropic'
+          ? providerConfig.anthropic_vision_model
+          : providerConfig.fal_vision_model;
+      if (VISION_MODELS.some((m) => m.value === modelId)) {
+        setSelectedModel(modelId);
+      } else {
+        setSelectedModel(VISION_MODELS[0].value);
+      }
+    }
+  }, [defaultPrompts, providerConfig]);
 
   useEffect(() => {
     if (showReprocessDialog || showTagDialog || showDescribeDialog) {
@@ -185,22 +248,46 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
     return () => window.removeEventListener('keydown', handleEscape);
   }, [onClose, showReprocessDialog, showTagDialog, showDescribeDialog]);
 
+  const getModelParams = () => {
+    const m = VISION_MODELS.find((v) => v.value === selectedModel);
+    return {
+      provider: m?.provider,
+      model: selectedModel,
+    };
+  };
+
+  // Compute cost for reprocess (tag + describe)
+  const getReprocessCost = (): number | null => {
+    if (!visionCosts || !selectedModel) return null;
+    const m = VISION_MODELS.find((v) => v.value === selectedModel);
+    if (!m?.provider) return null;
+    const provCosts = visionCosts.costs[m.provider];
+    if (!provCosts) return null;
+    const modelCosts = provCosts[selectedModel];
+    if (!modelCosts) return null;
+    return (modelCosts.tag || 0) + (modelCosts.describe || 0);
+  };
+  const reprocessCost = getReprocessCost();
+
   const handleReprocess = () => {
     reprocessMutation.mutate({
       description_prompt: descriptionPrompt || undefined,
       tag_prompt: tagPrompt || undefined,
+      ...getModelParams(),
     });
   };
 
   const handleTag = () => {
     tagMutation.mutate({
       tag_prompt: tagPrompt || undefined,
+      ...getModelParams(),
     });
   };
 
   const handleDescribe = () => {
     describeMutation.mutate({
       description_prompt: descriptionPrompt || undefined,
+      ...getModelParams(),
     });
   };
 
@@ -600,6 +687,14 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
                 </div>
               )}
 
+              <ModelSelector
+                label="Model"
+                models={VISION_MODELS}
+                value={selectedModel}
+                onChange={(v) => setSelectedModel(v)}
+                size="sm"
+              />
+
               <div>
                 <label className="block text-sm font-medium mb-2">
                   Description Instructions
@@ -622,7 +717,13 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
                 />
               </div>
 
-              <div className="flex gap-2 justify-end">
+              <div className="flex items-center gap-2 justify-end">
+                {reprocessCost !== null && reprocessCost > 0 && (
+                  <span className="inline-flex items-center gap-0.5 text-xs text-amber-600 dark:text-amber-400 mr-auto">
+                    <Zap className="h-3 w-3" />
+                    ~{Math.round(reprocessCost)} sparks
+                  </span>
+                )}
                 <button
                   onClick={() => setShowReprocessDialog(false)}
                   className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors"

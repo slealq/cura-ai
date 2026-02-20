@@ -701,6 +701,32 @@ async def update_base_model(request: BaseModelRequest, db: Session = Depends(get
     return {"base_model": service.set_base_model(request.base_model)}
 
 
+class EditModelRequest(BaseModel):
+    """Request to set the default edit model."""
+
+    edit_model: str
+
+
+class EditModelResponse(BaseModel):
+    """Response with the default edit model."""
+
+    edit_model: str
+
+
+@router.get("/edit-model", response_model=EditModelResponse)
+async def get_edit_model(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Get the default edit model."""
+    service = get_settings_service(db, current_user.id)
+    return {"edit_model": service.get_edit_model()}
+
+
+@router.put("/edit-model", response_model=EditModelResponse)
+async def update_edit_model(request: EditModelRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Set the default edit model."""
+    service = get_settings_service(db, current_user.id)
+    return {"edit_model": service.set_edit_model(request.edit_model)}
+
+
 @router.get("/generation", response_model=GenerationConfigResponse)
 async def get_generation_config(base_model: str | None = None, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get current generation configuration, optionally scoped to a base model."""

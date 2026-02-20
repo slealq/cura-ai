@@ -376,6 +376,50 @@ class BillingService:
 
         return result
 
+    # Maps frontend edit model key → (provider, catalog model ID, operation)
+    EDIT_MODEL_MAP: dict[str, tuple[str, str, str]] = {
+        "qwen-image-max-edit": ("fal", "fal-ai/qwen-image-max/edit", "edit"),
+        "kling-image": ("fal", "fal-ai/kling-image/o3/image-to-image", "edit"),
+        "wan-25": ("fal", "fal-ai/wan-25-preview/image-to-image", "edit"),
+        "grok-imagine": ("fal", "xai/grok-imagine-image/edit", "edit"),
+        "face-swap": ("fal", "half-moon-ai/ai-face-swap/faceswapimage", "edit"),
+        "nano-banana-pro-edit": ("fal", "fal-ai/nano-banana-pro/edit", "edit"),
+    }
+
+    # Maps frontend base model key → (provider, catalog model ID, operation)
+    TRAINING_MODEL_MAP: dict[str, tuple[str, str, str]] = {
+        "flux-dev": ("fal", "fal-ai/flux-lora-fast-training", "train"),
+        "qwen-2.5": ("fal", "fal-ai/qwen-image-2512-trainer-v2", "train"),
+    }
+
+    @staticmethod
+    def get_edit_costs(db: Session) -> dict[str, int]:
+        """Get per-call edit costs in sparks for each edit model."""
+        svc = BillingService(db, user_id=0)
+        result: dict[str, int] = {}
+        for edit_model, (provider, model, operation) in BillingService.EDIT_MODEL_MAP.items():
+            entry = svc._get_catalog_entry(provider, model, operation)
+            if entry and entry.cost_per_call:
+                charged_usd = entry.cost_per_call * entry.platform_markup
+                result[edit_model] = int(charged_usd * USD_TO_SPARKS)
+            else:
+                result[edit_model] = 0
+        return result
+
+    @staticmethod
+    def get_training_costs(db: Session) -> dict[str, int]:
+        """Get per-job training costs in sparks for each base model."""
+        svc = BillingService(db, user_id=0)
+        result: dict[str, int] = {}
+        for base_model, (provider, model, operation) in BillingService.TRAINING_MODEL_MAP.items():
+            entry = svc._get_catalog_entry(provider, model, operation)
+            if entry and entry.cost_per_call:
+                charged_usd = entry.cost_per_call * entry.platform_markup
+                result[base_model] = int(charged_usd * USD_TO_SPARKS)
+            else:
+                result[base_model] = 0
+        return result
+
     # --- Admin / reporting (class methods, no user_id filter) ---
 
     @staticmethod

@@ -536,6 +536,14 @@ export interface VisionCosts {
   costs: Record<string, Record<string, Record<string, number>>>;
 }
 
+export interface EditCosts {
+  costs: Record<string, number>;
+}
+
+export interface TrainingCosts {
+  costs: Record<string, number>;
+}
+
 export interface PlatformUsageSummary {
   total_raw_cost: number;
   total_charged: number;

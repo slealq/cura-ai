@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import GeneratedImageCard from '@/components/GeneratedImageCard';
+import ModelSelector from '@/components/ModelSelector';
 import { cn } from '@/lib/utils';
 import { Slider } from '@/components/Slider';
 
@@ -369,30 +370,19 @@ function GeneratePageInner() {
         {/* Model selector + LoRA + quick params */}
         <div className="flex flex-wrap gap-4 items-end">
           {/* Base Model */}
-          <div>
-            <label className="block text-xs text-muted-foreground mb-1">Model</label>
-            <div className="flex rounded-lg border border-border overflow-hidden">
-              {BASE_MODELS.map((m) => (
-                <button
-                  key={m.value}
-                  onClick={() => {
-                    setBaseModel(m.value);
-                    setLoraSelections([]);
-                    setGuidance(m.defaultGuidance);
-                    if (numImages > m.maxImages) setNumImages(m.maxImages);
-                  }}
-                  className={cn(
-                    'px-3 py-2 text-sm font-medium transition-colors',
-                    baseModel === m.value
-                      ? 'bg-primary text-primary-foreground'
-                      : 'hover:bg-muted'
-                  )}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
-          </div>
+          <ModelSelector
+            label="Model"
+            models={BASE_MODELS}
+            value={baseModel}
+            onChange={(v) => {
+              const caps = BASE_MODELS.find((m) => m.value === v);
+              setBaseModel(v);
+              setLoraSelections([]);
+              setGuidance(caps?.defaultGuidance ?? 0);
+              if (numImages > (caps?.maxImages ?? 8)) setNumImages(caps?.maxImages ?? 8);
+            }}
+            size="sm"
+          />
 
           {/* LoRA selections (max 2) — only for models that support LoRA */}
           {modelCaps.hasLora && (

@@ -7,6 +7,7 @@ import { RotateCcw, Plus, Trash2, Check, Copy, Play, HelpCircle, Eye, EyeOff, Sh
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/contexts/ThemeContext';
+import ModelSelector from '@/components/ModelSelector';
 import type { ClusteringConfig, GenerationConfig, ProviderConfig, ProviderModel, TrainingConfig, PromptPreset } from '@/types';
 import { Slider } from '@/components/Slider';
 
@@ -546,6 +547,15 @@ const BASE_MODELS = [
   { value: 'qwen-2.5', label: 'Qwen 2.5', hasTraining: true },
 ];
 
+const EDIT_MODELS = [
+  { value: 'qwen-image-max-edit', label: 'Qwen Image Max Edit' },
+  { value: 'kling-image', label: 'Kling Image' },
+  { value: 'wan-25', label: 'Wan 2.5' },
+  { value: 'grok-imagine', label: 'Grok Imagine' },
+  { value: 'nano-banana-pro-edit', label: 'Nano Banana Pro Edit' },
+  { value: 'face-swap', label: 'Face Swap' },
+];
+
 function GenerationSettings() {
   const queryClient = useQueryClient();
 
@@ -558,11 +568,26 @@ function GenerationSettings() {
 
   const setBaseModelMutation = useMutation({
     mutationFn: (model: string) => settingsApi.updateBaseModel(model),
-    onSuccess: (data) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['base-model'] });
       // Reset drafts so they reload from the new model's config
       setGenDraft(null);
       setTrainDraft(null);
+    },
+  });
+
+  // Edit model state
+  const { data: editModelData } = useQuery({
+    queryKey: ['edit-model'],
+    queryFn: settingsApi.getEditModel,
+  });
+  const editModel = editModelData?.edit_model ?? 'qwen-image-max-edit';
+
+  const setEditModelMutation = useMutation({
+    mutationFn: (model: string) => settingsApi.updateEditModel(model),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['edit-model'] });
+      toast.success('Default edit model saved');
     },
   });
 
@@ -653,38 +678,15 @@ function GenerationSettings() {
       </div>
 
       <div className="space-y-6">
-        {/* Provider + Model selector */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Provider</label>
-            <select
-              className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
-              value="fal"
-              disabled
-            >
-              <option value="fal">fal.ai</option>
-            </select>
-          </div>
-          <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Model</label>
-            <select
-              value={baseModel}
-              onChange={(e) => {
-                if (e.target.value !== baseModel) {
-                  setBaseModelMutation.mutate(e.target.value);
-                }
-              }}
-              disabled={setBaseModelMutation.isPending}
-              className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
-            >
-              {BASE_MODELS.map((m) => (
-                <option key={m.value} value={m.value}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
+        {/* Model selector */}
+        <ModelSelector
+          label="Model"
+          models={BASE_MODELS}
+          value={baseModel}
+          onChange={(v) => {
+            if (v !== baseModel) setBaseModelMutation.mutate(v);
+          }}
+        />
 
         {/* Training defaults (shown first, only for models that support training) */}
         {modelHasTraining && trainDraft && (
@@ -838,6 +840,22 @@ function GenerationSettings() {
               Reset
             </button>
           </div>
+        </div>
+
+        {/* Edit model selector */}
+        <div className="border border-border rounded-lg p-4 mt-6">
+          <h3 className="text-sm font-medium mb-3">Default Edit Model</h3>
+          <p className="text-xs text-muted-foreground mb-3">
+            The default model selected when you open the Edit page.
+          </p>
+          <ModelSelector
+            models={EDIT_MODELS}
+            value={editModel}
+            onChange={(v) => {
+              if (v !== editModel) setEditModelMutation.mutate(v);
+            }}
+            size="sm"
+          />
         </div>
       </div>
     </section>
@@ -1343,42 +1361,32 @@ function VisionModelSettings() {
       </div>
 
       <div className="space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Vision Model */}
-          <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Vision Model</label>
-            <select
-              value={currentVisionModelId}
-              onChange={(e) => handleVisionModelChange(e.target.value)}
-              className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
-            >
-              {VISION_MODELS.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          </div>
+        {/* Vision Model */}
+        <ModelSelector
+          label="Vision Model"
+          models={VISION_MODELS.map((m) => ({ value: m.id, label: m.label, provider: m.provider }))}
+          value={currentVisionModelId}
+          onChange={(v) => handleVisionModelChange(v)}
+        />
 
-          {/* Embedding Model */}
-          <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Embedding Model</label>
-            <select
-              value={draft.openai_embedding_model}
-              onChange={(e) => setDraft({ ...draft, openai_embedding_model: e.target.value })}
-              className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
-            >
-              {embeddingCapableModels.length > 0 ? (
-                embeddingCapableModels.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))
-              ) : (
-                <option value={draft.openai_embedding_model}>{draft.openai_embedding_model}</option>
-              )}
-            </select>
-          </div>
+        {/* Embedding Model */}
+        <div>
+          <label className="text-xs text-muted-foreground mb-1 block">Embedding Model</label>
+          <select
+            value={draft.openai_embedding_model}
+            onChange={(e) => setDraft({ ...draft, openai_embedding_model: e.target.value })}
+            className="w-full px-3 py-1.5 border border-border rounded-lg text-sm max-w-xs"
+          >
+            {embeddingCapableModels.length > 0 ? (
+              embeddingCapableModels.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))
+            ) : (
+              <option value={draft.openai_embedding_model}>{draft.openai_embedding_model}</option>
+            )}
+          </select>
         </div>
 
         {/* Token Limits */}
@@ -1527,20 +1535,12 @@ function LanguageModelSettings() {
       </div>
 
       <div className="space-y-4">
-        <div>
-          <label className="text-xs text-muted-foreground mb-1 block">Language Model</label>
-          <select
-            value={currentLanguageModelId}
-            onChange={(e) => handleLanguageModelChange(e.target.value)}
-            className="w-full max-w-md px-3 py-1.5 border border-border rounded-lg text-sm"
-          >
-            {LANGUAGE_MODELS.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
-          </select>
-        </div>
+        <ModelSelector
+          label="Language Model"
+          models={LANGUAGE_MODELS.map((m) => ({ value: m.id, label: m.label, provider: m.provider }))}
+          value={currentLanguageModelId}
+          onChange={(v) => handleLanguageModelChange(v)}
+        />
 
         {/* Token Limits */}
         <div className="border border-border rounded-lg p-4">

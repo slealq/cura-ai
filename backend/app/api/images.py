@@ -378,6 +378,8 @@ class ReprocessRequest(BaseModel):
 
     tag_prompt: str | None = None
     description_prompt: str | None = None
+    provider: str | None = None
+    model: str | None = None
 
 
 @router.post("/{image_id}/reprocess", response_model=StepResponse)
@@ -396,6 +398,8 @@ async def reprocess_image(
 
     tag_prompt = request.tag_prompt if request else None
     description_prompt = request.description_prompt if request else None
+    provider = request.provider if request else None
+    model = request.model if request else None
 
     # Create job record
     job = Job(
@@ -403,7 +407,7 @@ async def reprocess_image(
         status=JobStatus.PENDING,
         image_id=image_id,
         total_items=1,
-        parameters={"tag_prompt": tag_prompt, "description_prompt": description_prompt},
+        parameters={"tag_prompt": tag_prompt, "description_prompt": description_prompt, "provider": provider, "model": model},
         user_id=current_user.id,
     )
     db.add(job)
@@ -412,7 +416,7 @@ async def reprocess_image(
 
     # Reset status and queue for reprocessing
     image_service.update_status(image_id, ImageStatus.INGESTED)
-    task = process_image_pipeline.delay(image_id, tag_prompt=tag_prompt, description_prompt=description_prompt, job_id=job.id, user_id=current_user.id)
+    task = process_image_pipeline.delay(image_id, tag_prompt=tag_prompt, description_prompt=description_prompt, provider=provider, model=model, job_id=job.id, user_id=current_user.id)
     job.celery_task_id = task.id
     db.commit()
 
@@ -423,12 +427,16 @@ class TagRequest(BaseModel):
     """Request to tag an image."""
 
     tag_prompt: str | None = None
+    provider: str | None = None
+    model: str | None = None
 
 
 class DescribeRequest(BaseModel):
     """Request to describe an image."""
 
     description_prompt: str | None = None
+    provider: str | None = None
+    model: str | None = None
 
 
 TAG_ALLOWED = {ImageStatus.INGESTED, ImageStatus.TAGGED, ImageStatus.DESCRIBED, ImageStatus.EMBEDDED, ImageStatus.CLUSTERED, ImageStatus.FAILED}
@@ -454,20 +462,22 @@ async def tag_image_endpoint(
         raise HTTPException(status_code=400, detail=f"Image status '{image.status}' does not allow tagging")
 
     tag_prompt = request.tag_prompt if request else None
+    provider = request.provider if request else None
+    model = request.model if request else None
 
     job = Job(
         job_type=JobType.TAG,
         status=JobStatus.PENDING,
         image_id=image_id,
         total_items=1,
-        parameters={"tag_prompt": tag_prompt} if tag_prompt else {},
+        parameters={"tag_prompt": tag_prompt, "provider": provider, "model": model},
         user_id=current_user.id,
     )
     db.add(job)
     db.commit()
     db.refresh(job)
 
-    task = tag_image.delay(image_id, tag_prompt=tag_prompt, job_id=job.id, user_id=current_user.id)
+    task = tag_image.delay(image_id, tag_prompt=tag_prompt, provider=provider, model=model, job_id=job.id, user_id=current_user.id)
     job.celery_task_id = task.id
     db.commit()
 
@@ -492,20 +502,22 @@ async def describe_image_endpoint(
         raise HTTPException(status_code=400, detail=f"Image status '{image.status}' does not allow describing")
 
     description_prompt = request.description_prompt if request else None
+    provider = request.provider if request else None
+    model = request.model if request else None
 
     job = Job(
         job_type=JobType.DESCRIBE,
         status=JobStatus.PENDING,
         image_id=image_id,
         total_items=1,
-        parameters={"description_prompt": description_prompt} if description_prompt else {},
+        parameters={"description_prompt": description_prompt, "provider": provider, "model": model},
         user_id=current_user.id,
     )
     db.add(job)
     db.commit()
     db.refresh(job)
 
-    task = describe_image.delay(image_id, description_prompt=description_prompt, job_id=job.id, user_id=current_user.id)
+    task = describe_image.delay(image_id, description_prompt=description_prompt, provider=provider, model=model, job_id=job.id, user_id=current_user.id)
     job.celery_task_id = task.id
     db.commit()
 

@@ -63,6 +63,7 @@ DEFAULT_EDIT_CONFIGS = {
 }
 
 DEFAULT_BASE_MODEL = "nano-banana-pro"
+DEFAULT_EDIT_MODEL = "qwen-image-max-edit"
 
 DEFAULT_PROVIDER_CONFIG = {
     "vision_provider": "openai",
@@ -322,6 +323,17 @@ class SettingsService:
         """Set the active base model."""
         self.set_setting("base_model", base_model, description="Active base model for generation/training")
         return base_model
+
+    # --- Edit model ---
+
+    def get_edit_model(self) -> str:
+        """Get the default edit model."""
+        return self.get_setting("edit_model", DEFAULT_EDIT_MODEL) or DEFAULT_EDIT_MODEL
+
+    def set_edit_model(self, edit_model: str) -> str:
+        """Set the default edit model."""
+        self.set_setting("edit_model", edit_model, description="Default edit model")
+        return edit_model
 
     # --- Generation / Training config ---
 
