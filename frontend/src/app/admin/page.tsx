@@ -52,6 +52,7 @@ export default function AdminPage() {
     operations: { operation: string; platform_markup: number }[];
   }>({ cost_per_input_token: 0, cost_per_output_token: 0, cost_per_call: 0, operations: [] });
   const [setAllMarkup, setSetAllMarkup] = useState('');
+  const [expandedTokenModels, setExpandedTokenModels] = useState<Set<string>>(new Set());
 
   // Billing Logs state
   const [logsPage, setLogsPage] = useState(0);
@@ -190,7 +191,47 @@ export default function AdminPage() {
 
   const sortedUsers = users?.slice().sort((a: AdminUserBalance, b: AdminUserBalance) => a.balance - b.balance) || [];
 
-  // Group catalog by provider → model
+  // Categorize catalog entries by operation type
+  type OperationCategory = 'vision' | 'language' | 'embedding' | 'generate' | 'generate_lora' | 'train' | 'edit' | 'other';
+
+  const categoryLabels: Record<OperationCategory, string> = {
+    vision: 'Vision',
+    language: 'Language',
+    embedding: 'Embedding',
+    generate: 'Generate',
+    generate_lora: 'Generate with LoRA',
+    train: 'Train',
+    edit: 'Edit',
+    other: 'Other',
+  };
+
+  const categoryOrder: OperationCategory[] = ['vision', 'language', 'embedding', 'generate', 'generate_lora', 'train', 'edit', 'other'];
+
+  function getOperationCategory(operation: string, model: string): OperationCategory {
+    switch (operation) {
+      case 'tag':
+      case 'describe':
+      case 'evaluate':
+      case 'evaluate_creative':
+        return 'vision';
+      case 'summarize':
+      case 'summarize_eval':
+      case 'generate_prompts':
+      case 'expand_prompt':
+        return 'language';
+      case 'embed':
+        return 'embedding';
+      case 'generate':
+        return model.toLowerCase().includes('lora') ? 'generate_lora' : 'generate';
+      case 'train':
+        return 'train';
+      case 'edit':
+        return 'edit';
+      default:
+        return 'other';
+    }
+  }
+
   type ModelGroup = {
     provider: string;
     model: string;
@@ -198,39 +239,45 @@ export default function AdminPage() {
     isTokenBased: boolean;
   };
 
-  const catalogGroups = useMemo(() => {
-    if (!catalog) return { tokenModels: [] as ModelGroup[], perCallEntries: [] as CostCatalogEntry[] };
+  type CategoryGroup = {
+    tokenModels: ModelGroup[];
+    perCallEntries: CostCatalogEntry[];
+  };
 
-    const byKey: Record<string, CostCatalogEntry[]> = {};
+  const catalogByCategory = useMemo(() => {
+    if (!catalog) return {} as Record<OperationCategory, CategoryGroup>;
+
+    const result: Record<OperationCategory, CategoryGroup> = {} as Record<OperationCategory, CategoryGroup>;
+
+    // Group entries by category, then within each category by provider::model
     catalog.forEach((entry: CostCatalogEntry) => {
-      const key = `${entry.provider}::${entry.model}`;
-      if (!byKey[key]) byKey[key] = [];
-      byKey[key].push(entry);
-    });
+      const cat = getOperationCategory(entry.operation, entry.model);
+      if (!result[cat]) result[cat] = { tokenModels: [], perCallEntries: [] };
 
-    const tokenModels: ModelGroup[] = [];
-    const perCallEntries: CostCatalogEntry[] = [];
+      const isTokenBased =
+        (entry.cost_per_input_token && entry.cost_per_input_token > 0) ||
+        (entry.cost_per_output_token && entry.cost_per_output_token > 0);
 
-    Object.entries(byKey).forEach(([, entries]) => {
-      const hasTokenPricing = entries.some(
-        (e) => (e.cost_per_input_token && e.cost_per_input_token > 0) || (e.cost_per_output_token && e.cost_per_output_token > 0)
-      );
-      if (hasTokenPricing) {
-        tokenModels.push({
-          provider: entries[0].provider,
-          model: entries[0].model,
-          entries,
-          isTokenBased: true,
-        });
+      if (isTokenBased) {
+        // Group token-based entries by provider::model within the category
+        const key = `${entry.provider}::${entry.model}`;
+        let group = result[cat].tokenModels.find((g) => `${g.provider}::${g.model}` === key);
+        if (!group) {
+          group = { provider: entry.provider, model: entry.model, entries: [], isTokenBased: true };
+          result[cat].tokenModels.push(group);
+        }
+        group.entries.push(entry);
       } else {
-        perCallEntries.push(...entries);
+        result[cat].perCallEntries.push(entry);
       }
     });
 
-    // Sort token models by provider then model
-    tokenModels.sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model));
+    // Sort token models within each category
+    Object.values(result).forEach((group) => {
+      group.tokenModels.sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model));
+    });
 
-    return { tokenModels, perCallEntries };
+    return result;
   }, [catalog]);
 
   return (
@@ -852,137 +899,159 @@ export default function AdminPage() {
           <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
         ) : (
           <div className="space-y-6">
-            {/* Token-based models as cards */}
-            {catalogGroups.tokenModels.length > 0 && (
-              <div className="space-y-3">
-                <p className="text-sm font-medium text-muted-foreground">Token-Based Models</p>
-                <div className="grid grid-cols-1 gap-3">
-                  {catalogGroups.tokenModels.map((group) => {
-                    const markups = group.entries.map((e) => e.platform_markup);
-                    const allSame = markups.every((m) => m === markups[0]);
-                    const inputPrice = group.entries[0].cost_per_input_token;
-                    const outputPrice = group.entries[0].cost_per_output_token;
+            {categoryOrder.map((cat) => {
+              const group = catalogByCategory[cat];
+              if (!group || (group.tokenModels.length === 0 && group.perCallEntries.length === 0)) return null;
 
-                    return (
-                      <div key={`${group.provider}::${group.model}`} className="bg-card border rounded-lg px-4 py-3">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <span className="font-medium text-sm">{group.model}</span>
-                            <span className="text-xs text-muted-foreground">{group.provider}</span>
-                          </div>
-                          <div className="flex items-center gap-4">
-                            <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                              {inputPrice ? (
-                                <span>${(inputPrice * 1_000_000).toFixed(2)}/1M in</span>
-                              ) : null}
-                              {outputPrice ? (
-                                <span>${(outputPrice * 1_000_000).toFixed(2)}/1M out</span>
-                              ) : null}
-                            </div>
-                            <button
-                              onClick={() => {
-                                setEditingModel({ provider: group.provider, model: group.model });
-                                setModelEditForm({
-                                  cost_per_input_token: inputPrice || 0,
-                                  cost_per_output_token: outputPrice || 0,
-                                  cost_per_call: group.entries[0].cost_per_call || 0,
-                                  operations: group.entries.map((e) => ({
-                                    operation: e.operation,
-                                    platform_markup: e.platform_markup,
-                                  })),
-                                });
-                                setSetAllMarkup('');
-                              }}
-                              className="p-1.5 text-muted-foreground hover:text-foreground rounded-md hover:bg-muted"
-                              title="Edit model pricing"
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        </div>
-                        <div className="flex flex-wrap gap-1.5 mt-2">
-                          {allSame ? (
-                            <span className="px-2 py-0.5 text-xs bg-muted rounded-full">
-                              All: {markups[0]}x ({group.entries.length} ops)
-                            </span>
-                          ) : (
-                            group.entries.map((e) => (
-                              <span key={e.id} className="px-2 py-0.5 text-xs bg-muted rounded-full">
-                                {e.operation} {e.platform_markup}x
-                              </span>
-                            ))
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* Per-call entries as compact table */}
-            {catalogGroups.perCallEntries.length > 0 && (
-              <div className="space-y-3">
-                <p className="text-sm font-medium text-muted-foreground">Per-Call Models</p>
-                <div className="bg-card border rounded-lg overflow-hidden">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b bg-muted/50">
-                        <th className="text-left px-4 py-2 font-medium text-xs text-muted-foreground">Model</th>
-                        <th className="text-left px-4 py-2 font-medium text-xs text-muted-foreground">Operation</th>
-                        <th className="text-right px-4 py-2 font-medium text-xs text-muted-foreground">Cost/Call</th>
-                        <th className="text-right px-4 py-2 font-medium text-xs text-muted-foreground">Markup</th>
-                        <th className="text-right px-4 py-2 font-medium text-xs text-muted-foreground">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {catalogGroups.perCallEntries.map((entry: CostCatalogEntry) => (
-                        <tr key={entry.id} className="border-b last:border-0">
-                          <td className="px-4 py-2 font-mono text-xs">{entry.provider}/{entry.model}</td>
-                          <td className="px-4 py-2 text-xs">{entry.operation}</td>
-                          <td className="text-right px-4 py-2 font-mono text-xs">
-                            ${entry.cost_per_call?.toFixed(4) ?? '0'}
-                          </td>
-                          <td className="text-right px-4 py-2 text-xs">{entry.platform_markup}x</td>
-                          <td className="text-right px-4 py-2">
-                            <div className="flex items-center justify-end gap-1">
-                              <button
-                                onClick={() => {
-                                  setEditingEntry(entry);
-                                  setCatalogForm({
-                                    provider: entry.provider,
-                                    model: entry.model,
-                                    operation: entry.operation,
-                                    cost_per_input_token: entry.cost_per_input_token || 0,
-                                    cost_per_output_token: entry.cost_per_output_token || 0,
-                                    cost_per_call: entry.cost_per_call || 0,
-                                    platform_markup: entry.platform_markup,
-                                  });
-                                  setShowCatalogForm(true);
-                                }}
-                                className="p-1 text-muted-foreground hover:text-foreground"
-                              >
-                                <Pencil className="h-3.5 w-3.5" />
-                              </button>
-                              <button
-                                onClick={() => {
-                                  if (confirm('Delete this catalog entry?')) {
-                                    deleteCatalogMutation.mutate(entry.id);
-                                  }
-                                }}
-                                className="p-1 text-muted-foreground hover:text-red-500"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            </div>
-                          </td>
+              return (
+                <div key={cat} className="space-y-3">
+                  <p className="text-sm font-medium text-muted-foreground">{categoryLabels[cat]}</p>
+                  <div className="bg-card border rounded-lg overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b bg-muted/50">
+                          <th className="w-8 px-2 py-2" />
+                          <th className="text-left px-4 py-2 font-medium text-xs text-muted-foreground">Model</th>
+                          <th className="text-right px-4 py-2 font-medium text-xs text-muted-foreground">Pricing</th>
+                          <th className="text-right px-4 py-2 font-medium text-xs text-muted-foreground">Markup</th>
+                          <th className="text-right px-4 py-2 font-medium text-xs text-muted-foreground">Actions</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {/* Token-based model rows (collapsible) */}
+                        {group.tokenModels.map((mg) => {
+                          const modelKey = `${mg.provider}::${mg.model}`;
+                          const isExpanded = expandedTokenModels.has(modelKey);
+                          const markups = mg.entries.map((e) => e.platform_markup);
+                          const allSame = markups.every((m) => m === markups[0]);
+                          const inputPrice = mg.entries[0].cost_per_input_token;
+                          const outputPrice = mg.entries[0].cost_per_output_token;
+
+                          return (
+                            <Fragment key={modelKey}>
+                              <tr
+                                className={cn(
+                                  'border-b cursor-pointer hover:bg-muted/30 transition-colors',
+                                  isExpanded && 'bg-muted/20'
+                                )}
+                                onClick={() => {
+                                  setExpandedTokenModels((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(modelKey)) next.delete(modelKey);
+                                    else next.add(modelKey);
+                                    return next;
+                                  });
+                                }}
+                              >
+                                <td className="w-8 px-2 py-2.5 text-muted-foreground">
+                                  {isExpanded
+                                    ? <ChevronDown className="h-4 w-4" />
+                                    : <ChevronRight className="h-4 w-4" />}
+                                </td>
+                                <td className="px-4 py-2.5">
+                                  <span className="font-medium text-sm">{mg.model}</span>
+                                  <span className="text-xs text-muted-foreground ml-2">{mg.provider}</span>
+                                </td>
+                                <td className="text-right px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap">
+                                  {inputPrice ? `$${(inputPrice * 1_000_000).toFixed(2)}/1M in` : ''}
+                                  {inputPrice && outputPrice ? ' · ' : ''}
+                                  {outputPrice ? `$${(outputPrice * 1_000_000).toFixed(2)}/1M out` : ''}
+                                </td>
+                                <td className="text-right px-4 py-2.5 text-xs">
+                                  {allSame
+                                    ? `${markups[0]}x`
+                                    : <span className="text-muted-foreground italic">varies</span>}
+                                </td>
+                                <td className="text-right px-4 py-2.5">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setEditingModel({ provider: mg.provider, model: mg.model });
+                                      setModelEditForm({
+                                        cost_per_input_token: inputPrice || 0,
+                                        cost_per_output_token: outputPrice || 0,
+                                        cost_per_call: mg.entries[0].cost_per_call || 0,
+                                        operations: mg.entries.map((en) => ({
+                                          operation: en.operation,
+                                          platform_markup: en.platform_markup,
+                                        })),
+                                      });
+                                      setSetAllMarkup('');
+                                    }}
+                                    className="p-1 text-muted-foreground hover:text-foreground"
+                                    title="Edit model pricing"
+                                  >
+                                    <Pencil className="h-3.5 w-3.5" />
+                                  </button>
+                                </td>
+                              </tr>
+                              {isExpanded && mg.entries.map((e) => (
+                                <tr key={e.id} className="border-b bg-muted/10">
+                                  <td />
+                                  <td className="px-4 py-1.5 pl-10">
+                                    <span className="px-1.5 py-0.5 text-xs bg-muted rounded">{e.operation}</span>
+                                  </td>
+                                  <td />
+                                  <td className="text-right px-4 py-1.5 text-xs">{e.platform_markup}x</td>
+                                  <td />
+                                </tr>
+                              ))}
+                            </Fragment>
+                          );
+                        })}
+
+                        {/* Per-call entry rows */}
+                        {group.perCallEntries.map((entry: CostCatalogEntry) => (
+                          <tr key={entry.id} className="border-b last:border-0">
+                            <td className="w-8 px-2 py-2.5" />
+                            <td className="px-4 py-2.5">
+                              <span className="font-mono text-xs">{entry.model}</span>
+                              <span className="text-xs text-muted-foreground ml-2">{entry.provider}</span>
+                            </td>
+                            <td className="text-right px-4 py-2.5 font-mono text-xs">
+                              ${entry.cost_per_call?.toFixed(4) ?? '0'}/call
+                            </td>
+                            <td className="text-right px-4 py-2.5 text-xs">{entry.platform_markup}x</td>
+                            <td className="text-right px-4 py-2.5">
+                              <div className="flex items-center justify-end gap-1">
+                                <button
+                                  onClick={() => {
+                                    setEditingEntry(entry);
+                                    setCatalogForm({
+                                      provider: entry.provider,
+                                      model: entry.model,
+                                      operation: entry.operation,
+                                      cost_per_input_token: entry.cost_per_input_token || 0,
+                                      cost_per_output_token: entry.cost_per_output_token || 0,
+                                      cost_per_call: entry.cost_per_call || 0,
+                                      platform_markup: entry.platform_markup,
+                                    });
+                                    setShowCatalogForm(true);
+                                  }}
+                                  className="p-1 text-muted-foreground hover:text-foreground"
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    if (confirm('Delete this catalog entry?')) {
+                                      deleteCatalogMutation.mutate(entry.id);
+                                    }
+                                  }}
+                                  className="p-1 text-muted-foreground hover:text-red-500"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })}
           </div>
         )}
 
