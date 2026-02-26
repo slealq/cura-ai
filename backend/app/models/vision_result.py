@@ -1,7 +1,8 @@
 """Vision analysis result model for persisting AI vision outputs."""
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -37,8 +38,9 @@ class VisionResult(Base):
     result_tags: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     result_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    # Timing
+    # Timing & cost
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    charged_cost: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
 
     # Timestamp
     created_at: Mapped[datetime] = mapped_column(

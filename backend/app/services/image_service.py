@@ -291,6 +291,8 @@ class ImageService:
         described_at: datetime | None = None,
         tagging_duration_ms: int | None = None,
         caption_duration_ms: int | None = None,
+        embedded_at: datetime | None = None,
+        embedding_duration_ms: int | None = None,
     ) -> ImageMetadata | None:
         """Save or update image metadata."""
         metadata = self.db.query(ImageMetadata).filter(
@@ -329,6 +331,10 @@ class ImageService:
             metadata.tagging_duration_ms = tagging_duration_ms
         if caption_duration_ms is not None:
             metadata.caption_duration_ms = caption_duration_ms
+        if embedded_at is not None:
+            metadata.embedded_at = embedded_at
+        if embedding_duration_ms is not None:
+            metadata.embedding_duration_ms = embedding_duration_ms
 
         self.db.commit()
         self.db.refresh(metadata)

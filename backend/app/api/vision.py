@@ -3,6 +3,7 @@ import logging
 import time
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -45,6 +46,7 @@ class VisionTagResult(BaseModel):
     tags: list[str]
     model: str
     duration_ms: int | None = None
+    cost_sparks: float | None = None
 
 
 class VisionDescribeResult(BaseModel):
@@ -53,6 +55,7 @@ class VisionDescribeResult(BaseModel):
     description: str
     model: str
     duration_ms: int | None = None
+    cost_sparks: float | None = None
 
 
 class VisionSourceUploadResponse(BaseModel):
@@ -68,6 +71,7 @@ class VisionResultResponse(BaseModel):
     result_tags: list[str] | None = None
     result_text: str | None = None
     duration_ms: int | None = None
+    cost_sparks: float | None = None
     source_image_id: int | None = None
     source_generated_id: int | None = None
     source_object_key: str | None = None
@@ -79,6 +83,37 @@ class VisionResultListResponse(BaseModel):
     total: int
     skip: int
     limit: int
+
+
+USD_TO_SPARKS = Decimal("1000")
+
+
+def _get_latest_charged_cost(
+    db: Session, user_id: int, provider: str, model: str, operation: str,
+) -> Decimal | None:
+    """Query the most recent UsageRecord to get charged_cost for a vision call."""
+    from app.models.billing import UsageRecord
+
+    record = (
+        db.query(UsageRecord)
+        .filter(
+            UsageRecord.user_id == user_id,
+            UsageRecord.provider == provider,
+            UsageRecord.model == model,
+            UsageRecord.operation == operation,
+        )
+        .order_by(UsageRecord.created_at.desc())
+        .first()
+    )
+    if record and record.charged_cost:
+        return record.charged_cost
+    return None
+
+
+def _cost_to_sparks(charged_cost: Decimal | None) -> float | None:
+    if charged_cost:
+        return round(float(charged_cost * USD_TO_SPARKS), 2)
+    return None
 
 
 # --- Helpers ---
@@ -174,6 +209,7 @@ async def analyze_image(
             result = await tagger.tag_image(image_data, mime_type, prompt)
             duration_ms = int((time.perf_counter() - t0) * 1000)
 
+            charged_cost = _get_latest_charged_cost(db, current_user.id, request.provider, result.model, "tag")
             saved = vision_service.create_result(
                 mode="tag",
                 provider=request.provider,
@@ -184,8 +220,9 @@ async def analyze_image(
                 source_image_id=request.source_image_id,
                 source_generated_id=request.source_generated_id,
                 source_object_key=request.source_upload_key,
+                charged_cost=charged_cost,
             )
-            return VisionTagResult(id=saved.id, tags=result.tags, model=result.model, duration_ms=duration_ms)
+            return VisionTagResult(id=saved.id, tags=result.tags, model=result.model, duration_ms=duration_ms, cost_sparks=_cost_to_sparks(charged_cost))
 
         elif request.mode == "describe":
             if request.description_prompt is not None:
@@ -200,6 +237,7 @@ async def analyze_image(
             result = await describer.describe_image(image_data, mime_type, prompt)
             duration_ms = int((time.perf_counter() - t0) * 1000)
 
+            charged_cost = _get_latest_charged_cost(db, current_user.id, request.provider, result.model, "describe")
             saved = vision_service.create_result(
                 mode="describe",
                 provider=request.provider,
@@ -210,8 +248,9 @@ async def analyze_image(
                 source_image_id=request.source_image_id,
                 source_generated_id=request.source_generated_id,
                 source_object_key=request.source_upload_key,
+                charged_cost=charged_cost,
             )
-            return VisionDescribeResult(id=saved.id, mode="describe", description=result.description, model=result.model, duration_ms=duration_ms)
+            return VisionDescribeResult(id=saved.id, mode="describe", description=result.description, model=result.model, duration_ms=duration_ms, cost_sparks=_cost_to_sparks(charged_cost))
 
         else:  # custom
             prompt = request.custom_prompt
@@ -223,6 +262,7 @@ async def analyze_image(
             result = await describer.describe_image(image_data, mime_type, prompt)
             duration_ms = int((time.perf_counter() - t0) * 1000)
 
+            charged_cost = _get_latest_charged_cost(db, current_user.id, request.provider, result.model, "describe")
             saved = vision_service.create_result(
                 mode="custom",
                 provider=request.provider,
@@ -233,8 +273,9 @@ async def analyze_image(
                 source_image_id=request.source_image_id,
                 source_generated_id=request.source_generated_id,
                 source_object_key=request.source_upload_key,
+                charged_cost=charged_cost,
             )
-            return VisionDescribeResult(id=saved.id, mode="custom", description=result.description, model=result.model, duration_ms=duration_ms)
+            return VisionDescribeResult(id=saved.id, mode="custom", description=result.description, model=result.model, duration_ms=duration_ms, cost_sparks=_cost_to_sparks(charged_cost))
 
     except InsufficientBalanceError:
         raise HTTPException(status_code=402, detail="Insufficient credits")
@@ -267,6 +308,7 @@ async def list_results(
                 result_tags=r.result_tags,
                 result_text=r.result_text,
                 duration_ms=r.duration_ms,
+                cost_sparks=_cost_to_sparks(r.charged_cost),
                 source_image_id=r.source_image_id,
                 source_generated_id=r.source_generated_id,
                 source_object_key=r.source_object_key,

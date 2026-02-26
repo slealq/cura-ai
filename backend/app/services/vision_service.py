@@ -1,5 +1,6 @@
 """Service for managing vision analysis results."""
 import logging
+from decimal import Decimal
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -28,6 +29,7 @@ class VisionService:
         source_image_id: int | None = None,
         source_generated_id: int | None = None,
         source_object_key: str | None = None,
+        charged_cost: Decimal | None = None,
     ) -> VisionResult:
         """Persist a vision analysis result."""
         result = VisionResult(
@@ -42,6 +44,7 @@ class VisionService:
             source_image_id=source_image_id,
             source_generated_id=source_generated_id,
             source_object_key=source_object_key,
+            charged_cost=charged_cost,
         )
         self.db.add(result)
         self.db.commit()

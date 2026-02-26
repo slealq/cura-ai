@@ -159,6 +159,10 @@ class ImageMetadata(Base):
     tagging_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     caption_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Embed timing metadata
+    embedded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    embedding_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # Full-text search vector (managed by DB trigger)
     search_vector = mapped_column(TSVECTOR, nullable=True)
 
