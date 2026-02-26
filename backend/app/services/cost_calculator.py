@@ -60,12 +60,43 @@ def get_catalog_entry(
         )
         .all()
     )
+    # Sort by prefix length descending so longest (most specific) prefix wins
+    wildcards.sort(key=lambda wc: len(wc.model.replace("*", "")), reverse=True)
     for wc in wildcards:
         prefix = wc.model.replace("*", "")
         if model.startswith(prefix):
             return wc, "prefix"
 
     return None, "none"
+
+
+def estimate_sparks(
+    db: Session,
+    provider: str,
+    model: str,
+    operation: str,
+    estimated_input_tokens: int | None = None,
+    estimated_output_tokens: int | None = None,
+) -> tuple[int, CostCatalog | None]:
+    """Estimate cost in integer sparks. Used by all estimate endpoints.
+
+    Returns (sparks, catalog_entry).
+    """
+    entry, _ = get_catalog_entry(db, provider, model, operation)
+    if not entry:
+        return 0, None
+
+    raw = Decimal("0")
+    if entry.cost_per_call and entry.cost_per_call > 0:
+        raw += entry.cost_per_call
+    if estimated_input_tokens and entry.cost_per_input_token:
+        raw += entry.cost_per_input_token * estimated_input_tokens
+    if estimated_output_tokens and entry.cost_per_output_token:
+        raw += entry.cost_per_output_token * estimated_output_tokens
+
+    charged = raw * entry.platform_markup
+    sparks = int(charged * USD_TO_SPARKS)
+    return sparks, entry
 
 
 def calculate_cost(

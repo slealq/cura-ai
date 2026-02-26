@@ -41,6 +41,7 @@ class VisionResult(Base):
     # Timing & cost
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     charged_cost: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
+    charged_sparks: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Timestamp
     created_at: Mapped[datetime] = mapped_column(

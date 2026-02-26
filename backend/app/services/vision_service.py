@@ -30,6 +30,7 @@ class VisionService:
         source_generated_id: int | None = None,
         source_object_key: str | None = None,
         charged_cost: Decimal | None = None,
+        charged_sparks: int | None = None,
     ) -> VisionResult:
         """Persist a vision analysis result."""
         result = VisionResult(
@@ -45,6 +46,7 @@ class VisionService:
             source_generated_id=source_generated_id,
             source_object_key=source_object_key,
             charged_cost=charged_cost,
+            charged_sparks=charged_sparks,
         )
         self.db.add(result)
         self.db.commit()

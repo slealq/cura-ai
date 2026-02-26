@@ -432,10 +432,10 @@ function JobModel({ job }: { job: Job }) {
 }
 
 function JobCost({ job }: { job: Job }) {
-  if (job.charged_cost == null) return <span className="text-xs text-muted-foreground">-</span>;
+  const cost = job.charged_sparks ?? job.charged_cost;
+  if (cost == null) return <span className="text-xs text-muted-foreground">-</span>;
 
-  // charged_cost is stored in sparks
-  const sparks = Math.round(job.charged_cost);
+  const sparks = Math.round(cost);
 
   return (
     <span className="inline-flex items-center gap-0.5 text-xs font-medium text-amber-600 dark:text-amber-400">

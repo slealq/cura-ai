@@ -319,9 +319,12 @@ def _gen_to_response(gen, db: Session) -> GeneratedImageResponse:
     cost_sparks: float | None = None
     if gen.job_id:
         job = db.query(Job).filter(Job.id == gen.job_id).first()
-        if job and job.charged_cost is not None:
+        if job:
             total_items = max(job.total_items, 1)
-            cost_sparks = round(float(job.charged_cost) / total_items, 1)
+            if job.charged_sparks is not None:
+                cost_sparks = round(job.charged_sparks / total_items, 1)
+            elif job.charged_cost is not None:
+                cost_sparks = round(float(job.charged_cost) / total_items, 1)
 
     return GeneratedImageResponse(
         id=gen.id,

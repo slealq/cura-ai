@@ -108,6 +108,7 @@ class UserBalance(Base):
     balance: Mapped[Decimal] = mapped_column(
         Numeric(12, 4), nullable=False, default=Decimal("0")
     )
+    balance_sparks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     currency: Mapped[str] = mapped_column(String(16), nullable=False, default="credits")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
@@ -124,6 +125,7 @@ class BalanceTransaction(Base):
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    amount_sparks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     transaction_type: Mapped[TransactionType] = mapped_column(
         Enum(TransactionType, values_callable=lambda x: [e.value for e in x]),
         nullable=False,
@@ -140,6 +142,13 @@ class BalanceTransaction(Base):
 
     __table_args__ = (
         Index("ix_balance_transactions_user_created", "user_id", "created_at"),
+        Index(
+            "uq_balance_transactions_debit_reference",
+            "user_id",
+            "reference_id",
+            unique=True,
+            postgresql_where="reference_id IS NOT NULL AND transaction_type = 'debit'",
+        ),
     )
 
 

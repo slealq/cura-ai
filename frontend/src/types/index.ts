@@ -99,6 +99,7 @@ export interface Job {
   image_filename: string | null;
   image_thumbnail: string | null;
   charged_cost: number | null;
+  charged_sparks: number | null;
 }
 
 export interface StepResponse {

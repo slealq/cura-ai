@@ -4,6 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.base import SessionLocal
@@ -17,6 +18,7 @@ from app.models.billing import (
 from app.models.user import User
 from app.services.cost_calculator import USD_TO_SPARKS
 from app.services.cost_calculator import calculate_cost as _calc_cost
+from app.services.cost_calculator import estimate_sparks as _estimate_sparks
 from app.services.cost_calculator import get_catalog_entry as _get_catalog
 
 logger = logging.getLogger(__name__)
@@ -61,6 +63,7 @@ class BillingService:
             balance = UserBalance(
                 user_id=self.user_id,
                 balance=Decimal("0"),
+                balance_sparks=0,
                 currency="credits",
             )
             self.db.add(balance)
@@ -68,9 +71,9 @@ class BillingService:
             self.db.refresh(balance)
         return balance
 
-    def get_balance(self) -> Decimal:
-        """Get current credit balance."""
-        return self._get_or_create_balance().balance
+    def get_balance(self) -> int:
+        """Get current credit balance in integer sparks."""
+        return self._get_or_create_balance().balance_sparks
 
     def has_sufficient_balance(self) -> bool:
         """Check if user has balance > 0."""
@@ -89,11 +92,13 @@ class BillingService:
         """Add credits to user balance. Returns the transaction."""
         balance = self._get_or_create_balance()
         balance.balance += amount
+        balance.balance_sparks += int(amount)
         self.db.flush()
 
         txn = BalanceTransaction(
             user_id=self.user_id,
             amount=amount,
+            amount_sparks=int(amount),
             transaction_type=TransactionType.CREDIT,
             description=description,
             created_by=created_by,
@@ -116,7 +121,8 @@ class BillingService:
         # Ensure the balance row exists
         self._get_or_create_balance()
 
-        # Atomic: only debit if balance >= amount
+        # Atomic: only debit if balance >= amount (dual-write both columns)
+        int_amount = int(amount)
         rows_updated = (
             self.db.query(UserBalance)
             .filter(
@@ -124,7 +130,10 @@ class BillingService:
                 UserBalance.balance >= amount,
             )
             .update(
-                {UserBalance.balance: UserBalance.balance - amount},
+                {
+                    UserBalance.balance: UserBalance.balance - amount,
+                    UserBalance.balance_sparks: UserBalance.balance_sparks - int_amount,
+                },
                 synchronize_session="fetch",
             )
         )
@@ -141,13 +150,36 @@ class BillingService:
         txn = BalanceTransaction(
             user_id=self.user_id,
             amount=-amount,
+            amount_sparks=-int_amount,
             transaction_type=TransactionType.DEBIT,
             description=description,
             reference_id=usage_record_id,
             trace_id=get_trace_id(),
         )
         self.db.add(txn)
-        self.db.commit()
+        try:
+            self.db.commit()
+        except IntegrityError:
+            # Duplicate debit for this usage record — partial unique index caught it
+            self.db.rollback()
+            logger.warning(
+                "Duplicate debit blocked for user=%s reference_id=%s",
+                self.user_id, usage_record_id,
+            )
+            # Return the existing transaction
+            existing = (
+                self.db.query(BalanceTransaction)
+                .filter(
+                    BalanceTransaction.user_id == self.user_id,
+                    BalanceTransaction.reference_id == usage_record_id,
+                    BalanceTransaction.transaction_type == TransactionType.DEBIT,
+                )
+                .first()
+            )
+            if existing:
+                return existing
+            # Shouldn't happen, but re-raise if we can't find it
+            raise
         return txn
 
     # --- Usage recording ---
@@ -287,19 +319,19 @@ class BillingService:
 
         records = query.all()
 
-        total_cost = Decimal("0")
-        by_operation: dict[str, float] = {}
-        by_provider: dict[str, float] = {}
+        total_cost = 0
+        by_operation: dict[str, int] = {}
+        by_provider: dict[str, int] = {}
 
         for r in records:
-            sparks = r.charged_cost * USD_TO_SPARKS
+            sparks = r.delta_sparks if r.delta_sparks is not None else int(r.charged_cost * USD_TO_SPARKS)
             total_cost += sparks
             op_key = r.operation
-            by_operation[op_key] = by_operation.get(op_key, 0) + float(sparks)
-            by_provider[r.provider] = by_provider.get(r.provider, 0) + float(sparks)
+            by_operation[op_key] = by_operation.get(op_key, 0) + sparks
+            by_provider[r.provider] = by_provider.get(r.provider, 0) + sparks
 
         return {
-            "total_cost": float(total_cost),
+            "total_cost": total_cost,
             "by_operation": by_operation,
             "by_provider": by_provider,
             "record_count": len(records),
@@ -325,18 +357,13 @@ class BillingService:
     @staticmethod
     def get_generation_costs(db: Session) -> dict[str, dict[str, int]]:
         """Get per-image generation costs in sparks for each base model."""
-        svc = BillingService(db, user_id=0)  # user_id not used for catalog lookup
         result: dict[str, dict[str, int]] = {}
 
         for base_model, variants in BillingService.GENERATION_MODEL_MAP.items():
             costs: dict[str, int] = {}
             for variant_key, (provider, model, operation) in variants.items():
-                entry, _ = svc._get_catalog_entry(provider, model, operation)
-                if entry and entry.cost_per_call:
-                    charged_usd = entry.cost_per_call * entry.platform_markup
-                    costs[variant_key] = int(charged_usd * USD_TO_SPARKS)
-                else:
-                    costs[variant_key] = 0
+                sparks, _ = _estimate_sparks(db, provider, model, operation)
+                costs[variant_key] = sparks
             result[base_model] = costs
 
         return result
@@ -365,29 +392,19 @@ class BillingService:
         Post-run billing uses fal.ai's actual reported cost which accounts for
         resolution and output count variation.
         """
-        svc = BillingService(db, user_id=0)
         result: dict[str, int] = {}
         for edit_model, (provider, model, operation) in BillingService.EDIT_MODEL_MAP.items():
-            entry, _ = svc._get_catalog_entry(provider, model, operation)
-            if entry and entry.cost_per_call:
-                charged_usd = entry.cost_per_call * entry.platform_markup
-                result[edit_model] = int(charged_usd * USD_TO_SPARKS)
-            else:
-                result[edit_model] = 0
+            sparks, _ = _estimate_sparks(db, provider, model, operation)
+            result[edit_model] = sparks
         return result
 
     @staticmethod
     def get_training_costs(db: Session) -> dict[str, int]:
         """Get per-job training costs in sparks for each base model."""
-        svc = BillingService(db, user_id=0)
         result: dict[str, int] = {}
         for base_model, (provider, model, operation) in BillingService.TRAINING_MODEL_MAP.items():
-            entry, _ = svc._get_catalog_entry(provider, model, operation)
-            if entry and entry.cost_per_call:
-                charged_usd = entry.cost_per_call * entry.platform_markup
-                result[base_model] = int(charged_usd * USD_TO_SPARKS)
-            else:
-                result[base_model] = 0
+            sparks, _ = _estimate_sparks(db, provider, model, operation)
+            result[base_model] = sparks
         return result
 
     # --- Output token averages for cost estimation ---
@@ -524,7 +541,7 @@ class BillingService:
             .group_by(UsageRecord.user_id)
             .all()
         )
-        spent_map = {r.user_id: {"total_spent": float((r.total_spent or 0) * USD_TO_SPARKS), "last_activity": r.last_activity} for r in spent_query}
+        spent_map = {r.user_id: {"total_spent": int((r.total_spent or 0) * USD_TO_SPARKS), "last_activity": r.last_activity} for r in spent_query}
 
         output = []
         for user, balance in results:
@@ -533,7 +550,7 @@ class BillingService:
                 "user_id": user.id,
                 "email": user.email,
                 "display_name": user.display_name,
-                "balance": float(balance.balance) if balance else 0,
+                "balance": balance.balance_sparks if balance else 0,
                 "total_spent": spent_info["total_spent"],
                 "last_activity": spent_info["last_activity"].isoformat() if spent_info["last_activity"] else None,
             })
@@ -561,21 +578,21 @@ class BillingService:
         records = query.all()
 
         total_raw = Decimal("0")
-        total_charged = Decimal("0")
-        by_provider: dict[str, float] = {}
-        by_operation: dict[str, float] = {}
+        total_charged = 0
+        by_provider: dict[str, int] = {}
+        by_operation: dict[str, int] = {}
 
         for r in records:
             total_raw += r.raw_cost
-            total_charged += r.charged_cost
-            sparks = r.charged_cost * USD_TO_SPARKS
-            by_provider[r.provider] = by_provider.get(r.provider, 0) + float(sparks)
-            by_operation[r.operation] = by_operation.get(r.operation, 0) + float(sparks)
+            sparks = r.delta_sparks if r.delta_sparks is not None else int(r.charged_cost * USD_TO_SPARKS)
+            total_charged += sparks
+            by_provider[r.provider] = by_provider.get(r.provider, 0) + sparks
+            by_operation[r.operation] = by_operation.get(r.operation, 0) + sparks
 
         return {
             "total_raw_cost": float(total_raw),
-            "total_charged": float(total_charged * USD_TO_SPARKS),
-            "margin": float(total_charged - total_raw),
+            "total_charged": total_charged,
+            "margin": float(Decimal(str(total_charged)) / USD_TO_SPARKS - total_raw),
             "by_provider": by_provider,
             "by_operation": by_operation,
             "record_count": len(records),
@@ -685,6 +702,7 @@ def finalize_job_billing(
         job = db.query(Job).filter(Job.id == job_id).first()
         if job and job.charged_cost is None:
             job.charged_cost = Decimal("0")
+            job.charged_sparks = 0
             db.commit()
         return Decimal("0")
 
@@ -707,10 +725,11 @@ def finalize_job_billing(
             description=desc,
         )
 
-    # Set job.charged_cost
+    # Set job.charged_cost + charged_sparks (dual-write)
     job = db.query(Job).filter(Job.id == job_id).first()
     if job:
         job.charged_cost = total_sparks
+        job.charged_sparks = int(total_sparks)
         db.commit()
 
     logger.info(

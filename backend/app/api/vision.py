@@ -145,6 +145,12 @@ def _cost_to_sparks(charged_cost: Decimal | None) -> float | None:
     return None
 
 
+def _cost_to_int_sparks(charged_cost: Decimal | None) -> int | None:
+    if charged_cost:
+        return int(charged_cost * USD_TO_SPARKS)
+    return None
+
+
 # --- Helpers ---
 
 
@@ -278,6 +284,7 @@ async def analyze_image(
                 source_generated_id=request.source_generated_id,
                 source_object_key=request.source_upload_key,
                 charged_cost=charged_cost,
+                charged_sparks=_cost_to_int_sparks(charged_cost),
             )
             return VisionTagResult(id=saved.id, tags=result.tags, model=result.model, duration_ms=duration_ms, cost_sparks=_cost_to_sparks(charged_cost))
 
@@ -330,6 +337,7 @@ async def analyze_image(
                 source_generated_id=request.source_generated_id,
                 source_object_key=request.source_upload_key,
                 charged_cost=charged_cost,
+                charged_sparks=_cost_to_int_sparks(charged_cost),
             )
             return VisionDescribeResult(id=saved.id, mode="describe", description=result.description, model=result.model, duration_ms=duration_ms, cost_sparks=_cost_to_sparks(charged_cost))
 
@@ -379,6 +387,7 @@ async def analyze_image(
                 source_generated_id=request.source_generated_id,
                 source_object_key=request.source_upload_key,
                 charged_cost=charged_cost,
+                charged_sparks=_cost_to_int_sparks(charged_cost),
             )
             return VisionDescribeResult(id=saved.id, mode="custom", description=result.description, model=result.model, duration_ms=duration_ms, cost_sparks=_cost_to_sparks(charged_cost))
 

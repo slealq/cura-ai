@@ -18,6 +18,7 @@ from app.db.base import get_db
 from app.models.billing import CostCatalog, UsageRecord
 from app.models.user import User
 from app.services.billing_service import BillingService
+from app.services.cost_calculator import estimate_sparks as _estimate_sparks
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +28,13 @@ router = APIRouter(prefix="/billing", tags=["billing"])
 # --- Pydantic schemas ---
 
 class BalanceResponse(BaseModel):
-    balance: float
+    balance: int
     currency: str
 
 
 class TransactionResponse(BaseModel):
     id: int
-    amount: float
+    amount: int
     transaction_type: str
     description: str
     reference_id: int | None
@@ -117,7 +118,7 @@ class PlatformSummaryResponse(BaseModel):
 class GenerationCostsResponse(BaseModel):
     """Per-image generation cost in sparks for each base model."""
     costs: dict[str, dict[str, int]]
-    expand_prompt_cost: float
+    expand_prompt_cost: int
 
 
 class BillingLogEntryResponse(BaseModel):
@@ -153,7 +154,7 @@ def get_balance(
 ):
     svc = BillingService(db, current_user.id)
     balance = svc.get_balance()
-    return {"balance": float(balance), "currency": "credits"}
+    return {"balance": balance, "currency": "credits"}
 
 
 @router.get("/transactions", response_model=TransactionListResponse)
@@ -169,7 +170,7 @@ def get_transactions(
         "items": [
             {
                 "id": t.id,
-                "amount": float(t.amount),
+                "amount": t.amount_sparks,
                 "transaction_type": t.transaction_type.value,
                 "description": t.description,
                 "reference_id": t.reference_id,
@@ -203,22 +204,20 @@ def get_generation_costs(
     """Get per-image generation cost in sparks for each base model."""
     from app.services.token_estimator import estimate_prompt_tokens
 
-    svc = BillingService(db, user_id=0)
-    entry = svc._get_catalog_entry("openai", "gpt-4o-mini", "expand_prompt")
-    expand_cost = 0.0
-    if entry and entry.cost_per_input_token and entry.cost_per_output_token:
-        # Estimate from typical prompt length (~100 tokens) and DB avg or default 200
-        input_tokens = estimate_prompt_tokens("Expand this prompt into a detailed description")
-        db_avg_out = BillingService.get_average_output_tokens(
-            db, "openai", "gpt-4o-mini", "expand_prompt",
-        )
-        output_tokens = db_avg_out if db_avg_out is not None else 200
-        raw = entry.cost_per_input_token * input_tokens + entry.cost_per_output_token * output_tokens
-        charged = raw * entry.platform_markup
-        expand_cost = float(charged * Decimal("1000"))  # USD to sparks
+    # Estimate expand_prompt cost using estimate_sparks()
+    input_tokens = estimate_prompt_tokens("Expand this prompt into a detailed description")
+    db_avg_out = BillingService.get_average_output_tokens(
+        db, "openai", "gpt-4o-mini", "expand_prompt",
+    )
+    output_tokens = db_avg_out if db_avg_out is not None else 200
+    expand_sparks, _ = _estimate_sparks(
+        db, "openai", "gpt-4o-mini", "expand_prompt",
+        estimated_input_tokens=input_tokens,
+        estimated_output_tokens=output_tokens,
+    )
     return {
         "costs": BillingService.get_generation_costs(db),
-        "expand_prompt_cost": round(expand_cost, 1),
+        "expand_prompt_cost": expand_sparks,
     }
 
 
@@ -297,21 +296,18 @@ def _compute_vision_costs(
         estimate_prompt_tokens,
     )
 
-    svc = BillingService(db, user_id=0)
-
     # Get user's active composed prompt text
     settings_svc = SettingsService(db, user_id)
     tag_prompt_text = settings_svc.get_tag_prompt()
     desc_prompt_text = settings_svc.get_description_prompt()
 
     # Embed cost (always OpenAI text-embedding-3-small)
-    embed_entry = svc._get_catalog_entry("openai", "text-embedding-3-small", "embed")
     embed_tokens = estimate_embed_tokens()
-    embed_cost_sparks = 0.0
-    if embed_entry and embed_entry.cost_per_input_token:
-        raw = embed_entry.cost_per_input_token * embed_tokens
-        charged = raw * embed_entry.platform_markup
-        embed_cost_sparks = round(float(charged * Decimal("1000")), 1)
+    embed_cost_sparks_int, _ = _estimate_sparks(
+        db, "openai", "text-embedding-3-small", "embed",
+        estimated_input_tokens=embed_tokens,
+    )
+    embed_cost_sparks = float(embed_cost_sparks_int)
 
     result: dict[str, dict[str, dict[str, float]]] = {}
 
@@ -333,28 +329,21 @@ def _compute_vision_costs(
                 input_tokens = img_tokens + prompt_tokens
                 output_tokens = estimate_output_tokens(model_id, mode)
 
-                entry = svc._get_catalog_entry(cat_provider, model_id, operation)
-                if entry and entry.cost_per_input_token and entry.cost_per_output_token:
-                    in_cost = entry.cost_per_input_token * input_tokens
-                    out_cost = entry.cost_per_output_token * output_tokens
-                    raw = in_cost + out_cost
-                    charged = raw * entry.platform_markup
-                    sparks = round(float(charged * Decimal("1000")), 1)
-                    costs[mode] = sparks
+                sparks_est, entry = _estimate_sparks(
+                    db, cat_provider, model_id, operation,
+                    estimated_input_tokens=input_tokens,
+                    estimated_output_tokens=output_tokens,
+                )
+                costs[mode] = float(sparks_est)
+                if entry:
                     logger.info(
                         "ESTIMATE | %s/%s %s %dx%d | "
                         "img_tok=%d + prompt_tok=%d(%dchars) = in=%d | "
-                        "out=%d | "
-                        "in_cost=$%.6f + out_cost=$%.6f = raw=$%.6f | "
-                        "markup=%.1fx → sparks=%.1f",
+                        "out=%d | sparks=%d",
                         cat_provider, model_id, mode, width, height,
                         img_tokens, prompt_tokens, len(prompt_text), input_tokens,
-                        output_tokens,
-                        float(in_cost), float(out_cost), float(raw),
-                        float(entry.platform_markup), sparks,
+                        output_tokens, sparks_est,
                     )
-                else:
-                    costs[mode] = 0
 
             costs["embed"] = embed_cost_sparks
             costs["total"] = round(
@@ -447,7 +436,7 @@ def admin_add_credits(
         created_by=current_user.id,
     )
     balance = svc.get_balance()
-    return {"balance": float(balance), "currency": "credits"}
+    return {"balance": balance, "currency": "credits"}
 
 
 @router.get("/admin/summary", response_model=PlatformSummaryResponse)
@@ -857,7 +846,7 @@ def admin_get_trace(
         "transactions": [
             {
                 "id": t.id,
-                "amount": float(t.amount),
+                "amount": t.amount_sparks,
                 "transaction_type": t.transaction_type.value if hasattr(t.transaction_type, 'value') else str(t.transaction_type),
                 "description": t.description,
                 "created_at": t.created_at.isoformat(),
