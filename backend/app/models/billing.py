@@ -78,6 +78,13 @@ class UsageRecord(Base):
     raw_cost: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False)
     charged_cost: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False)
     detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    cost_decision_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("cost_decisions.id", ondelete="SET NULL"), nullable=True
+    )
+    provider_request_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    delta_sparks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    delta_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )
@@ -85,6 +92,7 @@ class UsageRecord(Base):
     __table_args__ = (
         Index("ix_usage_records_user_created", "user_id", "created_at"),
         Index("ix_usage_records_user_operation", "user_id", "operation"),
+        Index("ix_usage_records_cost_decision_id", "cost_decision_id"),
     )
 
 
@@ -125,10 +133,35 @@ class BalanceTransaction(Base):
     created_by: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("users.id"), nullable=True
     )
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )
 
     __table_args__ = (
         Index("ix_balance_transactions_user_created", "user_id", "created_at"),
+    )
+
+
+class BillingAnomaly(Base):
+    """Records billing anomalies (catalog misses, unexpected states)."""
+
+    __tablename__ = "billing_anomalies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    anomaly_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    operation: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    resolved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_billing_anomalies_type_created", "anomaly_type", "created_at"),
     )

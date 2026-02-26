@@ -8,6 +8,7 @@ from app.models.billing import (
     UserBalance,
 )
 from app.models.cluster import Cluster, ClusteringMethod, ClusterMembership
+from app.models.cost_decision import CostDecision, DecisionStatus
 from app.models.folder import Folder, FolderImage
 from app.models.generated_image import GeneratedImage, GenerationStatus
 from app.models.image import Image, ImageMetadata, ImageSource, ImageStatus
@@ -26,6 +27,8 @@ __all__ = [
     "APIProvider",
     "BalanceTransaction",
     "CostCatalog",
+    "CostDecision",
+    "DecisionStatus",
     "TransactionType",
     "UsageRecord",
     "UserBalance",

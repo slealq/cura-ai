@@ -3,11 +3,24 @@ import logging
 import ssl
 
 from celery import Celery
-from celery.signals import worker_ready
+from celery.signals import setup_logging, worker_ready
 
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+@setup_logging.connect
+def configure_worker_logging(**kwargs):
+    """Configure Celery worker logging with trace_id filter."""
+    from app.services.billing_context import TraceIdFilter
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - [trace=%(trace_id)s] %(message)s",
+        force=True,
+    )
+    logging.getLogger().addFilter(TraceIdFilter())
 
 settings = get_settings()
 

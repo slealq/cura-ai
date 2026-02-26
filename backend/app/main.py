@@ -7,11 +7,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import api_router
 from app.core.config import get_settings
 
-# Configure logging
+# Configure logging with trace_id support
+from app.services.billing_context import TraceIdFilter
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(name)s - %(levelname)s - [trace=%(trace_id)s] %(message)s",
 )
+logging.getLogger().addFilter(TraceIdFilter())
 logger = logging.getLogger(__name__)
 
 settings = get_settings()

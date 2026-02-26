@@ -13,6 +13,14 @@ from sqlalchemy.orm import Session
 from app.core.security import get_current_user
 from app.db.base import get_db
 from app.models.user import User
+from app.services.billing_context import (
+    clear_last_api_call_tokens,
+    get_last_api_call_tokens,
+    init_trace,
+    make_idempotency_key,
+    set_billing_user,
+)
+from app.services.billing_orchestrator import ORCHESTRATOR_ENABLED_OPS, BillingOrchestrator
 from app.services.billing_service import InsufficientBalanceError
 from app.services.vision_service import get_vision_service
 
@@ -88,10 +96,31 @@ class VisionResultListResponse(BaseModel):
 USD_TO_SPARKS = Decimal("1000")
 
 
+def _get_charged_cost_from_context(db: Session) -> Decimal | None:
+    """Get charged_cost from the most recently recorded UsageRecord via thread-local context.
+
+    This is race-free: the billing context stores the exact record ID created
+    by record_usage_standalone(), so concurrent requests don't interfere.
+    """
+    from app.models.billing import UsageRecord
+    from app.services.billing_context import get_last_usage_record_id
+
+    record_id = get_last_usage_record_id()
+    if not record_id:
+        return None
+    record = db.query(UsageRecord).filter(UsageRecord.id == record_id).first()
+    if record and record.charged_cost:
+        return record.charged_cost
+    return None
+
+
 def _get_latest_charged_cost(
     db: Session, user_id: int, provider: str, model: str, operation: str,
 ) -> Decimal | None:
-    """Query the most recent UsageRecord to get charged_cost for a vision call."""
+    """Fallback: query the most recent UsageRecord by filters.
+
+    Used only when _get_charged_cost_from_context() returns None (backward compat).
+    """
     from app.models.billing import UsageRecord
 
     record = (
@@ -195,6 +224,10 @@ async def analyze_image(
     settings_service = get_settings_service(db, current_user.id)
     vision_service = get_vision_service(db, current_user.id)
 
+    # Init billing context for orchestrator
+    set_billing_user(current_user.id)
+    trace_id = init_trace()
+
     try:
         if request.mode == "tag":
             if request.tag_prompt is not None:
@@ -205,11 +238,35 @@ async def analyze_image(
                 provider=request.provider, db=db, user_id=current_user.id, model=request.model,
                 temperature=request.temperature, max_tokens_override=request.max_tokens,
             )
+
+            operation = "tag"
+            orch = BillingOrchestrator(db, current_user.id) if operation in ORCHESTRATOR_ENABLED_OPS else None
+            decision = None
+            charged_cost = None
+
+            if orch:
+                idem_key = make_idempotency_key(current_user.id, trace_id, operation, request.source_image_id or request.source_generated_id)
+                decision, is_new = orch.create_decision(
+                    operation=operation, provider=request.provider, model=tagger.get_model_name(),
+                    trace_id=trace_id, idempotency_key=idem_key,
+                    image_id=request.source_image_id,
+                )
+
             t0 = time.perf_counter()
             result = await tagger.tag_image(image_data, mime_type, prompt)
             duration_ms = int((time.perf_counter() - t0) * 1000)
 
-            charged_cost = _get_latest_charged_cost(db, current_user.id, request.provider, result.model, "tag")
+            if orch and decision:
+                in_tok, out_tok, prov_cost = get_last_api_call_tokens()
+                clear_last_api_call_tokens()
+                usage_record = orch.record_actual(
+                    decision.id, actual_input_tokens=in_tok,
+                    actual_output_tokens=out_tok, provider_cost=prov_cost,
+                )
+                charged_cost = usage_record.charged_cost
+            else:
+                charged_cost = _get_charged_cost_from_context(db) or _get_latest_charged_cost(db, current_user.id, request.provider, result.model, "tag")
+
             saved = vision_service.create_result(
                 mode="tag",
                 provider=request.provider,
@@ -233,11 +290,35 @@ async def analyze_image(
                 provider=request.provider, db=db, user_id=current_user.id, model=request.model,
                 temperature=request.temperature, max_tokens_override=request.max_tokens,
             )
+
+            operation = "describe"
+            orch = BillingOrchestrator(db, current_user.id) if operation in ORCHESTRATOR_ENABLED_OPS else None
+            decision = None
+            charged_cost = None
+
+            if orch:
+                idem_key = make_idempotency_key(current_user.id, trace_id, operation, request.source_image_id or request.source_generated_id)
+                decision, is_new = orch.create_decision(
+                    operation=operation, provider=request.provider, model=describer.get_model_name(),
+                    trace_id=trace_id, idempotency_key=idem_key,
+                    image_id=request.source_image_id,
+                )
+
             t0 = time.perf_counter()
             result = await describer.describe_image(image_data, mime_type, prompt)
             duration_ms = int((time.perf_counter() - t0) * 1000)
 
-            charged_cost = _get_latest_charged_cost(db, current_user.id, request.provider, result.model, "describe")
+            if orch and decision:
+                in_tok, out_tok, prov_cost = get_last_api_call_tokens()
+                clear_last_api_call_tokens()
+                usage_record = orch.record_actual(
+                    decision.id, actual_input_tokens=in_tok,
+                    actual_output_tokens=out_tok, provider_cost=prov_cost,
+                )
+                charged_cost = usage_record.charged_cost
+            else:
+                charged_cost = _get_charged_cost_from_context(db) or _get_latest_charged_cost(db, current_user.id, request.provider, result.model, "describe")
+
             saved = vision_service.create_result(
                 mode="describe",
                 provider=request.provider,
@@ -258,11 +339,35 @@ async def analyze_image(
                 provider=request.provider, db=db, user_id=current_user.id, model=request.model,
                 temperature=request.temperature, max_tokens_override=request.max_tokens,
             )
+
+            operation = "describe"
+            orch = BillingOrchestrator(db, current_user.id) if operation in ORCHESTRATOR_ENABLED_OPS else None
+            decision = None
+            charged_cost = None
+
+            if orch:
+                idem_key = make_idempotency_key(current_user.id, trace_id, "custom", request.source_image_id or request.source_generated_id)
+                decision, is_new = orch.create_decision(
+                    operation=operation, provider=request.provider, model=describer.get_model_name(),
+                    trace_id=trace_id, idempotency_key=idem_key,
+                    image_id=request.source_image_id,
+                )
+
             t0 = time.perf_counter()
             result = await describer.describe_image(image_data, mime_type, prompt)
             duration_ms = int((time.perf_counter() - t0) * 1000)
 
-            charged_cost = _get_latest_charged_cost(db, current_user.id, request.provider, result.model, "describe")
+            if orch and decision:
+                in_tok, out_tok, prov_cost = get_last_api_call_tokens()
+                clear_last_api_call_tokens()
+                usage_record = orch.record_actual(
+                    decision.id, actual_input_tokens=in_tok,
+                    actual_output_tokens=out_tok, provider_cost=prov_cost,
+                )
+                charged_cost = usage_record.charged_cost
+            else:
+                charged_cost = _get_charged_cost_from_context(db) or _get_latest_charged_cost(db, current_user.id, request.provider, result.model, "describe")
+
             saved = vision_service.create_result(
                 mode="custom",
                 provider=request.provider,

@@ -609,3 +609,86 @@ export interface BillingLogListResponse {
   skip: number;
   limit: number;
 }
+
+// --- Operations Monitor types ---
+
+export interface CostDecisionEntry {
+  id: number;
+  trace_id: string | null;
+  user_id: number;
+  job_id: number | null;
+  operation: string;
+  provider: string;
+  model: string;
+  catalog_entry_id: number | null;
+  catalog_match_tier: string | null;
+  estimated_input_tokens: number | null;
+  estimated_output_tokens: number | null;
+  estimated_sparks: number | null;
+  cost_per_input_token: number | null;
+  cost_per_output_token: number | null;
+  cost_per_call: number | null;
+  platform_markup: number | null;
+  billing_model: string | null;
+  image_id: number | null;
+  resource_id: number | null;
+  request_snapshot: Record<string, unknown> | null;
+  response_snapshot: Record<string, unknown> | null;
+  status: string;
+  error_message: string | null;
+  idempotency_key: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DecisionListResponse {
+  items: CostDecisionEntry[];
+  total: number;
+  skip: number;
+  limit: number;
+}
+
+export interface TraceUsageRecord {
+  id: number;
+  user_id: number;
+  operation: string;
+  provider: string;
+  model: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  raw_cost: number;
+  charged_cost: number;
+  cost_decision_id: number | null;
+  delta_sparks: number | null;
+  created_at: string;
+}
+
+export interface TracePipelineLog {
+  id: number;
+  category: string;
+  message: string;
+  provider: string | null;
+  model: string | null;
+  operation: string | null;
+  duration_ms: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  success: boolean | null;
+  created_at: string;
+}
+
+export interface TraceTransaction {
+  id: number;
+  amount: number;
+  transaction_type: string;
+  description: string;
+  created_at: string;
+}
+
+export interface TraceResponse {
+  trace_id: string;
+  decisions: CostDecisionEntry[];
+  usage_records: TraceUsageRecord[];
+  pipeline_logs: TracePipelineLog[];
+  transactions: TraceTransaction[];
+}

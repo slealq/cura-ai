@@ -70,6 +70,10 @@ class PipelineLog(Base):
     # Overflow / extra context
     extra: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # Billing tracking
+    billing_failed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+
     # Timestamp
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False, index=True

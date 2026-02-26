@@ -11,6 +11,7 @@ import type {
   ClusteringConfig,
   ClusterListResponse,
   CostCatalogEntry,
+  DecisionListResponse,
   EditConfig,
   EditCosts,
   EvaluationListResponse,
@@ -40,6 +41,7 @@ import type {
   SearchResponse,
   StepResponse,
   TokenResponse,
+  TraceResponse,
   TrainingConfig,
   TrainingCosts,
   TransactionListResponse,
@@ -1310,6 +1312,27 @@ export const billingApi = {
     end_date?: string;
   }): Promise<BillingLogListResponse> => {
     const { data } = await api.get('/billing/admin/logs', { params });
+    return data;
+  },
+
+  adminSearchOperations: async (params?: {
+    skip?: number;
+    limit?: number;
+    trace_id?: string;
+    job_id?: number;
+    user_id?: number;
+    image_id?: number;
+    operation?: string;
+    status?: string;
+    start_date?: string;
+    end_date?: string;
+  }): Promise<DecisionListResponse> => {
+    const { data } = await api.get('/billing/admin/operations', { params });
+    return data;
+  },
+
+  adminGetTrace: async (traceId: string): Promise<TraceResponse> => {
+    const { data } = await api.get(`/billing/admin/trace/${traceId}`);
     return data;
   },
 };

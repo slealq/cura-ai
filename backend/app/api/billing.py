@@ -2,6 +2,7 @@
 import logging
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -662,3 +663,288 @@ def admin_delete_catalog_entry(
     if not success:
         raise HTTPException(status_code=404, detail="Catalog entry not found")
     return {"status": "deleted"}
+
+
+# --- Operations Monitor schemas ---
+
+
+class CostDecisionResponse(BaseModel):
+    id: int
+    trace_id: str | None
+    user_id: int
+    job_id: int | None
+    operation: str
+    provider: str
+    model: str
+    catalog_entry_id: int | None
+    catalog_match_tier: str | None
+    estimated_input_tokens: int | None
+    estimated_output_tokens: int | None
+    estimated_sparks: int | None
+    cost_per_input_token: float | None
+    cost_per_output_token: float | None
+    cost_per_call: float | None
+    platform_markup: float | None
+    billing_model: str | None
+    image_id: int | None
+    resource_id: int | None
+    request_snapshot: dict[str, Any] | None
+    response_snapshot: dict[str, Any] | None
+    status: str
+    error_message: str | None
+    idempotency_key: str | None
+    created_at: str
+    updated_at: str
+
+
+class DecisionListResponse(BaseModel):
+    items: list[CostDecisionResponse]
+    total: int
+    skip: int
+    limit: int
+
+
+class TraceUsageRecordResponse(BaseModel):
+    id: int
+    user_id: int
+    operation: str
+    provider: str
+    model: str
+    input_tokens: int | None
+    output_tokens: int | None
+    raw_cost: float
+    charged_cost: float
+    cost_decision_id: int | None
+    delta_sparks: int | None
+    created_at: str
+
+
+class TracePipelineLogResponse(BaseModel):
+    id: int
+    category: str
+    message: str
+    provider: str | None
+    model: str | None
+    operation: str | None
+    duration_ms: float | None
+    input_tokens: int | None
+    output_tokens: int | None
+    success: bool | None
+    created_at: str
+
+
+class TraceTransactionResponse(BaseModel):
+    id: int
+    amount: float
+    transaction_type: str
+    description: str
+    created_at: str
+
+
+class TraceResponse(BaseModel):
+    trace_id: str
+    decisions: list[CostDecisionResponse]
+    usage_records: list[TraceUsageRecordResponse]
+    pipeline_logs: list[TracePipelineLogResponse]
+    transactions: list[TraceTransactionResponse]
+
+
+# --- Operations Monitor endpoints ---
+
+
+@router.get("/admin/trace/{trace_id}", response_model=TraceResponse)
+def admin_get_trace(
+    trace_id: str,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Get all billing records associated with a trace ID."""
+    from app.models.billing import BalanceTransaction
+    from app.models.cost_decision import CostDecision
+    from app.models.pipeline_log import PipelineLog
+
+    decisions = (
+        db.query(CostDecision)
+        .filter(CostDecision.trace_id == trace_id)
+        .order_by(CostDecision.created_at)
+        .all()
+    )
+    usage_records = (
+        db.query(UsageRecord)
+        .filter(UsageRecord.trace_id == trace_id)
+        .order_by(UsageRecord.created_at)
+        .all()
+    )
+    pipeline_logs = (
+        db.query(PipelineLog)
+        .filter(PipelineLog.trace_id == trace_id)
+        .order_by(PipelineLog.created_at)
+        .all()
+    )
+    transactions = (
+        db.query(BalanceTransaction)
+        .filter(BalanceTransaction.trace_id == trace_id)
+        .order_by(BalanceTransaction.created_at)
+        .all()
+    )
+
+    return {
+        "trace_id": trace_id,
+        "decisions": [
+            {
+                "id": d.id,
+                "trace_id": d.trace_id,
+                "user_id": d.user_id,
+                "job_id": d.job_id,
+                "operation": d.operation,
+                "provider": d.provider,
+                "model": d.model,
+                "catalog_entry_id": d.catalog_entry_id,
+                "catalog_match_tier": d.catalog_match_tier,
+                "estimated_input_tokens": d.estimated_input_tokens,
+                "estimated_output_tokens": d.estimated_output_tokens,
+                "estimated_sparks": d.estimated_sparks,
+                "cost_per_input_token": float(d.cost_per_input_token) if d.cost_per_input_token else None,
+                "cost_per_output_token": float(d.cost_per_output_token) if d.cost_per_output_token else None,
+                "cost_per_call": float(d.cost_per_call) if d.cost_per_call else None,
+                "platform_markup": float(d.platform_markup) if d.platform_markup else None,
+                "billing_model": d.billing_model,
+                "image_id": d.image_id,
+                "resource_id": d.resource_id,
+                "request_snapshot": d.request_snapshot,
+                "response_snapshot": d.response_snapshot,
+                "status": d.status,
+                "error_message": d.error_message,
+                "idempotency_key": d.idempotency_key,
+                "created_at": d.created_at.isoformat(),
+                "updated_at": d.updated_at.isoformat(),
+            }
+            for d in decisions
+        ],
+        "usage_records": [
+            {
+                "id": r.id,
+                "user_id": r.user_id,
+                "operation": r.operation,
+                "provider": r.provider,
+                "model": r.model,
+                "input_tokens": r.input_tokens,
+                "output_tokens": r.output_tokens,
+                "raw_cost": float(r.raw_cost),
+                "charged_cost": float(r.charged_cost),
+                "cost_decision_id": r.cost_decision_id,
+                "delta_sparks": r.delta_sparks,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in usage_records
+        ],
+        "pipeline_logs": [
+            {
+                "id": p.id,
+                "category": p.category.value if hasattr(p.category, 'value') else str(p.category),
+                "message": p.message,
+                "provider": p.provider,
+                "model": p.model,
+                "operation": p.operation,
+                "duration_ms": p.duration_ms,
+                "input_tokens": p.input_tokens,
+                "output_tokens": p.output_tokens,
+                "success": p.success,
+                "created_at": p.created_at.isoformat(),
+            }
+            for p in pipeline_logs
+        ],
+        "transactions": [
+            {
+                "id": t.id,
+                "amount": float(t.amount),
+                "transaction_type": t.transaction_type.value if hasattr(t.transaction_type, 'value') else str(t.transaction_type),
+                "description": t.description,
+                "created_at": t.created_at.isoformat(),
+            }
+            for t in transactions
+        ],
+    }
+
+
+@router.get("/admin/operations", response_model=DecisionListResponse)
+def admin_search_operations(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    trace_id: str | None = None,
+    job_id: int | None = None,
+    user_id: int | None = None,
+    image_id: int | None = None,
+    operation: str | None = None,
+    status: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Search cost decisions with filters."""
+    from app.models.cost_decision import CostDecision
+
+    query = db.query(CostDecision)
+
+    if trace_id:
+        query = query.filter(CostDecision.trace_id == trace_id)
+    if job_id is not None:
+        query = query.filter(CostDecision.job_id == job_id)
+    if user_id is not None:
+        query = query.filter(CostDecision.user_id == user_id)
+    if image_id is not None:
+        query = query.filter(CostDecision.image_id == image_id)
+    if operation:
+        query = query.filter(CostDecision.operation == operation)
+    if status:
+        query = query.filter(CostDecision.status == status)
+    if start_date:
+        query = query.filter(CostDecision.created_at >= datetime.fromisoformat(start_date))
+    if end_date:
+        query = query.filter(CostDecision.created_at <= datetime.fromisoformat(end_date))
+
+    total = query.count()
+    rows = (
+        query.order_by(CostDecision.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+
+    return {
+        "items": [
+            {
+                "id": d.id,
+                "trace_id": d.trace_id,
+                "user_id": d.user_id,
+                "job_id": d.job_id,
+                "operation": d.operation,
+                "provider": d.provider,
+                "model": d.model,
+                "catalog_entry_id": d.catalog_entry_id,
+                "catalog_match_tier": d.catalog_match_tier,
+                "estimated_input_tokens": d.estimated_input_tokens,
+                "estimated_output_tokens": d.estimated_output_tokens,
+                "estimated_sparks": d.estimated_sparks,
+                "cost_per_input_token": float(d.cost_per_input_token) if d.cost_per_input_token else None,
+                "cost_per_output_token": float(d.cost_per_output_token) if d.cost_per_output_token else None,
+                "cost_per_call": float(d.cost_per_call) if d.cost_per_call else None,
+                "platform_markup": float(d.platform_markup) if d.platform_markup else None,
+                "billing_model": d.billing_model,
+                "image_id": d.image_id,
+                "resource_id": d.resource_id,
+                "request_snapshot": d.request_snapshot,
+                "response_snapshot": d.response_snapshot,
+                "status": d.status,
+                "error_message": d.error_message,
+                "idempotency_key": d.idempotency_key,
+                "created_at": d.created_at.isoformat(),
+                "updated_at": d.updated_at.isoformat(),
+            }
+            for d in rows
+        ],
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+    }

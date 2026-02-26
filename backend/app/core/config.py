@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     batch_size: int = 10
     rate_limit_per_minute: int = 60
 
+    # Billing
+    billing_strict_mode: bool = False
+
     # Auth / JWT
     jwt_secret_key: str = "change-me-in-production-jwt-secret"
     jwt_algorithm: str = "HS256"

@@ -35,13 +35,15 @@ def write_log(
         effective_image_id = image_id
         effective_user_id = user_id
         if category == LogCategory.API_CALL:
-            from app.services.billing_context import get_billing_image, get_billing_job, get_billing_user
+            from app.services.billing_context import get_billing_image, get_billing_job, get_billing_user, get_trace_id
             if effective_image_id is None:
                 effective_image_id = get_billing_image()
             if effective_user_id is None:
                 effective_user_id = get_billing_user()
             if job_id is None:
                 job_id = get_billing_job()
+        else:
+            from app.services.billing_context import get_trace_id
 
         entry = PipelineLog(
             user_id=effective_user_id,
@@ -59,6 +61,7 @@ def write_log(
             output_tokens=output_tokens,
             success=success,
             extra=extra,
+            trace_id=get_trace_id(),
         )
         db.add(entry)
         db.commit()
@@ -66,25 +69,39 @@ def write_log(
         # Record usage for successful API calls
         if category == LogCategory.API_CALL and success is True:
             from app.services.billing_context import get_billing_user, is_billing_deferred
+            from app.services.billing_orchestrator import ORCHESTRATOR_ENABLED_OPS
 
             effective_user_id = user_id or get_billing_user()
             if effective_user_id and provider and operation:
-                try:
-                    from app.services.billing_service import record_usage_standalone
+                # If this operation is managed by the orchestrator, store
+                # tokens in context for the orchestrator to pick up and
+                # skip the legacy record_usage_standalone() path.
+                if operation in ORCHESTRATOR_ENABLED_OPS:
+                    from app.services.billing_context import set_last_api_call_tokens
+                    set_last_api_call_tokens(input_tokens, output_tokens, provider_cost)
+                    entry.billing_failed = False
+                    db.commit()
+                else:
+                    try:
+                        from app.services.billing_service import record_usage_standalone
 
-                    record_usage_standalone(
-                        user_id=effective_user_id,
-                        provider=provider,
-                        model=model or "unknown",
-                        operation=operation,
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens,
-                        pipeline_log_id=entry.id,
-                        provider_cost=provider_cost,
-                        defer_debit=is_billing_deferred(),
-                    )
-                except Exception as usage_err:
-                    logger.warning(f"Failed to record usage: {usage_err}")
+                        record_usage_standalone(
+                            user_id=effective_user_id,
+                            provider=provider,
+                            model=model or "unknown",
+                            operation=operation,
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                            pipeline_log_id=entry.id,
+                            provider_cost=provider_cost,
+                            defer_debit=is_billing_deferred(),
+                        )
+                        entry.billing_failed = False
+                        db.commit()
+                    except Exception as usage_err:
+                        logger.error(f"Failed to record usage: {usage_err}", exc_info=True)
+                        entry.billing_failed = True
+                        db.commit()
     except Exception as e:
         logger.warning(f"Failed to write pipeline log: {e}")
         db.rollback()

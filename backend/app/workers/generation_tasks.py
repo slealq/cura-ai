@@ -19,7 +19,17 @@ from app.models.lora_model import LoraModelStatus
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers import get_describer, get_editor, get_embedder, get_evaluator, get_generator, get_trainer
 from app.providers.fal_provider import GenerationCancelledError
-from app.services.billing_context import set_billing_job, set_billing_user
+from app.services.billing_context import (
+    clear_last_api_call_tokens,
+    get_last_api_call_tokens,
+    get_trace_id,
+    init_trace,
+    make_idempotency_key,
+    set_billing_job,
+    set_billing_user,
+    set_trace_id,
+)
+from app.services.billing_orchestrator import ORCHESTRATOR_ENABLED_OPS, BillingOrchestrator
 from app.services.billing_service import InsufficientBalanceError, finalize_job_billing
 from app.services.evaluation_service import get_evaluation_service
 from app.services.generation_service import get_generation_service
@@ -210,6 +220,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
     task_start = time.monotonic()
     set_billing_user(user_id)
     set_billing_job(job_id)
+    init_trace()
     db = _get_db()
     try:
         # --- GUARD: Never re-submit training for already-completed models ---
@@ -453,7 +464,6 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
             progress=1,
             result={"lora_url": result.lora_url, "request_id": request_id},
         )
-        finalize_job_billing(db, user_id, job_id)
 
         # Best-effort download of weights — training already succeeded
         try:
@@ -502,12 +512,18 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
         raise
     finally:
+        if job_id:
+            try:
+                finalize_job_billing(db, user_id, job_id)
+            except Exception:
+                logger.warning(f"Failed to finalize billing for job {job_id}", exc_info=True)
+        set_trace_id(None)
         set_billing_user(None)
         set_billing_job(None)
         db.close()
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
 def generate_image(self, generated_image_id: int, job_id: int | None = None, user_id: int | None = None, from_batch: bool = False) -> dict:
     """
     Generate a single image via fal.ai.
@@ -522,6 +538,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
     task_start = time.monotonic()
     set_billing_user(user_id)
     set_billing_job(job_id)
+    init_trace()
     db = _get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -566,23 +583,54 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
 
         # Generate
         generator = get_generator(gen.generation_provider, db=db, base_model=gen.base_model, user_id=user_id)
-        result = _run_async(
-            generator.generate(
-                prompt=gen.prompt,
-                negative_prompt=gen.negative_prompt,
-                width=params.get("width", 1024),
-                height=params.get("height", 1024),
-                num_inference_steps=params.get("num_inference_steps", 28),
-                guidance_scale=params.get("guidance_scale", 3.5),
-                seed=params.get("seed"),
-                loras=loras_for_provider,
-                cancel_check=_is_cancelled,
-                resolution=params.get("resolution"),
-                aspect_ratio=params.get("aspect_ratio"),
-                safety_tolerance=params.get("safety_tolerance"),
-                enable_web_search=params.get("enable_web_search"),
+        trace_id = get_trace_id()
+        orch = BillingOrchestrator(db, user_id) if "generate" in ORCHESTRATOR_ENABLED_OPS else None
+        decision = None
+
+        if orch:
+            idem_key = make_idempotency_key(user_id, trace_id, "generate", generated_image_id)
+            decision, is_new = orch.create_decision(
+                operation="generate", provider=gen.generation_provider or "fal",
+                model=gen.base_model or "flux-dev",
+                trace_id=trace_id, idempotency_key=idem_key,
+                resource_id=generated_image_id, job_id=job_id,
             )
-        )
+            if not is_new:
+                logger.info("Duplicate generate detected for %s, skipping", generated_image_id)
+                _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
+                return {"status": "skipped", "generated_image_id": generated_image_id}
+
+        try:
+            result = _run_async(
+                generator.generate(
+                    prompt=gen.prompt,
+                    negative_prompt=gen.negative_prompt,
+                    width=params.get("width", 1024),
+                    height=params.get("height", 1024),
+                    num_inference_steps=params.get("num_inference_steps", 28),
+                    guidance_scale=params.get("guidance_scale", 3.5),
+                    seed=params.get("seed"),
+                    loras=loras_for_provider,
+                    cancel_check=_is_cancelled,
+                    resolution=params.get("resolution"),
+                    aspect_ratio=params.get("aspect_ratio"),
+                    safety_tolerance=params.get("safety_tolerance"),
+                    enable_web_search=params.get("enable_web_search"),
+                )
+            )
+        except Exception as e:
+            if orch and decision:
+                orch.fail_decision(decision.id, str(e))
+            raise
+
+        if orch and decision:
+            in_tok, out_tok, prov_cost = get_last_api_call_tokens()
+            clear_last_api_call_tokens()
+            orch.record_actual(
+                decision.id, actual_input_tokens=in_tok,
+                actual_output_tokens=out_tok, provider_cost=prov_cost,
+                defer_debit=False,
+            )
 
         # Save result
         _run_async(
@@ -597,9 +645,6 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
         )
 
         _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
-        # Finalize billing: aggregate costs onto job (batch parent will aggregate if from_batch)
-        if not from_batch:
-            finalize_job_billing(db, user_id, job_id)
 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(
@@ -661,6 +706,12 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
         raise
     finally:
+        if not from_batch and job_id:
+            try:
+                finalize_job_billing(db, user_id, job_id)
+            except Exception:
+                logger.warning(f"Failed to finalize billing for job {job_id}", exc_info=True)
+        set_trace_id(None)
         set_billing_user(None)
         set_billing_job(None)
         db.close()
@@ -681,7 +732,7 @@ def _mark_generated_images_cancelled(db: Session, generated_image_ids: list[int]
     db.commit()
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
 def batch_generate(self, generated_image_ids: list[int], job_id: int | None = None, user_id: int | None = None) -> dict:
     """
     Generate multiple images. Dispatches individual generate_image tasks and polls for completion.
@@ -696,6 +747,7 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
     task_start = time.monotonic()
     set_billing_user(user_id)
     set_billing_job(job_id)
+    init_trace()
     db = _get_db()
     try:
         job = db.query(Job).filter(Job.id == job_id).first() if job_id else None
@@ -763,9 +815,6 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
             }
             db.commit()
 
-        # Aggregate all child costs onto the batch job
-        finalize_job_billing(db, user_id, job_id)
-
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(
             category=LogCategory.TASK,
@@ -799,6 +848,12 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
                 db.commit()
         raise
     finally:
+        if job_id:
+            try:
+                finalize_job_billing(db, user_id, job_id)
+            except Exception:
+                logger.warning(f"Failed to finalize billing for job {job_id}", exc_info=True)
+        set_trace_id(None)
         set_billing_user(None)
         set_billing_job(None)
         db.close()
@@ -851,7 +906,7 @@ def _resolve_edit_sources(db: Session, gen_params: dict, user_id: int) -> list[s
     return data_uris
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
 def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id: int | None = None, from_batch: bool = False) -> dict:
     """Edit an image via fal.ai."""
     write_log(
@@ -864,6 +919,7 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
     task_start = time.monotonic()
     set_billing_user(user_id)
     set_billing_job(job_id)
+    init_trace()
     db = _get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -922,7 +978,37 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
             edit_kwargs["enable_web_search"] = params["enable_web_search"]
 
         editor = get_editor(db=db, edit_model=edit_model, user_id=user_id)
-        result = _run_async(editor.edit(**edit_kwargs))
+        trace_id = get_trace_id()
+        orch = BillingOrchestrator(db, user_id) if "edit" in ORCHESTRATOR_ENABLED_OPS else None
+        decision = None
+
+        if orch:
+            idem_key = make_idempotency_key(user_id, trace_id, "edit", generated_image_id)
+            decision, is_new = orch.create_decision(
+                operation="edit", provider="fal", model=edit_model,
+                trace_id=trace_id, idempotency_key=idem_key,
+                resource_id=generated_image_id, job_id=job_id,
+            )
+            if not is_new:
+                logger.info("Duplicate edit detected for %s, skipping", generated_image_id)
+                _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
+                return {"status": "skipped", "generated_image_id": generated_image_id}
+
+        try:
+            result = _run_async(editor.edit(**edit_kwargs))
+        except Exception as e:
+            if orch and decision:
+                orch.fail_decision(decision.id, str(e))
+            raise
+
+        if orch and decision:
+            in_tok, out_tok, prov_cost = get_last_api_call_tokens()
+            clear_last_api_call_tokens()
+            orch.record_actual(
+                decision.id, actual_input_tokens=in_tok,
+                actual_output_tokens=out_tok, provider_cost=prov_cost,
+                defer_debit=False,
+            )
 
         # Save first output image
         if not result.images:
@@ -940,8 +1026,6 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
         )
 
         _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
-        if not from_batch:
-            finalize_job_billing(db, user_id, job_id)
 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(
@@ -1001,12 +1085,18 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
         raise
     finally:
+        if not from_batch and job_id:
+            try:
+                finalize_job_billing(db, user_id, job_id)
+            except Exception:
+                logger.warning(f"Failed to finalize billing for job {job_id}", exc_info=True)
+        set_trace_id(None)
         set_billing_user(None)
         set_billing_job(None)
         db.close()
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
 def batch_edit(self, generated_image_ids: list[int], job_id: int | None = None, user_id: int | None = None) -> dict:
     """Edit multiple images. Dispatches individual edit_image tasks and polls for completion."""
     write_log(
@@ -1019,6 +1109,7 @@ def batch_edit(self, generated_image_ids: list[int], job_id: int | None = None, 
     task_start = time.monotonic()
     set_billing_user(user_id)
     set_billing_job(job_id)
+    init_trace()
     db = _get_db()
     try:
         job = db.query(Job).filter(Job.id == job_id).first() if job_id else None
@@ -1086,9 +1177,6 @@ def batch_edit(self, generated_image_ids: list[int], job_id: int | None = None, 
             }
             db.commit()
 
-        # Aggregate all child costs onto the batch job
-        finalize_job_billing(db, user_id, job_id)
-
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(
             category=LogCategory.TASK,
@@ -1122,6 +1210,12 @@ def batch_edit(self, generated_image_ids: list[int], job_id: int | None = None, 
                 db.commit()
         raise
     finally:
+        if job_id:
+            try:
+                finalize_job_billing(db, user_id, job_id)
+            except Exception:
+                logger.warning(f"Failed to finalize billing for job {job_id}", exc_info=True)
+        set_trace_id(None)
         set_billing_user(None)
         set_billing_job(None)
         db.close()
@@ -1151,7 +1245,7 @@ def _normalize_embedding_similarity(cosine_sim: float) -> float:
     return max(0.0, min(10.0, normalized))
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
 def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: int | None = None) -> dict:
     """
     Evaluate a LoRA model by generating images from training set descriptions
@@ -1174,6 +1268,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
     task_start = time.monotonic()
     set_billing_user(user_id)
     set_billing_job(job_id)
+    init_trace()
     db = _get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -1607,9 +1702,6 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
             },
         )
 
-        # Aggregate all costs (generate, embed, vision) onto the job
-        finalize_job_billing(db, user_id, job_id)
-
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(
             category=LogCategory.TASK,
@@ -1651,6 +1743,12 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
         raise
     finally:
+        if job_id:
+            try:
+                finalize_job_billing(db, user_id, job_id)
+            except Exception:
+                logger.warning(f"Failed to finalize billing for job {job_id}", exc_info=True)
+        set_trace_id(None)
         set_billing_user(None)
         set_billing_job(None)
         db.close()

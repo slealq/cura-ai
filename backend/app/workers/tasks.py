@@ -12,7 +12,20 @@ from app.db.base import SessionLocal
 from app.models import Image, ImageStatus, Job, JobStatus
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers import get_cluster_summarizer, get_describer, get_embedder, get_tagger
-from app.services.billing_context import set_billing_deferred, set_billing_image, set_billing_job, set_billing_user
+from app.services.billing_context import (
+    clear_last_api_call_tokens,
+    get_last_api_call_tokens,
+    get_trace_id,
+    init_trace,
+    is_billing_deferred,
+    make_idempotency_key,
+    set_billing_deferred,
+    set_billing_image,
+    set_billing_job,
+    set_billing_user,
+    set_trace_id,
+)
+from app.services.billing_orchestrator import ORCHESTRATOR_ENABLED_OPS, BillingOrchestrator
 from app.services.billing_service import InsufficientBalanceError, finalize_job_billing
 from app.services.cluster_service import get_cluster_service
 from app.services.clustering import get_clustering_service
@@ -444,7 +457,7 @@ def process_ingest_batch(
         db.close()
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
 def tag_image(
     self, image_id: int, user_id: int, tag_prompt: str | None = None,
     job_id: int | None = None, provider: str | None = None, model: str | None = None,
@@ -461,6 +474,7 @@ def tag_image(
     set_billing_user(user_id)
     set_billing_image(image_id)
     set_billing_job(job_id)
+    init_trace()
     db = get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -529,12 +543,13 @@ def tag_image(
         image_service.update_status(image_id, ImageStatus.FAILED, err_msg)
         raise
     finally:
+        set_trace_id(None)
         set_billing_image(None)
         set_billing_job(None)
         db.close()
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
 def describe_image(
     self, image_id: int, user_id: int, description_prompt: str | None = None,
     job_id: int | None = None, provider: str | None = None, model: str | None = None,
@@ -551,6 +566,7 @@ def describe_image(
     set_billing_user(user_id)
     set_billing_image(image_id)
     set_billing_job(job_id)
+    init_trace()
     db = get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -617,12 +633,13 @@ def describe_image(
         image_service.update_status(image_id, ImageStatus.FAILED, err_msg)
         raise
     finally:
+        set_trace_id(None)
         set_billing_image(None)
         set_billing_job(None)
         db.close()
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
 def embed_image(self, image_id: int, user_id: int, job_id: int | None = None) -> dict:
     """
     Generate embedding for an image based on its tags and description.
@@ -635,6 +652,7 @@ def embed_image(self, image_id: int, user_id: int, job_id: int | None = None) ->
     set_billing_user(user_id)
     set_billing_image(image_id)
     set_billing_job(job_id)
+    init_trace()
     db = get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -696,12 +714,13 @@ def embed_image(self, image_id: int, user_id: int, job_id: int | None = None) ->
         image_service.update_status(image_id, ImageStatus.FAILED, _unwrap_error(e))
         raise
     finally:
+        set_trace_id(None)
         set_billing_image(None)
         set_billing_job(None)
         db.close()
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
 def tag_and_describe_image(
     self, image_id: int, user_id: int, tag_prompt: str | None = None, description_prompt: str | None = None
 ) -> dict:
@@ -712,6 +731,7 @@ def tag_and_describe_image(
     """
     set_billing_user(user_id)
     set_billing_image(image_id)
+    init_trace()
     db = get_db()
     try:
         image_service = get_image_service(db, user_id)
@@ -769,6 +789,7 @@ def tag_and_describe_image(
         image_service.update_status(image_id, ImageStatus.FAILED, _unwrap_error(e))
         raise
     finally:
+        set_trace_id(None)
         set_billing_image(None)
         db.close()
 
@@ -886,7 +907,7 @@ def cluster_all_images(self, user_id: int, job_id: int | None = None) -> dict:
         db.close()
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
 def summarize_cluster(self, cluster_id: int, user_id: int) -> dict:
     """
     Generate AI summary for a cluster.
@@ -897,6 +918,7 @@ def summarize_cluster(self, cluster_id: int, user_id: int) -> dict:
               task_name="summarize_cluster", user_id=user_id)
     task_start = time.monotonic()
     set_billing_user(user_id)
+    init_trace()
     db = get_db()
     try:
         cluster_service = get_cluster_service(db, user_id)
@@ -959,14 +981,16 @@ def summarize_cluster(self, cluster_id: int, user_id: int) -> dict:
                   duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)}, user_id=user_id)
         raise
     finally:
+        set_trace_id(None)
         db.close()
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
 def summarize_clusters(self, cluster_ids: list[int], user_id: int, job_id: int | None = None) -> dict:
     """Summarize multiple clusters."""
     set_billing_user(user_id)
     set_billing_job(job_id)
+    init_trace()
     db = get_db()
     try:
         if job_id:
@@ -1012,11 +1036,12 @@ def summarize_clusters(self, cluster_ids: list[int], user_id: int, job_id: int |
                 db.commit()
         raise
     finally:
+        set_trace_id(None)
         set_billing_job(None)
         db.close()
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
 def process_image_pipeline(
     self, image_id: int, user_id: int, tag_prompt: str | None = None,
     description_prompt: str | None = None, job_id: int | None = None,
@@ -1035,6 +1060,7 @@ def process_image_pipeline(
     set_billing_user(user_id)
     set_billing_image(image_id)
     set_billing_job(job_id)
+    init_trace()
     # Only defer billing when we have a job_id — finalize_job_billing needs
     # job_id to aggregate deferred costs. Without it, inline debits are safer.
     if job_id:
@@ -1070,15 +1096,75 @@ def process_image_pipeline(
 
         # Tag
         tagger = get_tagger(provider=provider, model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_tag)
-        tag_start = time.monotonic()
-        tag_result = run_async(tagger.tag_image(image_data, image.mime_type, tag_prompt))
-        tagging_duration_ms = round((time.monotonic() - tag_start) * 1000)
+        trace_id = get_trace_id()
+        orch = BillingOrchestrator(db, user_id) if "tag" in ORCHESTRATOR_ENABLED_OPS else None
+
+        if orch:
+            idem_key = make_idempotency_key(user_id, trace_id, "tag", image_id)
+            decision, is_new = orch.create_decision(
+                operation="tag", provider=provider or "openai", model=tagger.get_model_name(),
+                trace_id=trace_id, idempotency_key=idem_key,
+                image_id=image_id, job_id=job_id,
+            )
+            if not is_new:
+                logger.info("Duplicate tag detected for image %s, skipping", image_id)
+                # Still need tag_result for downstream — fetch from DB
+                tag_result = type('R', (), {'tags': image.image_metadata.tags if image.image_metadata else [], 'model': tagger.get_model_name(), 'prompt_version': 'cached'})()
+                tagging_duration_ms = 0
+            else:
+                try:
+                    tag_start = time.monotonic()
+                    tag_result = run_async(tagger.tag_image(image_data, image.mime_type, tag_prompt))
+                    tagging_duration_ms = round((time.monotonic() - tag_start) * 1000)
+                    in_tok, out_tok, prov_cost = get_last_api_call_tokens()
+                    clear_last_api_call_tokens()
+                    orch.record_actual(
+                        decision.id, actual_input_tokens=in_tok,
+                        actual_output_tokens=out_tok, provider_cost=prov_cost,
+                        defer_debit=is_billing_deferred(),
+                    )
+                except Exception as e:
+                    orch.fail_decision(decision.id, str(e))
+                    raise
+        else:
+            tag_start = time.monotonic()
+            tag_result = run_async(tagger.tag_image(image_data, image.mime_type, tag_prompt))
+            tagging_duration_ms = round((time.monotonic() - tag_start) * 1000)
 
         # Describe
         describer = get_describer(provider=provider, model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_describe)
-        desc_start = time.monotonic()
-        description_result = run_async(describer.describe_image(image_data, image.mime_type, description_prompt))
-        caption_duration_ms = round((time.monotonic() - desc_start) * 1000)
+        orch_desc = BillingOrchestrator(db, user_id) if "describe" in ORCHESTRATOR_ENABLED_OPS else None
+
+        if orch_desc:
+            idem_key = make_idempotency_key(user_id, trace_id, "describe", image_id)
+            decision, is_new = orch_desc.create_decision(
+                operation="describe", provider=provider or "openai", model=describer.get_model_name(),
+                trace_id=trace_id, idempotency_key=idem_key,
+                image_id=image_id, job_id=job_id,
+            )
+            if not is_new:
+                logger.info("Duplicate describe detected for image %s, skipping", image_id)
+                description_result = type('R', (), {'description': image.image_metadata.description_long if image.image_metadata else '', 'model': describer.get_model_name()})()
+                caption_duration_ms = 0
+            else:
+                try:
+                    desc_start = time.monotonic()
+                    description_result = run_async(describer.describe_image(image_data, image.mime_type, description_prompt))
+                    caption_duration_ms = round((time.monotonic() - desc_start) * 1000)
+                    in_tok, out_tok, prov_cost = get_last_api_call_tokens()
+                    clear_last_api_call_tokens()
+                    orch_desc.record_actual(
+                        decision.id, actual_input_tokens=in_tok,
+                        actual_output_tokens=out_tok, provider_cost=prov_cost,
+                        defer_debit=is_billing_deferred(),
+                    )
+                except Exception as e:
+                    orch_desc.fail_decision(decision.id, str(e))
+                    raise
+        else:
+            desc_start = time.monotonic()
+            description_result = run_async(describer.describe_image(image_data, image.mime_type, description_prompt))
+            caption_duration_ms = round((time.monotonic() - desc_start) * 1000)
 
         # Build text for embedding
         text_parts = []
@@ -1089,9 +1175,38 @@ def process_image_pipeline(
 
         # Embed
         embedder = get_embedder(db=db, user_id=user_id)
-        embed_start_t = time.monotonic()
-        embed_result = run_async(embedder.embed_text(text))
-        embedding_duration_ms = round((time.monotonic() - embed_start_t) * 1000)
+        orch_embed = BillingOrchestrator(db, user_id) if "embed" in ORCHESTRATOR_ENABLED_OPS else None
+
+        if orch_embed:
+            idem_key = make_idempotency_key(user_id, trace_id, "embed", image_id)
+            decision, is_new = orch_embed.create_decision(
+                operation="embed", provider="openai", model=embedder.get_model_name(),
+                trace_id=trace_id, idempotency_key=idem_key,
+                image_id=image_id, job_id=job_id,
+            )
+            if not is_new:
+                logger.info("Duplicate embed detected for image %s, skipping", image_id)
+                embed_result = type('R', (), {'embedding': image.image_metadata.embedding if image.image_metadata else [], 'model': embedder.get_model_name(), 'dimensions': 1536})()
+                embedding_duration_ms = 0
+            else:
+                try:
+                    embed_start_t = time.monotonic()
+                    embed_result = run_async(embedder.embed_text(text))
+                    embedding_duration_ms = round((time.monotonic() - embed_start_t) * 1000)
+                    in_tok, out_tok, prov_cost = get_last_api_call_tokens()
+                    clear_last_api_call_tokens()
+                    orch_embed.record_actual(
+                        decision.id, actual_input_tokens=in_tok,
+                        actual_output_tokens=out_tok, provider_cost=prov_cost,
+                        defer_debit=is_billing_deferred(),
+                    )
+                except Exception as e:
+                    orch_embed.fail_decision(decision.id, str(e))
+                    raise
+        else:
+            embed_start_t = time.monotonic()
+            embed_result = run_async(embedder.embed_text(text))
+            embedding_duration_ms = round((time.monotonic() - embed_start_t) * 1000)
 
         now = datetime.utcnow()
 
@@ -1156,10 +1271,11 @@ def process_image_pipeline(
         set_billing_deferred(False)
         set_billing_image(None)
         set_billing_job(None)
+        set_trace_id(None)
         db.close()
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
 def run_full_pipeline(self, job_id: int, user_id: int) -> dict:
     """
     Run full pipeline: process all pending images, then cluster and summarize.
@@ -1168,6 +1284,7 @@ def run_full_pipeline(self, job_id: int, user_id: int) -> dict:
               task_name="run_full_pipeline", job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
     set_billing_user(user_id)
+    init_trace()
     db = get_db()
     try:
         job = db.query(Job).filter(Job.id == job_id).first()
@@ -1239,10 +1356,11 @@ def run_full_pipeline(self, job_id: int, user_id: int) -> dict:
                 db.commit()
         raise
     finally:
+        set_trace_id(None)
         db.close()
 
 
-@celery_app.task(bind=True, queue='clustering')
+@celery_app.task(bind=True, queue='clustering', acks_late=False, max_retries=0, reject_on_worker_lost=False)
 def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int]) -> dict:
     """
     Reprocess a batch of images: reset each to INGESTED, dispatch process_image_pipeline,
@@ -1254,6 +1372,8 @@ def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int]) -
     write_log(category=LogCategory.TASK, message=f"Task run_batch_reprocess started ({len(image_ids)} images)",
               task_name="run_batch_reprocess", job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
+    set_billing_user(user_id)
+    init_trace()
     db = get_db()
     try:
         job = db.query(Job).filter(Job.id == job_id).first()
@@ -1374,10 +1494,11 @@ def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int]) -
             db.commit()
         raise
     finally:
+        set_trace_id(None)
         db.close()
 
 
-@celery_app.task(bind=True, queue='clustering')
+@celery_app.task(bind=True, queue='clustering', acks_late=False, max_retries=0, reject_on_worker_lost=False)
 def run_batch_describe(
     self, job_id: int, user_id: int, image_ids: list[int],
     tag_prompt: str | None = None, description_prompt: str | None = None,
@@ -1392,6 +1513,8 @@ def run_batch_describe(
     write_log(category=LogCategory.TASK, message=f"Task run_batch_describe started ({len(image_ids)} images)",
               task_name="run_batch_describe", job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
+    set_billing_user(user_id)
+    init_trace()
     db = get_db()
     try:
         job = db.query(Job).filter(Job.id == job_id).first()
@@ -1511,6 +1634,7 @@ def run_batch_describe(
             db.commit()
         raise
     finally:
+        set_trace_id(None)
         db.close()
 
 

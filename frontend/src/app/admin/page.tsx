@@ -9,6 +9,7 @@ import { billingApi, settingsApi } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn, formatDateCompact, formatNumber } from '@/lib/utils';
 import type { AdminUserBalance, APIKeyInfo, BillingLogEntry, CostCatalogEntry, ModelBulkUpdateRequest } from '@/types';
+import OperationsMonitor from './OperationsMonitor';
 
 type DateRange = '7d' | '30d' | '90d' | 'all';
 
@@ -38,7 +39,7 @@ export default function AdminPage() {
     cost_per_call: 0,
     platform_markup: 1.0,
   });
-  const [activeTab, setActiveTab] = useState<'usage' | 'catalog' | 'logs' | 'system'>('usage');
+  const [activeTab, setActiveTab] = useState<'usage' | 'catalog' | 'logs' | 'operations' | 'system'>('usage');
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
   const [keyInput, setKeyInput] = useState('');
   const [showKeyInput, setShowKeyInput] = useState(false);
@@ -289,6 +290,7 @@ export default function AdminPage() {
             { key: 'usage', label: 'Usage & Billing' },
             { key: 'catalog', label: 'Cost Catalog' },
             { key: 'logs', label: 'Billing Logs' },
+            { key: 'operations', label: 'Operations' },
             { key: 'system', label: 'System' },
           ] as const).map(({ key, label }) => (
             <button
@@ -1281,6 +1283,10 @@ export default function AdminPage() {
           </div>
         )}
       </section>
+      )}
+
+      {activeTab === 'operations' && (
+        <OperationsMonitor />
       )}
     </div>
   );

@@ -15,16 +15,20 @@ from app.models.billing import (
     UserBalance,
 )
 from app.models.user import User
+from app.services.cost_calculator import USD_TO_SPARKS
+from app.services.cost_calculator import calculate_cost as _calc_cost
+from app.services.cost_calculator import get_catalog_entry as _get_catalog
 
 logger = logging.getLogger(__name__)
-
-# Balance is denominated in sparks; cost catalog prices are in USD.
-# 1 spark = $0.001, so multiply USD by 1000 to get sparks.
-USD_TO_SPARKS = Decimal("1000")
 
 
 class InsufficientBalanceError(Exception):
     """Raised when a user has insufficient credits for an operation."""
+    pass
+
+
+class CatalogMissError(Exception):
+    """Raised in strict mode when no catalog entry matches a billed operation."""
     pass
 
 
@@ -104,25 +108,35 @@ class BillingService:
         description: str,
         usage_record_id: int | None = None,
     ) -> BalanceTransaction:
-        """Debit usage from user balance with row-level locking."""
-        # SELECT FOR UPDATE to prevent concurrent balance races
-        balance = (
+        """Debit usage from user balance with atomic conditional update.
+
+        Uses UPDATE ... WHERE balance >= amount to prevent negative balance
+        via TOCTOU race. Raises InsufficientBalanceError if balance is too low.
+        """
+        # Ensure the balance row exists
+        self._get_or_create_balance()
+
+        # Atomic: only debit if balance >= amount
+        rows_updated = (
             self.db.query(UserBalance)
-            .filter(UserBalance.user_id == self.user_id)
-            .with_for_update()
-            .first()
+            .filter(
+                UserBalance.user_id == self.user_id,
+                UserBalance.balance >= amount,
+            )
+            .update(
+                {UserBalance.balance: UserBalance.balance - amount},
+                synchronize_session="fetch",
+            )
         )
-        if not balance:
-            balance = self._get_or_create_balance()
-            balance = (
-                self.db.query(UserBalance)
-                .filter(UserBalance.user_id == self.user_id)
-                .with_for_update()
-                .first()
+        if rows_updated == 0:
+            self.db.rollback()
+            raise InsufficientBalanceError(
+                f"User {self.user_id} has insufficient credits (need {amount} sparks)"
             )
 
-        balance.balance -= amount
         self.db.flush()
+
+        from app.services.billing_context import get_trace_id
 
         txn = BalanceTransaction(
             user_id=self.user_id,
@@ -130,6 +144,7 @@ class BillingService:
             transaction_type=TransactionType.DEBIT,
             description=description,
             reference_id=usage_record_id,
+            trace_id=get_trace_id(),
         )
         self.db.add(txn)
         self.db.commit()
@@ -159,6 +174,8 @@ class BillingService:
             provider_cost=provider_cost,
         )
 
+        from app.services.billing_context import get_trace_id
+
         record = UsageRecord(
             user_id=self.user_id,
             pipeline_log_id=pipeline_log_id,
@@ -170,6 +187,7 @@ class BillingService:
             raw_cost=raw_cost,
             charged_cost=charged_cost,
             detail=detail,
+            trace_id=get_trace_id(),
         )
         self.db.add(record)
         self.db.flush()
@@ -193,144 +211,48 @@ class BillingService:
         output_tokens: int | None,
         provider_cost: float | None = None,
     ) -> tuple[Decimal, Decimal, dict | None]:
-        """Calculate raw and charged cost from catalog or provider-reported cost.
-
-        If provider_cost is given, use it as raw_cost and apply only
-        platform_markup from the catalog (default 2.0x if no entry).
-        Otherwise, compute from per-token/per-call catalog rates.
-        """
-        entry = self._get_catalog_entry(provider, model, operation)
-
-        # --- Provider-reported cost path (e.g. fal.ai) ---
-        if provider_cost is not None:
-            raw_cost = Decimal(str(provider_cost))
-            markup = entry.platform_markup if entry else Decimal("2.0")
-            charged_cost = raw_cost * markup
-            sparks = charged_cost * USD_TO_SPARKS
-
-            logger.info(
-                "BILLING | user=%s %s/%s op=%s "
-                "in_tok=%s out_tok=%s "
-                "provider_cost=$%.8f markup=%.1fx "
-                "charged=$%.8f sparks=%.2f (source=provider)",
-                self._email, provider, model, operation,
-                input_tokens, output_tokens,
-                float(raw_cost), float(markup),
-                float(charged_cost), float(sparks),
-            )
-
-            detail = {
-                "cost_source": "provider",
-                "provider_cost": float(raw_cost),
-                "platform_markup": float(markup),
-                "sparks": float(sparks),
-            }
-            return raw_cost, charged_cost, detail
-
-        # --- Catalog-based cost path ---
-        if not entry:
-            logger.warning(
-                "BILLING MISS | user=%s provider=%s model=%s op=%s "
-                "in_tok=%s out_tok=%s — no catalog entry, charging 0",
-                self._email, provider, model, operation,
-                input_tokens, output_tokens,
-            )
-            return Decimal("0"), Decimal("0"), None
-
-        input_cost = Decimal("0")
-        output_cost = Decimal("0")
-        call_cost = Decimal("0")
-
-        if entry.cost_per_call and entry.cost_per_call > 0:
-            call_cost = entry.cost_per_call
-        if input_tokens and entry.cost_per_input_token:
-            input_cost = entry.cost_per_input_token * input_tokens
-        if output_tokens and entry.cost_per_output_token:
-            output_cost = entry.cost_per_output_token * output_tokens
-
-        raw_cost = input_cost + output_cost + call_cost
-        charged_cost = raw_cost * entry.platform_markup
-        sparks = charged_cost * USD_TO_SPARKS
-
-        logger.info(
-            "BILLING | user=%s %s/%s op=%s "
-            "in_tok=%s out_tok=%s "
-            "rates(in=%.10f out=%.10f call=%.6f) "
-            "raw($%.8f = in:$%.8f + out:$%.8f + call:$%.8f) "
-            "markup=%.1fx charged=$%.8f sparks=%.2f",
-            self._email, provider, model, operation,
+        """Calculate raw and charged cost. Delegates to cost_calculator, then handles anomalies."""
+        raw_cost, charged_cost, detail = _calc_cost(
+            self.db, provider, model, operation,
             input_tokens, output_tokens,
-            float(entry.cost_per_input_token or 0),
-            float(entry.cost_per_output_token or 0),
-            float(entry.cost_per_call or 0),
-            float(raw_cost), float(input_cost), float(output_cost), float(call_cost),
-            float(entry.platform_markup),
-            float(charged_cost), float(sparks),
+            provider_cost=provider_cost,
+            user_email=self._email,
         )
 
-        detail = {
-            "cost_source": "catalog",
-            "cost_per_input_token": float(entry.cost_per_input_token or 0),
-            "cost_per_output_token": float(entry.cost_per_output_token or 0),
-            "cost_per_call": float(entry.cost_per_call or 0),
-            "input_cost": float(input_cost),
-            "output_cost": float(output_cost),
-            "call_cost": float(call_cost),
-            "platform_markup": float(entry.platform_markup),
-            "sparks": float(sparks),
-        }
+        # Handle catalog miss: record anomaly + strict mode check
+        if detail and detail.get("catalog_match_tier") == "none" and provider_cost is None:
+            try:
+                from app.models.billing import BillingAnomaly
+                anomaly = BillingAnomaly(
+                    user_id=self.user_id if self.user_id else None,
+                    anomaly_type="catalog_miss",
+                    provider=provider,
+                    model=model,
+                    operation=operation,
+                    detail={
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                    },
+                )
+                self.db.add(anomaly)
+                self.db.commit()
+            except Exception:
+                logger.warning("Failed to record billing anomaly", exc_info=True)
+                self.db.rollback()
+
+            from app.core.config import get_settings
+            if get_settings().billing_strict_mode:
+                raise CatalogMissError(
+                    f"No catalog entry for {provider}/{model}/{operation}"
+                )
 
         return raw_cost, charged_cost, detail
 
     def _get_catalog_entry(
         self, provider: str, model: str, operation: str
-    ) -> CostCatalog | None:
-        """Catalog lookup with fallback: exact match -> wildcard model -> None."""
-        # Exact match first
-        entry = (
-            self.db.query(CostCatalog)
-            .filter(
-                CostCatalog.provider == provider,
-                CostCatalog.model == model,
-                CostCatalog.operation == operation,
-                CostCatalog.is_active.is_(True),
-            )
-            .first()
-        )
-        if entry:
-            return entry
-
-        # Wildcard model fallback (e.g., fal/* for generate)
-        entry = (
-            self.db.query(CostCatalog)
-            .filter(
-                CostCatalog.provider == provider,
-                CostCatalog.model == "*",
-                CostCatalog.operation == operation,
-                CostCatalog.is_active.is_(True),
-            )
-            .first()
-        )
-        if entry:
-            return entry
-
-        # Partial wildcard (e.g., "openrouter/*" matches "openrouter/qwen...")
-        wildcards = (
-            self.db.query(CostCatalog)
-            .filter(
-                CostCatalog.provider == provider,
-                CostCatalog.model.like("%*%"),
-                CostCatalog.operation == operation,
-                CostCatalog.is_active.is_(True),
-            )
-            .all()
-        )
-        for wc in wildcards:
-            prefix = wc.model.replace("*", "")
-            if model.startswith(prefix):
-                return wc
-
-        return None
+    ) -> tuple[CostCatalog | None, str]:
+        """Catalog lookup. Delegates to cost_calculator."""
+        return _get_catalog(self.db, provider, model, operation)
 
     # --- User-facing reporting ---
 
@@ -409,7 +331,7 @@ class BillingService:
         for base_model, variants in BillingService.GENERATION_MODEL_MAP.items():
             costs: dict[str, int] = {}
             for variant_key, (provider, model, operation) in variants.items():
-                entry = svc._get_catalog_entry(provider, model, operation)
+                entry, _ = svc._get_catalog_entry(provider, model, operation)
                 if entry and entry.cost_per_call:
                     charged_usd = entry.cost_per_call * entry.platform_markup
                     costs[variant_key] = int(charged_usd * USD_TO_SPARKS)
@@ -446,7 +368,7 @@ class BillingService:
         svc = BillingService(db, user_id=0)
         result: dict[str, int] = {}
         for edit_model, (provider, model, operation) in BillingService.EDIT_MODEL_MAP.items():
-            entry = svc._get_catalog_entry(provider, model, operation)
+            entry, _ = svc._get_catalog_entry(provider, model, operation)
             if entry and entry.cost_per_call:
                 charged_usd = entry.cost_per_call * entry.platform_markup
                 result[edit_model] = int(charged_usd * USD_TO_SPARKS)
@@ -460,7 +382,7 @@ class BillingService:
         svc = BillingService(db, user_id=0)
         result: dict[str, int] = {}
         for base_model, (provider, model, operation) in BillingService.TRAINING_MODEL_MAP.items():
-            entry = svc._get_catalog_entry(provider, model, operation)
+            entry, _ = svc._get_catalog_entry(provider, model, operation)
             if entry and entry.cost_per_call:
                 charged_usd = entry.cost_per_call * entry.platform_markup
                 result[base_model] = int(charged_usd * USD_TO_SPARKS)
@@ -672,10 +594,12 @@ def record_usage_standalone(
     defer_debit: bool = False,
 ) -> None:
     """Record usage in its own session. Called from write_log after-hook."""
+    from app.services.billing_context import set_last_usage_record_id
+
     db = SessionLocal()
     try:
         svc = BillingService(db, user_id)
-        svc.record_usage(
+        record = svc.record_usage(
             operation=operation,
             provider=provider,
             model=model,
@@ -689,6 +613,9 @@ def record_usage_standalone(
         # or defer_debit=True (record_usage only commits via debit_usage
         # when cost > 0 and not deferred).
         db.commit()
+        # Store record ID in thread-local context so callers (e.g. vision API)
+        # can deterministically look up the cost without race conditions.
+        set_last_usage_record_id(record.id)
     except Exception as e:
         logger.warning(f"Failed to record usage for user {user_id}: {e}")
         db.rollback()
@@ -722,13 +649,36 @@ def finalize_job_billing(
     from app.models.pipeline_log import PipelineLog
 
     # Find usage records linked to this job via pipeline_log_id → pipeline_logs.job_id
-    usage_records = (
+    usage_records_legacy = (
         db.query(UsageRecord)
         .join(PipelineLog, UsageRecord.pipeline_log_id == PipelineLog.id)
         .filter(PipelineLog.job_id == job_id, UsageRecord.user_id == user_id)
         .order_by(UsageRecord.created_at)
         .all()
     )
+
+    # Orchestrator path: UsageRecords linked via cost_decision_id → CostDecision.job_id
+    usage_records_orch: list[UsageRecord] = []
+    try:
+        from app.models.cost_decision import CostDecision
+        usage_records_orch = (
+            db.query(UsageRecord)
+            .join(CostDecision, UsageRecord.cost_decision_id == CostDecision.id)
+            .filter(CostDecision.job_id == job_id, UsageRecord.user_id == user_id)
+            .order_by(UsageRecord.created_at)
+            .all()
+        )
+    except Exception:
+        pass  # Table may not exist yet during migration transition
+
+    # Deduplicate by ID and combine
+    seen_ids: set[int] = set()
+    usage_records: list[UsageRecord] = []
+    for r in usage_records_legacy + usage_records_orch:
+        if r.id not in seen_ids:
+            seen_ids.add(r.id)
+            usage_records.append(r)
+    usage_records.sort(key=lambda r: r.created_at)
 
     if not usage_records:
         # Still set charged_cost to 0 so it's not NULL
