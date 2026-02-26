@@ -28,14 +28,28 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+_REASONING_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+
+
+def _is_reasoning_model(model: str) -> bool:
+    """Return True for models that use internal reasoning tokens."""
+    return any(model.startswith(p) for p in _REASONING_PREFIXES)
+
+
 def _token_limit_param(model: str, limit: int) -> dict:
     """Return the correct token limit kwarg for the model.
 
     Newer OpenAI models (gpt-5*, gpt-4.1*, chatgpt-4o*) require
     ``max_completion_tokens`` instead of the legacy ``max_tokens``.
+
+    Reasoning models (gpt-5*, o-series) burn invisible reasoning tokens
+    inside the completion budget.  We add a 2x buffer so the visible
+    output isn't starved (e.g. tag with limit=1000 becomes 2000, leaving
+    room for ~1000 reasoning + 1000 visible).
     """
     if any(model.startswith(p) for p in ("gpt-5", "gpt-4.1", "chatgpt-4o")):
-        return {"max_completion_tokens": limit}
+        effective = limit * 2 if _is_reasoning_model(model) else limit
+        return {"max_completion_tokens": effective}
     return {"max_tokens": limit}
 
 # Prompt version for reproducibility
@@ -111,6 +125,19 @@ class OpenAITagger(BaseTagger):
             elapsed = (time.monotonic() - start) * 1000
             usage = response.usage
             content = response.choices[0].message.content
+            logger.warning(
+                "OPENAI_AUDIT [tag] model=%s elapsed=%.0fms\n"
+                "  REQUEST: prompt_text_len=%d image_bytes=%d prompt_text=%.500s\n"
+                "  RESPONSE_FULL: %s\n"
+                "  USAGE_DETAIL: %s\n"
+                "  ACTUAL: in=%s out=%s",
+                self.model, elapsed,
+                len(tag_prompt), len(image_data), tag_prompt,
+                response.model_dump(),
+                usage.model_dump() if usage else None,
+                usage.prompt_tokens if usage else None,
+                usage.completion_tokens if usage else None,
+            )
             write_log(
                 category=LogCategory.API_CALL,
                 message=f"OpenAI tagging completed ({self.model})",
@@ -220,6 +247,19 @@ class OpenAIDescriber(BaseDescriber):
             elapsed = (time.monotonic() - start) * 1000
             usage = response.usage
             content = response.choices[0].message.content
+            logger.warning(
+                "OPENAI_AUDIT [describe] model=%s elapsed=%.0fms\n"
+                "  REQUEST: prompt_text_len=%d image_bytes=%d prompt_text=%.500s\n"
+                "  RESPONSE_FULL: %s\n"
+                "  USAGE_DETAIL: %s\n"
+                "  ACTUAL: in=%s out=%s",
+                self.model, elapsed,
+                len(description_prompt), len(image_data), description_prompt,
+                response.model_dump(),
+                usage.model_dump() if usage else None,
+                usage.prompt_tokens if usage else None,
+                usage.completion_tokens if usage else None,
+            )
             write_log(
                 category=LogCategory.API_CALL,
                 message=f"OpenAI describe completed ({self.model})",
@@ -289,6 +329,18 @@ class OpenAIEmbedder(BaseEmbedder):
             )
             elapsed = (time.monotonic() - start) * 1000
             usage = response.usage
+            logger.warning(
+                "OPENAI_AUDIT [embed] model=%s elapsed=%.0fms\n"
+                "  REQUEST: text_len=%d text=%.500s\n"
+                "  RESPONSE_FULL: %s\n"
+                "  USAGE_DETAIL: %s\n"
+                "  ACTUAL: in=%s",
+                self.model, elapsed,
+                len(text), text,
+                {k: v for k, v in response.model_dump().items() if k != "data"},  # skip embedding vector
+                usage.model_dump() if usage else None,
+                usage.total_tokens if usage else None,
+            )
             write_log(
                 category=LogCategory.API_CALL,
                 message=f"OpenAI embed completed ({self.model})",
