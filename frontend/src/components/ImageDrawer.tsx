@@ -2,12 +2,12 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { X, ExternalLink, RefreshCw, FolderOpen, Zap, ChevronDown, ChevronUp } from 'lucide-react';
+import { X, ExternalLink, RefreshCw, FolderOpen, Zap, ChevronDown, ChevronUp, Clock } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import type { Image, PromptPreset } from '@/types';
 import { imagesApi, jobsApi, settingsApi, billingApi } from '@/lib/api';
-import { cn, formatDate, formatFileSize } from '@/lib/utils';
+import { cn, formatDate, formatDateCompact, formatFileSize } from '@/lib/utils';
 import ImageCard from './ImageCard';
 import ModelSelector from './ModelSelector';
 import PipelineProgress from './PipelineProgress';
@@ -114,10 +114,22 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
     queryFn: settingsApi.getProviderConfig,
   });
 
-  // Vision costs
+  // Vision costs — use actual image dimensions for accurate estimate
   const { data: visionCosts } = useQuery({
-    queryKey: ['vision-costs'],
-    queryFn: billingApi.getVisionCosts,
+    queryKey: ['vision-costs', image.id, image.width, image.height],
+    queryFn: () =>
+      image.width && image.height
+        ? billingApi.getVisionCostsEstimate({ width: image.width, height: image.height })
+        : billingApi.getVisionCosts(),
+  });
+
+  // Per-image processing costs — only fetch when drawer is open and image has been processed
+  const hasProcessing = liveImage.metadata?.tagging_model || liveImage.metadata?.caption_model || liveImage.metadata?.embedding_model;
+  const { data: processingCosts } = useQuery({
+    queryKey: ['processing-costs', image.id],
+    queryFn: () => imagesApi.getProcessingCosts(image.id),
+    enabled: !!hasProcessing,
+    staleTime: 60_000,
   });
 
   // Initialize selectedModel from provider config
@@ -371,38 +383,103 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
             </dl>
           </div>
 
-          {/* Model Info */}
-          {liveImage.metadata && (
+          {/* Processing Info */}
+          {hasProcessing && (
             <div>
               <h3 className="text-sm font-medium text-muted-foreground mb-2">
                 Processing Info
               </h3>
-              <dl className="grid grid-cols-2 gap-2 text-xs">
-                {liveImage.metadata.tagging_model && (
-                  <>
-                    <dt className="text-muted-foreground">Tagging Model</dt>
-                    <dd className="font-mono">
-                      {liveImage.metadata.tagging_model}
-                    </dd>
-                  </>
-                )}
-                {liveImage.metadata.caption_model && (
-                  <>
-                    <dt className="text-muted-foreground">Description Model</dt>
-                    <dd className="font-mono">
-                      {liveImage.metadata.caption_model}
-                    </dd>
-                  </>
-                )}
-                {liveImage.metadata.embedding_model && (
-                  <>
-                    <dt className="text-muted-foreground">Embedding Model</dt>
-                    <dd className="font-mono">
-                      {liveImage.metadata.embedding_model}
-                    </dd>
-                  </>
-                )}
-              </dl>
+              <div className="rounded-lg border border-border overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/50">
+                      <th className="text-left px-3 py-1.5 font-medium text-muted-foreground">Step</th>
+                      <th className="text-left px-3 py-1.5 font-medium text-muted-foreground">Model</th>
+                      <th className="text-right px-3 py-1.5 font-medium text-muted-foreground">Time</th>
+                      <th className="text-right px-3 py-1.5 font-medium text-muted-foreground">Cost</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {liveImage.metadata?.tagging_model && (
+                      <tr className="border-b border-border/50">
+                        <td className="px-3 py-1.5">Tag</td>
+                        <td className="px-3 py-1.5 font-mono text-muted-foreground">{liveImage.metadata.tagging_model}</td>
+                        <td className="px-3 py-1.5 text-right text-muted-foreground">
+                          {liveImage.metadata.tagging_duration_ms != null
+                            ? `${(liveImage.metadata.tagging_duration_ms / 1000).toFixed(1)}s`
+                            : '-'}
+                        </td>
+                        <td className="px-3 py-1.5 text-right">
+                          {processingCosts?.operations.find(o => o.operation === 'tag')
+                            ? <span className="inline-flex items-center gap-0.5 text-amber-600 dark:text-amber-400">
+                                <Zap className="h-3 w-3" />
+                                {processingCosts.operations.find(o => o.operation === 'tag')!.sparks.toFixed(2)}
+                              </span>
+                            : <span className="text-muted-foreground">-</span>}
+                        </td>
+                      </tr>
+                    )}
+                    {liveImage.metadata?.caption_model && (
+                      <tr className="border-b border-border/50">
+                        <td className="px-3 py-1.5">Describe</td>
+                        <td className="px-3 py-1.5 font-mono text-muted-foreground">{liveImage.metadata.caption_model}</td>
+                        <td className="px-3 py-1.5 text-right text-muted-foreground">
+                          {liveImage.metadata.caption_duration_ms != null
+                            ? `${(liveImage.metadata.caption_duration_ms / 1000).toFixed(1)}s`
+                            : '-'}
+                        </td>
+                        <td className="px-3 py-1.5 text-right">
+                          {processingCosts?.operations.find(o => o.operation === 'describe')
+                            ? <span className="inline-flex items-center gap-0.5 text-amber-600 dark:text-amber-400">
+                                <Zap className="h-3 w-3" />
+                                {processingCosts.operations.find(o => o.operation === 'describe')!.sparks.toFixed(2)}
+                              </span>
+                            : <span className="text-muted-foreground">-</span>}
+                        </td>
+                      </tr>
+                    )}
+                    {liveImage.metadata?.embedding_model && (
+                      <tr className="border-b border-border/50">
+                        <td className="px-3 py-1.5">Embed</td>
+                        <td className="px-3 py-1.5 font-mono text-muted-foreground">{liveImage.metadata.embedding_model}</td>
+                        <td className="px-3 py-1.5 text-right text-muted-foreground">
+                          {liveImage.metadata.embedding_duration_ms != null
+                            ? `${(liveImage.metadata.embedding_duration_ms / 1000).toFixed(1)}s`
+                            : '-'}
+                        </td>
+                        <td className="px-3 py-1.5 text-right">
+                          {processingCosts?.operations.find(o => o.operation === 'embed')
+                            ? <span className="inline-flex items-center gap-0.5 text-amber-600 dark:text-amber-400">
+                                <Zap className="h-3 w-3" />
+                                {processingCosts.operations.find(o => o.operation === 'embed')!.sparks.toFixed(2)}
+                              </span>
+                            : <span className="text-muted-foreground">-</span>}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                  {processingCosts && processingCosts.total_sparks > 0 && (
+                    <tfoot>
+                      <tr className="bg-muted/30">
+                        <td colSpan={3} className="px-3 py-1.5 text-right font-medium">Total</td>
+                        <td className="px-3 py-1.5 text-right">
+                          <span className="inline-flex items-center gap-0.5 font-medium text-amber-600 dark:text-amber-400">
+                            <Zap className="h-3 w-3" />
+                            {processingCosts.total_sparks.toFixed(2)}
+                          </span>
+                        </td>
+                      </tr>
+                    </tfoot>
+                  )}
+                </table>
+              </div>
+              {/* Processed timestamp */}
+              {(liveImage.metadata?.embedded_at || liveImage.metadata?.described_at || liveImage.metadata?.tagged_at) && (
+                <p className="text-xs text-muted-foreground mt-1.5 flex items-center gap-1">
+                  <Clock className="h-3 w-3" />
+                  Processed {formatDateCompact(liveImage.metadata.embedded_at || liveImage.metadata.described_at || liveImage.metadata.tagged_at)}
+                </p>
+              )}
             </div>
           )}
 

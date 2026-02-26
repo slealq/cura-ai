@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { visionApi, settingsApi, billingApi } from '@/lib/api';
+import { visionApi, settingsApi, billingApi, imagesApi } from '@/lib/api';
 import { Loader2, Eye, X, Upload, ImageIcon, Copy, Check, Trash2, ChevronDown, ChevronUp, Save, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import ImagePickerModal from '@/components/ImagePickerModal';
@@ -40,6 +40,8 @@ interface SourceImage {
   key?: string;
   previewUrl?: string;
   name?: string;
+  width?: number;
+  height?: number;
 }
 
 function formatDuration(ms: number | undefined | null): string {
@@ -96,10 +98,13 @@ export default function VisionPage() {
     queryFn: settingsApi.getProviderConfig,
   });
 
-  // Fetch vision costs
+  // Fetch vision costs — use source image dimensions when available
   const { data: visionCosts } = useQuery({
-    queryKey: ['vision-costs'],
-    queryFn: billingApi.getVisionCosts,
+    queryKey: ['vision-costs', source?.width, source?.height],
+    queryFn: () =>
+      source?.width && source?.height
+        ? billingApi.getVisionCostsEstimate({ width: source.width, height: source.height })
+        : billingApi.getVisionCosts(),
     staleTime: 60_000,
   });
 
@@ -278,10 +283,19 @@ export default function VisionPage() {
     [handleFileUpload]
   );
 
-  const handlePickerDone = (items: import('@/components/ImagePickerModal').PickedImage[]) => {
+  const handlePickerDone = async (items: import('@/components/ImagePickerModal').PickedImage[]) => {
     if (items.length > 0) {
       const item = items[0];
-      setSource({ type: item.type, id: item.id, previewUrl: item.previewUrl });
+      const sourceData: SourceImage = { type: item.type, id: item.id, previewUrl: item.previewUrl };
+      // Fetch dimensions for gallery images to improve cost estimates
+      if (item.type === 'gallery' && item.id) {
+        try {
+          const img = await imagesApi.get(item.id);
+          sourceData.width = img.width ?? undefined;
+          sourceData.height = img.height ?? undefined;
+        } catch { /* dimensions are optional for cost estimation */ }
+      }
+      setSource(sourceData);
     }
   };
 
@@ -623,6 +637,11 @@ export default function VisionPage() {
                   {result.duration_ms != null && (
                     <span className="text-xs text-muted-foreground/70">
                       {formatDuration(result.duration_ms)}
+                    </span>
+                  )}
+                  {result.cost_sparks != null && (
+                    <span className="text-xs text-muted-foreground/70">
+                      {result.cost_sparks.toFixed(1)} sparks
                     </span>
                   )}
                   <span className="text-xs text-muted-foreground">

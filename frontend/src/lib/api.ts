@@ -33,6 +33,7 @@ import type {
   ModelBulkUpdateRequest,
   PipelineStats,
   PlatformUsageSummary,
+  ProcessingCostResponse,
   PromptPreset,
   ProviderConfig,
   ProviderModel,
@@ -369,6 +370,11 @@ export const imagesApi = {
 
   getFolders: async (imageId: number): Promise<FolderBrief[]> => {
     const { data } = await api.get(`/images/${imageId}/folders`);
+    return data;
+  },
+
+  getProcessingCosts: async (imageId: number): Promise<ProcessingCostResponse> => {
+    const { data } = await api.get(`/images/${imageId}/processing-costs`);
     return data;
   },
 };
@@ -1105,7 +1111,7 @@ export const visionApi = {
     description_prompt?: string;
     temperature?: number;
     max_tokens?: number;
-  }): Promise<{ id: number; mode: string; tags?: string[]; description?: string; model: string; duration_ms?: number }> => {
+  }): Promise<{ id: number; mode: string; tags?: string[]; description?: string; model: string; duration_ms?: number; cost_sparks?: number | null }> => {
     const { data } = await api.post('/vision/analyze', params);
     return data;
   },
@@ -1120,6 +1126,7 @@ export const visionApi = {
       result_tags?: string[];
       result_text?: string;
       duration_ms?: number;
+      cost_sparks?: number | null;
       source_image_id?: number;
       source_generated_id?: number;
       source_object_key?: string;
@@ -1215,6 +1222,15 @@ export const billingApi = {
 
   getVisionCosts: async (): Promise<VisionCosts> => {
     const { data } = await api.get('/billing/vision-costs');
+    return data;
+  },
+
+  getVisionCostsEstimate: async (params: {
+    width?: number;
+    height?: number;
+    folder_id?: number;
+  }): Promise<VisionCosts> => {
+    const { data } = await api.post('/billing/vision-costs', params);
     return data;
   },
 

@@ -16,6 +16,8 @@ from app.schemas import (
     ImageListResponse,
     ImageResponse,
     PipelineStats,
+    ProcessingCostOperation,
+    ProcessingCostResponse,
     StepResponse,
     UploadResponse,
 )
@@ -303,6 +305,54 @@ async def get_image_folders(image_id: int, db: Session = Depends(get_db), curren
     folder_service = get_folder_service(db, current_user.id)
     folders = folder_service.get_image_folders(image_id)
     return [{"id": f.id, "name": f.name} for f in folders]
+
+
+@router.get("/{image_id}/processing-costs", response_model=ProcessingCostResponse)
+async def get_processing_costs(
+    image_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get per-image processing cost breakdown from usage records."""
+    from app.models.billing import UsageRecord
+    from app.models.pipeline_log import PipelineLog
+
+    # Verify image belongs to user
+    image_service = get_image_service(db, current_user.id)
+    image = image_service.get_image(image_id)
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    # Join UsageRecord → PipelineLog where PipelineLog.image_id matches
+    records = (
+        db.query(UsageRecord)
+        .join(PipelineLog, UsageRecord.pipeline_log_id == PipelineLog.id)
+        .filter(
+            PipelineLog.image_id == image_id,
+            PipelineLog.user_id == current_user.id,
+        )
+        .order_by(UsageRecord.created_at)
+        .all()
+    )
+
+    # charged_cost is stored in USD; 1 spark = $0.001 → multiply by 1000
+    usd_to_sparks = 1000
+
+    operations = []
+    total_sparks = 0.0
+    for r in records:
+        sparks = round(float(r.charged_cost) * usd_to_sparks, 2)
+        total_sparks += sparks
+        operations.append(ProcessingCostOperation(
+            operation=r.operation,
+            provider=r.provider,
+            model=r.model,
+            sparks=sparks,
+            input_tokens=r.input_tokens,
+            output_tokens=r.output_tokens,
+        ))
+
+    return ProcessingCostResponse(operations=operations, total_sparks=round(total_sparks, 2))
 
 
 class BatchDeleteRequest(BaseModel):

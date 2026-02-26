@@ -65,10 +65,10 @@ export default function DescribeAllDialog({ folderId, imageCount, onClose, onSta
     queryFn: settingsApi.getProviderConfig,
   });
 
-  // Fetch vision costs
+  // Fetch vision costs — use folder avg dimensions for accurate estimate
   const { data: visionCosts } = useQuery({
-    queryKey: ['vision-costs'],
-    queryFn: billingApi.getVisionCosts,
+    queryKey: ['vision-costs', 'folder', folderId],
+    queryFn: () => billingApi.getVisionCostsEstimate({ folder_id: folderId }),
   });
 
   // Initialize model and advanced params from provider config

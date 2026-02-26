@@ -9,8 +9,24 @@ export interface ImageMetadata {
   description_prompt_text: string | null;
   tagged_at: string | null;
   described_at: string | null;
+  embedded_at: string | null;
   tagging_duration_ms: number | null;
   caption_duration_ms: number | null;
+  embedding_duration_ms: number | null;
+}
+
+export interface ProcessingCostOperation {
+  operation: string;
+  provider: string;
+  model: string;
+  sparks: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+}
+
+export interface ProcessingCostResponse {
+  operations: ProcessingCostOperation[];
+  total_sparks: number;
 }
 
 export interface Image {
@@ -533,8 +549,15 @@ export interface GenerationCosts {
   expand_prompt_cost: number;
 }
 
+export interface VisionCostsEstimationBasis {
+  width: number;
+  height: number;
+  source: 'provided' | 'folder_avg' | 'default';
+}
+
 export interface VisionCosts {
   costs: Record<string, Record<string, Record<string, number>>>;
+  estimation_basis?: VisionCostsEstimationBasis | null;
 }
 
 export interface EditCosts {
