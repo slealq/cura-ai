@@ -12,8 +12,8 @@ from app.db.base import SessionLocal
 from app.models import Image, ImageStatus, Job, JobStatus
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers import get_cluster_summarizer, get_describer, get_embedder, get_tagger
-from app.services.billing_context import set_billing_deferred, set_billing_user
-from app.services.billing_service import InsufficientBalanceError, finalize_pipeline_billing
+from app.services.billing_context import set_billing_deferred, set_billing_image, set_billing_job, set_billing_user
+from app.services.billing_service import InsufficientBalanceError, finalize_job_billing
 from app.services.cluster_service import get_cluster_service
 from app.services.clustering import get_clustering_service
 from app.services.image_service import get_image_service
@@ -459,6 +459,8 @@ def tag_image(
               task_name="tag_image", image_id=image_id, job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
     set_billing_user(user_id)
+    set_billing_image(image_id)
+    set_billing_job(job_id)
     db = get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -527,6 +529,8 @@ def tag_image(
         image_service.update_status(image_id, ImageStatus.FAILED, err_msg)
         raise
     finally:
+        set_billing_image(None)
+        set_billing_job(None)
         db.close()
 
 
@@ -545,6 +549,8 @@ def describe_image(
               task_name="describe_image", image_id=image_id, job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
     set_billing_user(user_id)
+    set_billing_image(image_id)
+    set_billing_job(job_id)
     db = get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -611,6 +617,8 @@ def describe_image(
         image_service.update_status(image_id, ImageStatus.FAILED, err_msg)
         raise
     finally:
+        set_billing_image(None)
+        set_billing_job(None)
         db.close()
 
 
@@ -625,6 +633,8 @@ def embed_image(self, image_id: int, user_id: int, job_id: int | None = None) ->
               task_name="embed_image", image_id=image_id, job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
     set_billing_user(user_id)
+    set_billing_image(image_id)
+    set_billing_job(job_id)
     db = get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -651,13 +661,17 @@ def embed_image(self, image_id: int, user_id: int, job_id: int | None = None) ->
 
         # Generate embedding
         embedder = get_embedder(db=db, user_id=user_id)
+        embed_start = time.monotonic()
         result = run_async(embedder.embed_text(text))
+        embedding_duration_ms = round((time.monotonic() - embed_start) * 1000)
 
         # Save embedding
         image_service.save_metadata(
             image_id=image_id,
             embedding=result.embedding,
             embedding_model=result.model,
+            embedded_at=datetime.utcnow(),
+            embedding_duration_ms=embedding_duration_ms,
         )
 
         # Update status
@@ -682,6 +696,8 @@ def embed_image(self, image_id: int, user_id: int, job_id: int | None = None) ->
         image_service.update_status(image_id, ImageStatus.FAILED, _unwrap_error(e))
         raise
     finally:
+        set_billing_image(None)
+        set_billing_job(None)
         db.close()
 
 
@@ -695,6 +711,7 @@ def tag_and_describe_image(
     This is more efficient as it only loads the image once.
     """
     set_billing_user(user_id)
+    set_billing_image(image_id)
     db = get_db()
     try:
         image_service = get_image_service(db, user_id)
@@ -752,6 +769,7 @@ def tag_and_describe_image(
         image_service.update_status(image_id, ImageStatus.FAILED, _unwrap_error(e))
         raise
     finally:
+        set_billing_image(None)
         db.close()
 
 
@@ -947,6 +965,8 @@ def summarize_cluster(self, cluster_id: int, user_id: int) -> dict:
 @celery_app.task(bind=True)
 def summarize_clusters(self, cluster_ids: list[int], user_id: int, job_id: int | None = None) -> dict:
     """Summarize multiple clusters."""
+    set_billing_user(user_id)
+    set_billing_job(job_id)
     db = get_db()
     try:
         if job_id:
@@ -975,6 +995,12 @@ def summarize_clusters(self, cluster_ids: list[int], user_id: int, job_id: int |
                 job.completed_at = datetime.utcnow()
                 db.commit()
 
+        # Aggregate costs from all summarize calls onto the job
+        try:
+            finalize_job_billing(db, user_id, job_id)
+        except Exception:
+            logger.warning(f"Failed to finalize billing for summarize job {job_id}", exc_info=True)
+
         return {"status": "success", "results": results}
 
     except Exception as e:
@@ -986,6 +1012,7 @@ def summarize_clusters(self, cluster_ids: list[int], user_id: int, job_id: int |
                 db.commit()
         raise
     finally:
+        set_billing_job(None)
         db.close()
 
 
@@ -1006,7 +1033,12 @@ def process_image_pipeline(
               task_name="process_image_pipeline", image_id=image_id, job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
     set_billing_user(user_id)
-    set_billing_deferred(True)
+    set_billing_image(image_id)
+    set_billing_job(job_id)
+    # Only defer billing when we have a job_id — finalize_job_billing needs
+    # job_id to aggregate deferred costs. Without it, inline debits are safer.
+    if job_id:
+        set_billing_deferred(True)
     db = get_db()
     image_filename = None
     try:
@@ -1018,7 +1050,7 @@ def process_image_pipeline(
         if not image:
             return {"status": "error", "message": "Image not found"}
 
-        image_filename = image.filename
+        image_filename = image.original_filename
 
         # Get image data once
         image_data = run_async(image_service.get_image_data(image_id))
@@ -1057,7 +1089,9 @@ def process_image_pipeline(
 
         # Embed
         embedder = get_embedder(db=db, user_id=user_id)
+        embed_start_t = time.monotonic()
         embed_result = run_async(embedder.embed_text(text))
+        embedding_duration_ms = round((time.monotonic() - embed_start_t) * 1000)
 
         now = datetime.utcnow()
 
@@ -1075,8 +1109,10 @@ def process_image_pipeline(
             description_prompt_text=description_prompt,
             tagged_at=now,
             described_at=now,
+            embedded_at=now,
             tagging_duration_ms=tagging_duration_ms,
             caption_duration_ms=caption_duration_ms,
+            embedding_duration_ms=embedding_duration_ms,
         )
 
         # Update status
@@ -1107,11 +1143,19 @@ def process_image_pipeline(
         raise
     finally:
         # Finalize billing: aggregate deferred usage records into one debit
-        try:
-            finalize_pipeline_billing(db, user_id, job_id, image_filename)
-        except Exception:
-            logger.warning(f"Failed to finalize billing for job {job_id}", exc_info=True)
+        if job_id:
+            try:
+                filename_part = f" {image_filename}" if image_filename else ""
+                finalize_job_billing(
+                    db, user_id, job_id,
+                    description=f"Describe{filename_part}",
+                    create_debit=True,
+                )
+            except Exception:
+                logger.warning(f"Failed to finalize billing for job {job_id}", exc_info=True)
         set_billing_deferred(False)
+        set_billing_image(None)
+        set_billing_job(None)
         db.close()
 
 

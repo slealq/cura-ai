@@ -22,3 +22,23 @@ def set_billing_deferred(deferred: bool):
 def is_billing_deferred() -> bool:
     """Check if billing debits are currently deferred."""
     return getattr(_ctx, "billing_deferred", False)
+
+
+def set_billing_image(image_id: int | None):
+    """Set the image_id context so API call logs can reference the image."""
+    _ctx.image_id = image_id
+
+
+def get_billing_image() -> int | None:
+    """Get the image_id for the current thread."""
+    return getattr(_ctx, "image_id", None)
+
+
+def set_billing_job(job_id: int | None):
+    """Set the job_id context so API call logs can reference the job."""
+    _ctx.job_id = job_id
+
+
+def get_billing_job() -> int | None:
+    """Get the job_id for the current thread."""
+    return getattr(_ctx, "job_id", None)

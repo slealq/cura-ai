@@ -31,12 +31,24 @@ def write_log(
     """Write a log entry. Opens and closes its own session to stay independent."""
     db = SessionLocal()
     try:
+        # For API call logs, inherit context from billing thread-local if not explicitly set
+        effective_image_id = image_id
+        effective_user_id = user_id
+        if category == LogCategory.API_CALL:
+            from app.services.billing_context import get_billing_image, get_billing_job, get_billing_user
+            if effective_image_id is None:
+                effective_image_id = get_billing_image()
+            if effective_user_id is None:
+                effective_user_id = get_billing_user()
+            if job_id is None:
+                job_id = get_billing_job()
+
         entry = PipelineLog(
-            user_id=user_id,
+            user_id=effective_user_id,
             level=level,
             category=category,
             message=message,
-            image_id=image_id,
+            image_id=effective_image_id,
             job_id=job_id,
             task_name=task_name,
             provider=provider,

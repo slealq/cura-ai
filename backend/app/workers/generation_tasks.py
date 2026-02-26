@@ -19,8 +19,8 @@ from app.models.lora_model import LoraModelStatus
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers import get_describer, get_editor, get_embedder, get_evaluator, get_generator, get_trainer
 from app.providers.fal_provider import GenerationCancelledError
-from app.services.billing_context import set_billing_user
-from app.services.billing_service import InsufficientBalanceError
+from app.services.billing_context import set_billing_job, set_billing_user
+from app.services.billing_service import InsufficientBalanceError, finalize_job_billing
 from app.services.evaluation_service import get_evaluation_service
 from app.services.generation_service import get_generation_service
 from app.services.image_service import get_image_service
@@ -34,30 +34,6 @@ logger = logging.getLogger(__name__)
 def _get_db() -> Session:
     """Get database session for worker."""
     return SessionLocal()
-
-
-def _record_job_cost(db: Session, job_id: int | None, user_id: int | None, operation: str) -> None:
-    """Copy charged_cost (converted to sparks) from the most recent UsageRecord to the Job row."""
-    if not job_id or not user_id:
-        return
-    try:
-        from decimal import Decimal
-
-        from app.models.billing import UsageRecord
-        from app.services.billing_service import USD_TO_SPARKS
-        usage = (
-            db.query(UsageRecord)
-            .filter(UsageRecord.user_id == user_id, UsageRecord.operation == operation)
-            .order_by(UsageRecord.created_at.desc())
-            .first()
-        )
-        if usage:
-            job = db.query(Job).filter(Job.id == job_id).first()
-            if job:
-                job.charged_cost = Decimal(str(usage.charged_cost)) * USD_TO_SPARKS
-                db.commit()
-    except Exception as e:
-        logger.warning(f"Failed to record job cost for job {job_id}: {e}")
 
 
 def _update_job_status(db: Session, job_id: int | None, status: JobStatus, **kwargs):
@@ -233,6 +209,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
     """
     task_start = time.monotonic()
     set_billing_user(user_id)
+    set_billing_job(job_id)
     db = _get_db()
     try:
         # --- GUARD: Never re-submit training for already-completed models ---
@@ -476,7 +453,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
             progress=1,
             result={"lora_url": result.lora_url, "request_id": request_id},
         )
-        _record_job_cost(db, job_id, user_id, "train")
+        finalize_job_billing(db, user_id, job_id)
 
         # Best-effort download of weights — training already succeeded
         try:
@@ -525,11 +502,13 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
         raise
     finally:
+        set_billing_user(None)
+        set_billing_job(None)
         db.close()
 
 
 @celery_app.task(bind=True)
-def generate_image(self, generated_image_id: int, job_id: int | None = None, user_id: int | None = None) -> dict:
+def generate_image(self, generated_image_id: int, job_id: int | None = None, user_id: int | None = None, from_batch: bool = False) -> dict:
     """
     Generate a single image via fal.ai.
     """
@@ -542,6 +521,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
     )
     task_start = time.monotonic()
     set_billing_user(user_id)
+    set_billing_job(job_id)
     db = _get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -617,7 +597,9 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
         )
 
         _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
-        _record_job_cost(db, job_id, user_id, "generate")
+        # Finalize billing: aggregate costs onto job (batch parent will aggregate if from_batch)
+        if not from_batch:
+            finalize_job_billing(db, user_id, job_id)
 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(
@@ -679,6 +661,8 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
         raise
     finally:
+        set_billing_user(None)
+        set_billing_job(None)
         db.close()
 
 
@@ -710,6 +694,8 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
         user_id=user_id,
     )
     task_start = time.monotonic()
+    set_billing_user(user_id)
+    set_billing_job(job_id)
     db = _get_db()
     try:
         job = db.query(Job).filter(Job.id == job_id).first() if job_id else None
@@ -724,9 +710,9 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
             job.total_items = len(generated_image_ids)
             db.commit()
 
-        # Dispatch individual tasks
+        # Dispatch individual tasks with batch job_id so their PipelineLogs are tagged
         for gen_id in generated_image_ids:
-            generate_image.delay(gen_id, user_id=user_id)
+            generate_image.delay(gen_id, job_id=job_id, user_id=user_id, from_batch=True)
 
         # Poll for completion
         poll_interval = 5
@@ -777,6 +763,9 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
             }
             db.commit()
 
+        # Aggregate all child costs onto the batch job
+        finalize_job_billing(db, user_id, job_id)
+
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(
             category=LogCategory.TASK,
@@ -810,6 +799,8 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
                 db.commit()
         raise
     finally:
+        set_billing_user(None)
+        set_billing_job(None)
         db.close()
 
 
@@ -861,7 +852,7 @@ def _resolve_edit_sources(db: Session, gen_params: dict, user_id: int) -> list[s
 
 
 @celery_app.task(bind=True)
-def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id: int | None = None) -> dict:
+def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id: int | None = None, from_batch: bool = False) -> dict:
     """Edit an image via fal.ai."""
     write_log(
         category=LogCategory.TASK,
@@ -872,6 +863,7 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
     )
     task_start = time.monotonic()
     set_billing_user(user_id)
+    set_billing_job(job_id)
     db = _get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -948,7 +940,8 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
         )
 
         _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
-        _record_job_cost(db, job_id, user_id, "edit")
+        if not from_batch:
+            finalize_job_billing(db, user_id, job_id)
 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(
@@ -1008,6 +1001,8 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
         raise
     finally:
+        set_billing_user(None)
+        set_billing_job(None)
         db.close()
 
 
@@ -1022,6 +1017,8 @@ def batch_edit(self, generated_image_ids: list[int], job_id: int | None = None, 
         user_id=user_id,
     )
     task_start = time.monotonic()
+    set_billing_user(user_id)
+    set_billing_job(job_id)
     db = _get_db()
     try:
         job = db.query(Job).filter(Job.id == job_id).first() if job_id else None
@@ -1036,9 +1033,9 @@ def batch_edit(self, generated_image_ids: list[int], job_id: int | None = None, 
             job.total_items = len(generated_image_ids)
             db.commit()
 
-        # Dispatch individual tasks
+        # Dispatch individual tasks with batch job_id so their PipelineLogs are tagged
         for gen_id in generated_image_ids:
-            edit_image.delay(gen_id, user_id=user_id)
+            edit_image.delay(gen_id, job_id=job_id, user_id=user_id, from_batch=True)
 
         # Poll for completion
         poll_interval = 5
@@ -1089,6 +1086,9 @@ def batch_edit(self, generated_image_ids: list[int], job_id: int | None = None, 
             }
             db.commit()
 
+        # Aggregate all child costs onto the batch job
+        finalize_job_billing(db, user_id, job_id)
+
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(
             category=LogCategory.TASK,
@@ -1122,6 +1122,8 @@ def batch_edit(self, generated_image_ids: list[int], job_id: int | None = None, 
                 db.commit()
         raise
     finally:
+        set_billing_user(None)
+        set_billing_job(None)
         db.close()
 
 
@@ -1171,6 +1173,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
     )
     task_start = time.monotonic()
     set_billing_user(user_id)
+    set_billing_job(job_id)
     db = _get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -1604,6 +1607,9 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
             },
         )
 
+        # Aggregate all costs (generate, embed, vision) onto the job
+        finalize_job_billing(db, user_id, job_id)
+
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(
             category=LogCategory.TASK,
@@ -1645,4 +1651,6 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
         raise
     finally:
+        set_billing_user(None)
+        set_billing_job(None)
         db.close()
