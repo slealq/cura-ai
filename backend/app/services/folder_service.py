@@ -299,6 +299,33 @@ class FolderService:
             .all()
         )
 
+    def get_folder_dimension_stats(self, folder_id: int) -> dict:
+        """Return average image dimensions for a folder.
+
+        Returns {"avg_width": int, "avg_height": int, "count": int}.
+        """
+        row = (
+            self.db.query(
+                func.count(Image.id).label("cnt"),
+                func.avg(Image.width).label("avg_w"),
+                func.avg(Image.height).label("avg_h"),
+            )
+            .join(FolderImage, FolderImage.image_id == Image.id)
+            .filter(
+                FolderImage.folder_id == folder_id,
+                Image.width.isnot(None),
+                Image.height.isnot(None),
+            )
+            .first()
+        )
+        if not row or not row.cnt:
+            return {"avg_width": 1024, "avg_height": 1024, "count": 0}
+        return {
+            "avg_width": int(row.avg_w),
+            "avg_height": int(row.avg_h),
+            "count": row.cnt,
+        }
+
     def get_image_folders(self, image_id: int) -> list[Folder]:
         return (
             self.db.query(Folder)

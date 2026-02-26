@@ -437,7 +437,12 @@ class BillingService:
 
     @staticmethod
     def get_edit_costs(db: Session) -> dict[str, int]:
-        """Get per-call edit costs in sparks for each edit model."""
+        """Get per-call edit costs in sparks for each edit model.
+
+        Uses flat cost_per_call from catalog — approximate for typical resolutions.
+        Post-run billing uses fal.ai's actual reported cost which accounts for
+        resolution and output count variation.
+        """
         svc = BillingService(db, user_id=0)
         result: dict[str, int] = {}
         for edit_model, (provider, model, operation) in BillingService.EDIT_MODEL_MAP.items():
@@ -462,6 +467,59 @@ class BillingService:
             else:
                 result[base_model] = 0
         return result
+
+    # --- Output token averages for cost estimation ---
+
+    @staticmethod
+    def get_average_tokens(
+        db: Session, provider: str, model: str, operation: str, min_samples: int = 3
+    ) -> tuple[int | None, int | None]:
+        """Query AVG(input_tokens) and AVG(output_tokens) from usage_records.
+
+        Returns (avg_input, avg_output). Either value is None if fewer than
+        min_samples records exist with non-null values for that column.
+        """
+        row = (
+            db.query(
+                func.count(UsageRecord.id).label("cnt"),
+                func.avg(UsageRecord.input_tokens).label("avg_in"),
+                func.avg(UsageRecord.output_tokens).label("avg_out"),
+            )
+            .filter(
+                UsageRecord.provider == provider,
+                UsageRecord.model == model,
+                UsageRecord.operation == operation,
+            )
+            .first()
+        )
+        if not row or row.cnt < min_samples:
+            logger.debug(
+                "DB_AVG | %s/%s %s | samples=%d (need %d) → using formula fallback",
+                provider, model, operation, row.cnt if row else 0, min_samples,
+            )
+            return None, None
+
+        avg_in = int(row.avg_in) if row.avg_in is not None else None
+        avg_out = int(row.avg_out) if row.avg_out is not None else None
+        logger.debug(
+            "DB_AVG | %s/%s %s | samples=%d | avg_in=%s avg_out=%s",
+            provider, model, operation, row.cnt, avg_in, avg_out,
+        )
+        return avg_in, avg_out
+
+    @staticmethod
+    def get_average_output_tokens(
+        db: Session, provider: str, model: str, operation: str, min_samples: int = 3
+    ) -> int | None:
+        """Query AVG(output_tokens) from usage_records for a provider/model/operation.
+
+        Returns None if fewer than min_samples records exist, so caller can
+        fall back to defaults in token_estimator.py.
+        """
+        _, avg_out = BillingService.get_average_tokens(
+            db, provider, model, operation, min_samples
+        )
+        return avg_out
 
     # --- Admin / reporting (class methods, no user_id filter) ---
 
@@ -638,16 +696,23 @@ def record_usage_standalone(
         db.close()
 
 
-def finalize_pipeline_billing(
+def finalize_job_billing(
     db: Session,
     user_id: int,
     job_id: int | None,
-    image_filename: str | None = None,
+    description: str | None = None,
+    create_debit: bool = False,
 ) -> Decimal:
-    """Aggregate deferred usage records for a pipeline job into one debit.
+    """Aggregate usage records for a job and set Job.charged_cost.
 
     Looks up all UsageRecords linked to this job's pipeline logs, sums the
-    charged_cost, creates ONE BalanceTransaction, and sets job.charged_cost.
+    charged_cost, and sets job.charged_cost.
+
+    When create_debit=True (deferred pipeline billing), also creates ONE
+    combined BalanceTransaction debit. For non-deferred tasks (generate, edit,
+    train, evaluate), debits already happened inline so only the aggregation
+    to Job.charged_cost is needed.
+
     Returns total sparks charged.
     """
     if not job_id:
@@ -666,6 +731,11 @@ def finalize_pipeline_billing(
     )
 
     if not usage_records:
+        # Still set charged_cost to 0 so it's not NULL
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job and job.charged_cost is None:
+            job.charged_cost = Decimal("0")
+            db.commit()
         return Decimal("0")
 
     total_charged = sum((r.charged_cost for r in usage_records), Decimal("0"))
@@ -678,15 +748,13 @@ def finalize_pipeline_billing(
         breakdown_parts.append(f"{r.operation}: {float(sparks):.2f}")
     breakdown = " + ".join(breakdown_parts)
 
-    filename_part = f" {image_filename}" if image_filename else ""
-    description = f"Describe{filename_part} ({breakdown} sparks)"
-
-    # Create ONE combined debit transaction
-    if total_sparks > 0:
+    # Create ONE combined debit transaction (only for deferred billing)
+    if create_debit and total_sparks > 0:
+        desc = description or f"Pipeline ({breakdown} sparks)"
         svc = BillingService(db, user_id)
         svc.debit_usage(
             amount=total_sparks,
-            description=description,
+            description=desc,
         )
 
     # Set job.charged_cost
@@ -696,8 +764,12 @@ def finalize_pipeline_billing(
         db.commit()
 
     logger.info(
-        "BILLING FINALIZE | user_id=%s job=%s sparks=%.2f breakdown=[%s]",
-        user_id, job_id, float(total_sparks), breakdown,
+        "BILLING FINALIZE | user_id=%s job=%s sparks=%.2f debit=%s breakdown=[%s]",
+        user_id, job_id, float(total_sparks), create_debit, breakdown,
     )
 
     return total_sparks
+
+
+# Keep old name as alias for backward compatibility
+finalize_pipeline_billing = finalize_job_billing

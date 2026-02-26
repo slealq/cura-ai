@@ -1,4 +1,5 @@
 """Billing API endpoints for user balance, usage, and admin cost management."""
+import logging
 from datetime import datetime
 from decimal import Decimal
 
@@ -16,6 +17,8 @@ from app.db.base import get_db
 from app.models.billing import CostCatalog, UsageRecord
 from app.models.user import User
 from app.services.billing_service import BillingService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
@@ -197,13 +200,19 @@ def get_generation_costs(
     db: Session = Depends(get_db),
 ):
     """Get per-image generation cost in sparks for each base model."""
-    # Estimate expand_prompt cost: ~100 input tokens, ~200 output tokens typical
+    from app.services.token_estimator import estimate_prompt_tokens
+
     svc = BillingService(db, user_id=0)
     entry = svc._get_catalog_entry("openai", "gpt-4o-mini", "expand_prompt")
     expand_cost = 0.0
     if entry and entry.cost_per_input_token and entry.cost_per_output_token:
-        from decimal import Decimal
-        raw = entry.cost_per_input_token * 100 + entry.cost_per_output_token * 200
+        # Estimate from typical prompt length (~100 tokens) and DB avg or default 200
+        input_tokens = estimate_prompt_tokens("Expand this prompt into a detailed description")
+        db_avg_out = BillingService.get_average_output_tokens(
+            db, "openai", "gpt-4o-mini", "expand_prompt",
+        )
+        output_tokens = db_avg_out if db_avg_out is not None else 200
+        raw = entry.cost_per_input_token * input_tokens + entry.cost_per_output_token * output_tokens
         charged = raw * entry.platform_markup
         expand_cost = float(charged * Decimal("1000"))  # USD to sparks
     return {
@@ -240,24 +249,23 @@ def get_training_costs(
     return {"costs": BillingService.get_training_costs(db)}
 
 
+class EstimationBasis(BaseModel):
+    width: int
+    height: int
+    source: str  # "provided" | "folder_avg" | "default"
+
+
 class VisionCostsResponse(BaseModel):
     """Estimated per-call vision cost in sparks by provider → model → mode."""
     costs: dict[str, dict[str, dict[str, float]]]
+    estimation_basis: EstimationBasis | None = None
 
 
-# Typical token estimates for vision calls.
-# Output tokens (per mode) are conservative estimates (below max_tokens limits).
-_VISION_OUTPUT_TOKENS = {"tag": 500, "describe": 1500, "custom": 1000}
+class VisionCostEstimateRequest(BaseModel):
+    width: int | None = None
+    height: int | None = None
+    folder_id: int | None = None
 
-# Input tokens differ by provider due to image tokenization:
-#   OpenAI gpt-4o: ~765 tokens per high-detail image + ~400 prompt/system ≈ 1200
-#   Anthropic Claude: similar to OpenAI, ~1200
-#   fal/OpenRouter: Grok reports ~1792 image tokens + ~400 prompt ≈ 2200.
-_VISION_INPUT_TOKENS = {
-    "openai": 1200,
-    "anthropic": 1200,
-    "fal": 2200,
-}
 
 # Map provider → (catalog_provider, list of vision model IDs)
 # Curated lists imported from app.api.settings at top of file.
@@ -268,9 +276,93 @@ _VISION_PROVIDER_MODELS = {
 }
 
 
-# Estimated embed cost: tags + description text is typically ~500 input tokens
-# for text-embedding-3-small.
-_EMBED_INPUT_TOKENS = 500
+def _compute_vision_costs(
+    db: Session,
+    user_id: int,
+    width: int = 1024,
+    height: int = 1024,
+) -> dict[str, dict[str, dict[str, float]]]:
+    """Shared logic: compute vision cost estimates using formula-based token estimation.
+
+    Input tokens are always computed from image dimensions + current prompt text.
+    Output tokens use DEFAULT_OUTPUT_TOKENS per mode.
+    This ensures estimates always reflect the user's current prompt settings.
+    """
+    from app.services.settings_service import SettingsService
+    from app.services.token_estimator import (
+        estimate_embed_tokens,
+        estimate_image_tokens,
+        estimate_output_tokens,
+        estimate_prompt_tokens,
+    )
+
+    svc = BillingService(db, user_id=0)
+
+    # Get user's active composed prompt text
+    settings_svc = SettingsService(db, user_id)
+    tag_prompt_text = settings_svc.get_tag_prompt()
+    desc_prompt_text = settings_svc.get_description_prompt()
+
+    # Embed cost (always OpenAI text-embedding-3-small)
+    embed_entry = svc._get_catalog_entry("openai", "text-embedding-3-small", "embed")
+    embed_tokens = estimate_embed_tokens()
+    embed_cost_sparks = 0.0
+    if embed_entry and embed_entry.cost_per_input_token:
+        raw = embed_entry.cost_per_input_token * embed_tokens
+        charged = raw * embed_entry.platform_markup
+        embed_cost_sparks = round(float(charged * Decimal("1000")), 1)
+
+    result: dict[str, dict[str, dict[str, float]]] = {}
+
+    for provider_key, (cat_provider, model_ids) in _VISION_PROVIDER_MODELS.items():
+        provider_costs: dict[str, dict[str, float]] = {}
+        for model_id in model_ids:
+            costs: dict[str, float] = {}
+            for mode in ("tag", "describe", "custom"):
+                # "custom" mode uses the describer provider, so map to "describe"
+                # for catalog lookup. Custom operations have similar token
+                # profiles to describe operations.
+                operation = "tag" if mode == "tag" else "describe"
+                prompt_text = tag_prompt_text if mode == "tag" else desc_prompt_text
+
+                img_tokens = estimate_image_tokens(
+                    cat_provider, model_id, width, height,
+                )
+                prompt_tokens = estimate_prompt_tokens(prompt_text)
+                input_tokens = img_tokens + prompt_tokens
+                output_tokens = estimate_output_tokens(model_id, mode)
+
+                entry = svc._get_catalog_entry(cat_provider, model_id, operation)
+                if entry and entry.cost_per_input_token and entry.cost_per_output_token:
+                    in_cost = entry.cost_per_input_token * input_tokens
+                    out_cost = entry.cost_per_output_token * output_tokens
+                    raw = in_cost + out_cost
+                    charged = raw * entry.platform_markup
+                    sparks = round(float(charged * Decimal("1000")), 1)
+                    costs[mode] = sparks
+                    logger.info(
+                        "ESTIMATE | %s/%s %s %dx%d | "
+                        "img_tok=%d + prompt_tok=%d(%dchars) = in=%d | "
+                        "out=%d | "
+                        "in_cost=$%.6f + out_cost=$%.6f = raw=$%.6f | "
+                        "markup=%.1fx → sparks=%.1f",
+                        cat_provider, model_id, mode, width, height,
+                        img_tokens, prompt_tokens, len(prompt_text), input_tokens,
+                        output_tokens,
+                        float(in_cost), float(out_cost), float(raw),
+                        float(entry.platform_markup), sparks,
+                    )
+                else:
+                    costs[mode] = 0
+
+            costs["embed"] = embed_cost_sparks
+            costs["total"] = round(
+                costs.get("tag", 0) + costs.get("describe", 0) + embed_cost_sparks, 1
+            )
+            provider_costs[model_id] = costs
+        result[provider_key] = provider_costs
+
+    return result
 
 
 @router.get("/vision-costs", response_model=VisionCostsResponse)
@@ -278,42 +370,41 @@ def get_vision_costs(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Get estimated per-call vision cost in sparks: provider → model → mode.
+    """Get estimated per-call vision cost in sparks (default 1024x1024 dimensions)."""
+    costs = _compute_vision_costs(db, current_user.id)
+    return {
+        "costs": costs,
+        "estimation_basis": {"width": 1024, "height": 1024, "source": "default"},
+    }
 
-    Returns tag, describe, embed, and total (tag+describe+embed) per model.
+
+@router.post("/vision-costs", response_model=VisionCostsResponse)
+def estimate_vision_costs(
+    body: VisionCostEstimateRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get estimated per-call vision cost using actual image dimensions.
+
+    Accepts explicit width/height, or a folder_id to compute avg dims server-side.
+    Falls back to 1024x1024 when neither is provided.
     """
-    svc = BillingService(db, user_id=0)
-    result: dict[str, dict[str, dict[str, float]]] = {}
+    width, height, source = 1024, 1024, "default"
 
-    # Compute embed cost once (always OpenAI text-embedding-3-small)
-    embed_entry = svc._get_catalog_entry("openai", "text-embedding-3-small", "embed")
-    embed_cost_sparks = 0.0
-    if embed_entry and embed_entry.cost_per_input_token:
-        raw = embed_entry.cost_per_input_token * _EMBED_INPUT_TOKENS
-        charged = raw * embed_entry.platform_markup
-        embed_cost_sparks = round(float(charged * Decimal("1000")), 1)
+    if body.width is not None and body.height is not None:
+        width, height, source = body.width, body.height, "provided"
+    elif body.folder_id is not None:
+        from app.services.folder_service import FolderService
+        folder_svc = FolderService(db, current_user.id)
+        stats = folder_svc.get_folder_dimension_stats(body.folder_id)
+        if stats["count"] > 0:
+            width, height, source = stats["avg_width"], stats["avg_height"], "folder_avg"
 
-    for provider_key, (cat_provider, model_ids) in _VISION_PROVIDER_MODELS.items():
-        provider_costs: dict[str, dict[str, float]] = {}
-        input_tokens = _VISION_INPUT_TOKENS.get(provider_key, 1200)
-        for model_id in model_ids:
-            costs: dict[str, float] = {}
-            for mode, output_tokens in _VISION_OUTPUT_TOKENS.items():
-                operation = "tag" if mode == "tag" else "describe"
-                entry = svc._get_catalog_entry(cat_provider, model_id, operation)
-                if entry and entry.cost_per_input_token and entry.cost_per_output_token:
-                    raw = (entry.cost_per_input_token * input_tokens
-                           + entry.cost_per_output_token * output_tokens)
-                    charged = raw * entry.platform_markup
-                    costs[mode] = round(float(charged * Decimal("1000")), 1)
-                else:
-                    costs[mode] = 0
-            costs["embed"] = embed_cost_sparks
-            costs["total"] = round(costs.get("tag", 0) + costs.get("describe", 0) + embed_cost_sparks, 1)
-            provider_costs[model_id] = costs
-        result[provider_key] = provider_costs
-
-    return {"costs": result}
+    costs = _compute_vision_costs(db, current_user.id, width, height)
+    return {
+        "costs": costs,
+        "estimation_basis": {"width": width, "height": height, "source": source},
+    }
 
 
 # --- Admin endpoints ---
