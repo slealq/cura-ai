@@ -1,5 +1,6 @@
 """Image API endpoints."""
 import logging
+import time
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -10,6 +11,7 @@ from app.core.config import get_settings
 from app.core.security import get_current_user, get_current_user_from_token_param
 from app.db.base import get_db
 from app.models import Image, ImageSource, ImageStatus, Job, JobStatus, JobType
+from app.models.pipeline_log import LogCategory
 from app.models.user import User
 from app.schemas import (
     BatchUploadResponse,
@@ -23,6 +25,7 @@ from app.schemas import (
 )
 from app.services.folder_service import get_folder_service
 from app.services.image_service import get_image_service
+from app.services.log_service import write_log
 from app.workers.tasks import (
     describe_image,
     embed_image,
@@ -93,6 +96,7 @@ async def upload_images_batch(
     finish ingesting (in _finish_ingest_job_item). This prevents empty folders
     from appearing in the UI before thumbnails are ready.
     """
+    chunk_start = time.monotonic()
     image_service = get_image_service(db, current_user.id)
 
     # Create or load the INGEST job for tracking
@@ -111,6 +115,7 @@ async def upload_images_batch(
         job = Job(
             job_type=JobType.INGEST,
             status=JobStatus.RUNNING,
+            started_at=datetime.utcnow(),
             total_items=total_items or len(files),
             progress=0,
             user_id=current_user.id,
@@ -179,16 +184,38 @@ async def upload_images_batch(
     # Re-fetch job in case a rollback detached it
     job = db.query(Job).filter(Job.id == job.id).first()
 
-    # Track image IDs on the job so workers can count failures at completion
-    # image_ids: new (non-duplicate) images that need Celery processing
-    # all_upload_ids: all uploaded image IDs (including duplicates) for folder assignment
+    # Chunk timing data
+    chunk_elapsed_ms = round((time.monotonic() - chunk_start) * 1000)
+    now_iso = datetime.utcnow().isoformat()
+    n_new = len(new_image_ids)
+    n_dup = sum(1 for u in uploaded if u.status == "duplicate")
+    n_fail = len(failed)
+
+    # Track image IDs + observability counters on the job with row lock
+    # to serialize parallel chunk writers (fixes race on job.result merge)
     all_chunk_ids = [u.image_id for u in uploaded if u.image_id > 0]
-    existing_ids = (job.result or {}).get("image_ids", [])
-    existing_all = (job.result or {}).get("all_upload_ids", [])
-    job.result = {
-        **(job.result or {}),
-        "image_ids": existing_ids + new_image_ids,
-        "all_upload_ids": existing_all + all_chunk_ids,
+    locked_job = db.query(Job).filter(Job.id == job.id).with_for_update().first()
+    prev = locked_job.result or {}
+    chunk_idx = prev.get("chunks_received", 0)
+    locked_job.result = {
+        **prev,
+        "image_ids": prev.get("image_ids", []) + new_image_ids,
+        "all_upload_ids": prev.get("all_upload_ids", []) + all_chunk_ids,
+        "first_chunk_at": prev.get("first_chunk_at", now_iso),
+        "last_chunk_at": now_iso,
+        "total_received": prev.get("total_received", 0) + len(files),
+        "new_count": prev.get("new_count", 0) + n_new,
+        "duplicate_count": prev.get("duplicate_count", 0) + n_dup,
+        "failed_count": prev.get("failed_count", 0) + n_fail,
+        "chunks_received": chunk_idx + 1,
+        "chunk_timings": prev.get("chunk_timings", []) + [{
+            "chunk_idx": chunk_idx,
+            "n_files": len(files),
+            "n_new": n_new,
+            "n_dup": n_dup,
+            "n_fail": n_fail,
+            "api_ms": chunk_elapsed_ms,
+        }],
     }
     db.commit()
 
@@ -216,9 +243,22 @@ async def upload_images_batch(
         ):
             job.status = JobStatus.COMPLETED
             job.completed_at = datetime.utcnow()
+            job.result = {**(job.result or {}), "processing_done_at": datetime.utcnow().isoformat()}
             db.commit()
             from app.workers.tasks import _assign_folder_on_completion
             _assign_folder_on_completion(db, job)
+
+    write_log(
+        category=LogCategory.TASK,
+        message=(
+            f"Upload chunk {chunk_idx + 1}: {len(files)} files "
+            f"({n_new} new, {n_dup} dup, {n_fail} fail) in {chunk_elapsed_ms}ms"
+        ),
+        task_name="upload_images_batch",
+        job_id=job.id,
+        duration_ms=chunk_elapsed_ms,
+        user_id=current_user.id,
+    )
 
     logger.info(
         f"Batch upload chunk done: job_id={job.id}, "

@@ -3,6 +3,7 @@ import logging
 import time
 from datetime import datetime
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import Image, ImageMetadata, ImageSource, ImageStatus
@@ -168,15 +169,14 @@ class ImageService:
         # Generate unique object key
         object_key = self.storage.generate_object_key(filename)
 
-        # Compute MIME type, dimensions, and perceptual hash in a single PIL open
-        mime_type, width, height, perceptual_hash = (
-            self.storage.compute_image_metadata(file_data)
-        )
+        # Detect MIME type only — dimensions and phash are deferred to the
+        # Celery worker (process_ingest_batch) to keep the HTTP handler fast.
+        mime_type = self.storage.get_mime_type(file_data)
 
         # Save raw original to storage (1 write)
         await self.storage.save_image(file_data, object_key, mime_type)
 
-        # Create Image record with metadata already populated
+        # Create PENDING record — Celery will populate width/height/phash
         image = Image(
             user_id=self.user_id,
             source=source,
@@ -186,14 +186,20 @@ class ImageService:
             file_hash=file_hash,
             file_size=len(file_data),
             mime_type=mime_type,
-            width=width,
-            height=height,
-            perceptual_hash=perceptual_hash,
+            width=None,
+            height=None,
+            perceptual_hash=None,
             status=ImageStatus.PENDING,
         )
 
         self.db.add(image)
-        self.db.flush()  # Get the ID without committing — caller batches the commit
+        try:
+            self.db.flush()  # Get the ID without committing — caller batches the commit
+        except IntegrityError:
+            # Concurrent duplicate: another chunk inserted the same file_hash
+            # between our check and this flush. Treat as duplicate.
+            self.db.rollback()
+            return None
 
         return image
 

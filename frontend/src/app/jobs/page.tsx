@@ -6,7 +6,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Loader2, XCircle, Check, RotateCcw, Wrench, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { jobsApi, imagesApi, generationApi } from '@/lib/api';
-import { cn, formatDate, getStatusColor } from '@/lib/utils';
+import { cn, formatDate, formatDuration, getStatusColor } from '@/lib/utils';
 import type { BatchJobImage, Job } from '@/types';
 
 const JOB_TYPE_LABELS: Record<string, string> = {
@@ -151,6 +151,8 @@ export default function JobsPage() {
                           {job.image_filename || `#${job.image_id}`}
                         </span>
                       </Link>
+                    ) : job.job_type === 'ingest' && (job.result as Record<string, unknown> | null)?.total_received ? (
+                      <IngestSummaryPill job={job} />
                     ) : job.job_type === 'batch_reprocess' ? (
                       <BatchImagesPill job={job} />
                     ) : (
@@ -340,6 +342,31 @@ function BatchImagesPill({ job }: { job: Job }) {
   );
 }
 
+function IngestSummaryPill({ job }: { job: Job }) {
+  const result = job.result as Record<string, unknown> | null;
+  if (!result) return null;
+
+  const total = (result.total_received as number) ?? 0;
+  const nNew = (result.new_count as number) ?? 0;
+  const nDup = (result.duplicate_count as number) ?? 0;
+  const nFail = (result.failed_count as number) ?? 0;
+
+  const parts: string[] = [];
+  if (nNew > 0) parts.push(`${nNew} new`);
+  if (nDup > 0) parts.push(`${nDup} dup`);
+  if (nFail > 0) parts.push(`${nFail} failed`);
+  const tooltip = parts.join(', ') || `${total} received`;
+
+  return (
+    <span
+      className="text-xs text-primary bg-primary/10 px-2 py-0.5 rounded font-medium cursor-default"
+      title={tooltip}
+    >
+      {total} received
+    </span>
+  );
+}
+
 function LoraJobActions({
   job,
   onRecover,
@@ -448,9 +475,19 @@ function JobCost({ job }: { job: Job }) {
 function JobProgress({ job }: { job: Job }) {
   const isIndividual = job.total_items <= 1;
 
+  // Compute duration string for completed/failed jobs
+  const durationStr = (job.status === 'completed' || job.status === 'failed') && job.created_at && job.completed_at
+    ? formatDuration((new Date(job.completed_at + (job.completed_at.endsWith('Z') ? '' : 'Z')).getTime() - new Date(job.created_at + (job.created_at.endsWith('Z') ? '' : 'Z')).getTime()) / 1000)
+    : null;
+
   if (isIndividual) {
     if (job.status === 'completed') {
-      return <Check className="h-4 w-4 text-green-600" />;
+      return (
+        <span className="flex items-center gap-1.5">
+          <Check className="h-4 w-4 text-green-600" />
+          {durationStr && <span className="text-xs text-muted-foreground">{durationStr}</span>}
+        </span>
+      );
     }
     if (job.status === 'failed') {
       return <XCircle className="h-4 w-4 text-red-500" />;
@@ -474,6 +511,7 @@ function JobProgress({ job }: { job: Job }) {
         </div>
         <span className="text-xs text-muted-foreground">
           {job.progress}/{job.total_items}
+          {durationStr && ` · ${durationStr}`}
         </span>
       </div>
     );

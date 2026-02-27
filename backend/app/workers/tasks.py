@@ -224,6 +224,7 @@ def _finish_ingest_job_item(db: Session, job_id: int | None, *, failed: bool):
             )
 
         job.completed_at = datetime.utcnow()
+        job.result = {**(job.result or {}), "processing_done_at": datetime.utcnow().isoformat()}
         if n_failed >= job.total_items:
             job.status = JobStatus.FAILED
             job.error_message = f"All {n_failed} items failed"
@@ -375,6 +376,7 @@ def process_ingest_batch(
                     logger.info(
                         f"Batch ingest: image {image_id} already {image.status.value}, skipping"
                     )
+                    _finish_ingest_job_item(db, job_id, failed=False)
                     results.append({"image_id": image_id, "status": "skipped"})
                     continue
 
