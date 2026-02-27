@@ -908,7 +908,7 @@ def cluster_all_images(self, user_id: int, job_id: int | None = None) -> dict:
 
 
 @celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
-def summarize_cluster(self, cluster_id: int, user_id: int) -> dict:
+def summarize_cluster(self, cluster_id: int, user_id: int, job_id: int | None = None) -> dict:
     """
     Generate AI summary for a cluster.
 
@@ -950,9 +950,51 @@ def summarize_cluster(self, cluster_id: int, user_id: int) -> dict:
 
         # Generate summary
         summarizer = get_cluster_summarizer(db=db, user_id=user_id)
-        result = run_async(
-            summarizer.summarize_cluster(common_tags, descriptions, cluster.size)
+
+        # Resolve provider from settings (mirrors get_cluster_summarizer logic)
+        _settings_svc = get_settings_service(db, user_id)
+        _provider_config = _settings_svc.get_provider_config()
+        _summ_provider = (
+            _provider_config.get("language_provider")
+            or _provider_config.get("vision_provider")
+            or "openai"
         )
+
+        orch = BillingOrchestrator(db, user_id) if "summarize" in ORCHESTRATOR_ENABLED_OPS else None
+        decision = None
+        if orch:
+            idem_key = make_idempotency_key(user_id, get_trace_id(), "summarize", cluster_id)
+            decision, is_new = orch.create_decision(
+                operation="summarize",
+                provider=_summ_provider,
+                model=summarizer.get_model_name(),
+                trace_id=get_trace_id(),
+                idempotency_key=idem_key,
+                resource_id=cluster_id,
+                job_id=job_id,
+            )
+            if not is_new:
+                return {"status": "skipped", "cluster_id": cluster_id}
+
+        try:
+            result = run_async(
+                summarizer.summarize_cluster(common_tags, descriptions, cluster.size)
+            )
+        except Exception as e:
+            if orch and decision:
+                orch.fail_decision(decision.id, str(e))
+            raise
+
+        if orch and decision:
+            in_tok, out_tok, prov_cost = get_last_api_call_tokens()
+            clear_last_api_call_tokens()
+            orch.record_actual(
+                decision.id,
+                actual_input_tokens=in_tok,
+                actual_output_tokens=out_tok,
+                provider_cost=prov_cost,
+                defer_debit=is_billing_deferred(),
+            )
 
         # Update cluster
         cluster_service.update_cluster_summary(
@@ -1001,9 +1043,10 @@ def summarize_clusters(self, cluster_ids: list[int], user_id: int, job_id: int |
                 job.total_items = len(cluster_ids)
                 db.commit()
 
+        set_billing_deferred(True)
         results = []
         for i, cluster_id in enumerate(cluster_ids):
-            result = summarize_cluster(cluster_id, user_id)
+            result = summarize_cluster(cluster_id, user_id, job_id=job_id)
             results.append(result)
 
             if job_id:

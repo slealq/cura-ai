@@ -15,13 +15,13 @@ from app.services.cost_calculator import USD_TO_SPARKS, calculate_cost, get_cata
 
 logger = logging.getLogger(__name__)
 
-# Operations managed by the orchestrator. Start empty, enable incrementally.
-# When an operation is in this set, write_log() skips record_usage_standalone()
-# and the task code uses the orchestrator instead.
+# Operations managed by the orchestrator. When an operation is in this set,
+# write_log() skips record_usage_standalone() and the task code uses the
+# orchestrator instead.
 ORCHESTRATOR_ENABLED_OPS: set[str] = {
     "tag", "describe", "embed",
     "generate", "edit",
-    # TODO: Wire remaining tasks then enable: "train", "evaluate", "summarize", "expand_prompt"
+    "train", "evaluate", "summarize", "expand_prompt",
 }
 
 

@@ -425,6 +425,25 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
                 provider_metadata={"request_id": request_id, "base_model": lora.base_model},
             )
 
+        # --- Orchestrator decision for training ---
+        orch = BillingOrchestrator(db, user_id) if "train" in ORCHESTRATOR_ENABLED_OPS else None
+        decision = None
+        if orch:
+            idem_key = make_idempotency_key(user_id, get_trace_id(), "train", lora_model_id)
+            decision, is_new = orch.create_decision(
+                operation="train",
+                provider=lora.training_provider or "fal",
+                model=lora.base_model or "flux-dev",
+                trace_id=get_trace_id(),
+                idempotency_key=idem_key,
+                resource_id=lora_model_id,
+                job_id=job_id,
+            )
+            if not is_new:
+                logger.info("Duplicate train detected for %s, skipping", lora_model_id)
+                _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
+                return {"status": "skipped", "lora_model_id": lora_model_id}
+
         # Poll for completion
         poll_interval = 15  # seconds
         while True:
@@ -450,6 +469,18 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
 
         # Get result
         result = _run_async(trainer.get_training_result(request_id))
+
+        # Record actual billing
+        if orch and decision:
+            in_tok, out_tok, prov_cost = get_last_api_call_tokens()
+            clear_last_api_call_tokens()
+            orch.record_actual(
+                decision.id,
+                actual_input_tokens=in_tok,
+                actual_output_tokens=out_tok,
+                provider_cost=prov_cost,
+                defer_debit=False,
+            )
 
         # Update LoRA model
         gen_service.update_lora_status(
@@ -489,6 +520,8 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
         return {"status": "success", "lora_model_id": lora_model_id, "lora_url": result.lora_url}
 
     except InsufficientBalanceError:
+        if orch and decision:
+            orch.fail_decision(decision.id, "Insufficient credits")
         _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
         gen_service = get_generation_service(db, user_id)
         gen_service.update_lora_status(lora_model_id, LoraModelStatus.FAILED, "Insufficient credits")
@@ -496,6 +529,8 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
+        if orch and decision:
+            orch.fail_decision(decision.id, err_msg)
         logger.error(f"Failed to train LoRA {lora_model_id}: {err_msg}")
         write_log(
             category=LogCategory.TASK,
@@ -1353,6 +1388,56 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
             embedder = get_embedder(db=db, user_id=user_id)
             describer = get_describer(db=db, user_id=user_id)
 
+        # --- Orchestrator for evaluate sub-calls ---
+        orch = BillingOrchestrator(db, user_id) if "evaluate" in ORCHESTRATOR_ENABLED_OPS else None
+
+        # Resolve provider strings for orchestrator decisions
+        _gen_provider = "fal"
+        _gen_model = lora.base_model or "flux-dev"
+        _desc_provider = getattr(describer, "provider_name", "openai") if describer else "openai"
+        _desc_model = describer.get_model_name() if describer else "unknown"
+        _embed_provider = "openai"
+        _embed_model = embedder.get_model_name() if embedder else "unknown"
+        _eval_provider = vision_eval_provider or "fal"
+        _eval_model = evaluator.get_model_name() if evaluator else "unknown"
+
+        def _orch_call(sub_op, provider, model, resource_id, call_fn):
+            """Wrap a provider call with orchestrator decision tracking."""
+            decision = None
+            if orch:
+                idem_key = make_idempotency_key(
+                    user_id, get_trace_id(), f"evaluate_{sub_op}", resource_id,
+                )
+                decision, is_new = orch.create_decision(
+                    operation="evaluate",
+                    provider=provider,
+                    model=model,
+                    trace_id=get_trace_id(),
+                    idempotency_key=idem_key,
+                    resource_id=evaluation_id,
+                    job_id=job_id,
+                    request_snapshot={"sub_operation": sub_op},
+                )
+                if not is_new:
+                    return None  # skip duplicate
+            try:
+                result = call_fn()
+            except Exception as e:
+                if orch and decision:
+                    orch.fail_decision(decision.id, str(e))
+                raise
+            if orch and decision:
+                in_tok, out_tok, prov_cost = get_last_api_call_tokens()
+                clear_last_api_call_tokens()
+                orch.record_actual(
+                    decision.id,
+                    actual_input_tokens=in_tok,
+                    actual_output_tokens=out_tok,
+                    provider_cost=prov_cost,
+                    defer_debit=True,
+                )
+            return result
+
         progress_idx = 0
 
         # ========== PHASE 1: Reference pairs ==========
@@ -1375,16 +1460,21 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                 gen_width = gen_params.get("width", image.width or 1024)
                 gen_height = gen_params.get("height", image.height or 1024)
 
-                result = _run_async(
-                    generator.generate(
-                        prompt=prompt,
-                        width=gen_width,
-                        height=gen_height,
-                        num_inference_steps=gen_params.get("num_inference_steps", 28),
-                        guidance_scale=gen_params.get("guidance_scale", 3.5),
-                        loras=[{"path": lora.lora_url, "scale": gen_params.get("lora_scale", 1.0)}],
-                    )
+                result = _orch_call(
+                    f"generate_ref_{idx}", _gen_provider, _gen_model, pair.id if pair else idx,
+                    lambda: _run_async(
+                        generator.generate(
+                            prompt=prompt,
+                            width=gen_width,
+                            height=gen_height,
+                            num_inference_steps=gen_params.get("num_inference_steps", 28),
+                            guidance_scale=gen_params.get("guidance_scale", 3.5),
+                            loras=[{"path": lora.lora_url, "scale": gen_params.get("lora_scale", 1.0)}],
+                        )
+                    ),
                 )
+                if result is None:
+                    continue  # skip duplicate
 
                 # Save generated image
                 object_key = f"eval_{uuid.uuid4().hex}.png"
@@ -1412,16 +1502,25 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                 # Embedding similarity: describe generated → embed → compare
                 if embedder and describer:
                     try:
-                        desc_result = _run_async(
-                            describer.describe_image(
-                                result.image_data, "image/png",
-                                description_prompt="Describe this image in detail for comparison purposes. Return JSON with a 'description' field.",
-                            )
+                        desc_result = _orch_call(
+                            f"describe_ref_{idx}", _desc_provider, _desc_model, pair.id if pair else idx,
+                            lambda: _run_async(
+                                describer.describe_image(
+                                    result.image_data, "image/png",
+                                    description_prompt="Describe this image in detail for comparison purposes. Return JSON with a 'description' field.",
+                                )
+                            ),
                         )
-                        gen_text = desc_result.description
+                        gen_text = desc_result.description if desc_result else None
 
-                        embed_result = _run_async(embedder.embed_text(gen_text))
-                        gen_embedding = embed_result.embedding
+                        if gen_text:
+                            embed_result = _orch_call(
+                                f"embed_ref_{idx}", _embed_provider, _embed_model, pair.id if pair else idx,
+                                lambda: _run_async(embedder.embed_text(gen_text)),
+                            )
+                        else:
+                            embed_result = None
+                        gen_embedding = embed_result.embedding if embed_result else None
 
                         original_embedding = image.image_metadata.embedding
                         if original_embedding is not None and len(original_embedding) > 0:
@@ -1437,22 +1536,26 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                     try:
                         original_data = _run_async(image_service.get_image_data(image.id))
                         if original_data:
-                            eval_result = _run_async(
-                                evaluator.evaluate_pair(
-                                    original_image_data=original_data,
-                                    generated_image_data=result.image_data,
-                                    original_mime=image.mime_type or "image/jpeg",
-                                    generated_mime="image/png",
-                                    prompt_used=prompt,
-                                )
+                            eval_result = _orch_call(
+                                f"vision_eval_ref_{idx}", _eval_provider, _eval_model, pair.id if pair else idx,
+                                lambda: _run_async(
+                                    evaluator.evaluate_pair(
+                                        original_image_data=original_data,
+                                        generated_image_data=result.image_data,
+                                        original_mime=image.mime_type or "image/jpeg",
+                                        generated_mime="image/png",
+                                        prompt_used=prompt,
+                                    )
+                                ),
                             )
-                            vision_score = eval_result.overall
-                            vision_assessment = eval_result.assessment
-                            metrics_detail = {
-                                "style_fidelity": eval_result.style_fidelity,
-                                "subject_accuracy": eval_result.subject_accuracy,
-                                "detail_preservation": eval_result.detail_preservation,
-                            }
+                            if eval_result:
+                                vision_score = eval_result.overall
+                                vision_assessment = eval_result.assessment
+                                metrics_detail = {
+                                    "style_fidelity": eval_result.style_fidelity,
+                                    "subject_accuracy": eval_result.subject_accuracy,
+                                    "detail_preservation": eval_result.detail_preservation,
+                                }
                     except Exception as e:
                         logger.warning(f"Vision eval failed for pair {pair.id}: {e}")
 
@@ -1506,13 +1609,18 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                 ]
 
                 # Generate creative prompts
-                creative_prompts = _run_async(
-                    evaluator.generate_creative_prompts(
-                        trigger_word=lora.trigger_word or "",
-                        sample_descriptions=sample_descriptions,
-                        count=creative_count,
-                    )
+                creative_prompts = _orch_call(
+                    "creative_prompts", _eval_provider, _eval_model, evaluation_id,
+                    lambda: _run_async(
+                        evaluator.generate_creative_prompts(
+                            trigger_word=lora.trigger_word or "",
+                            sample_descriptions=sample_descriptions,
+                            count=creative_count,
+                        )
+                    ),
                 )
+                if creative_prompts is None:
+                    creative_prompts = []
                 logger.info(f"Generated {len(creative_prompts)} creative prompts")
 
                 for c_idx, creative_prompt in enumerate(creative_prompts):
@@ -1530,16 +1638,21 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                         c_width = gen_params.get("width", 1024)
                         c_height = gen_params.get("height", 1024)
 
-                        result = _run_async(
-                            generator.generate(
-                                prompt=creative_prompt,
-                                width=c_width,
-                                height=c_height,
-                                num_inference_steps=gen_params.get("num_inference_steps", 28),
-                                guidance_scale=gen_params.get("guidance_scale", 3.5),
-                                loras=[{"path": lora.lora_url, "scale": gen_params.get("lora_scale", 1.0)}],
-                            )
+                        result = _orch_call(
+                            f"generate_creative_{c_idx}", _gen_provider, _gen_model, pair.id if pair else c_idx,
+                            lambda: _run_async(
+                                generator.generate(
+                                    prompt=creative_prompt,
+                                    width=c_width,
+                                    height=c_height,
+                                    num_inference_steps=gen_params.get("num_inference_steps", 28),
+                                    guidance_scale=gen_params.get("guidance_scale", 3.5),
+                                    loras=[{"path": lora.lora_url, "scale": gen_params.get("lora_scale", 1.0)}],
+                                )
+                            ),
                         )
+                        if result is None:
+                            continue  # skip duplicate
 
                         # Save generated image
                         object_key = f"eval_creative_{uuid.uuid4().hex}.png"
@@ -1559,13 +1672,20 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                         # Score with single-image evaluation (no reference comparison)
                         eval_service.update_pair_status(pair.id, "scoring")
 
-                        eval_result = _run_async(
-                            evaluator.evaluate_single(
-                                image_data=result.image_data,
-                                mime_type="image/png",
-                                prompt_used=creative_prompt,
-                            )
+                        eval_result = _orch_call(
+                            f"creative_eval_{c_idx}", _eval_provider, _eval_model, pair.id if pair else c_idx,
+                            lambda: _run_async(
+                                evaluator.evaluate_single(
+                                    image_data=result.image_data,
+                                    mime_type="image/png",
+                                    prompt_used=creative_prompt,
+                                )
+                            ),
                         )
+
+                        if eval_result is None:
+                            eval_service.update_pair_status(pair.id, "completed")
+                            continue
 
                         vision_score = eval_result.overall
                         vision_assessment = eval_result.assessment
@@ -1653,16 +1773,19 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                         })
 
                 if pair_assessments:
-                    assessment_summary = _run_async(
-                        evaluator.summarize_assessments(
-                            model_name=lora.name,
-                            trigger_word=lora.trigger_word or "N/A",
-                            pair_assessments=pair_assessments,
-                            overall_score=overall,
-                            avg_vision=avg_vision,
-                            avg_embedding=avg_embedding,
-                            creative_section=creative_section,
-                        )
+                    assessment_summary = _orch_call(
+                        "summarize_assessments", _eval_provider, _eval_model, evaluation_id,
+                        lambda: _run_async(
+                            evaluator.summarize_assessments(
+                                model_name=lora.name,
+                                trigger_word=lora.trigger_word or "N/A",
+                                pair_assessments=pair_assessments,
+                                overall_score=overall,
+                                avg_vision=avg_vision,
+                                avg_embedding=avg_embedding,
+                                creative_section=creative_section,
+                            )
+                        ),
                     )
             except Exception as e:
                 logger.warning(f"Assessment summary generation failed: {e}")

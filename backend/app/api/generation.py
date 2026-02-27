@@ -366,6 +366,14 @@ async def expand_prompt(
     from openai import AsyncOpenAI
 
     from app.providers import _resolve_config
+    from app.services.billing_context import (
+        get_trace_id,
+        init_trace,
+        make_idempotency_key,
+        set_billing_user,
+        set_trace_id,
+    )
+    from app.services.billing_orchestrator import ORCHESTRATOR_ENABLED_OPS, BillingOrchestrator
     from app.services.billing_service import BillingService, InsufficientBalanceError
 
     try:
@@ -385,6 +393,21 @@ async def expand_prompt(
     expansion_max_tokens = provider_config.get("max_tokens_expansion", 500)
 
     client = AsyncOpenAI(api_key=openai_key)
+
+    set_billing_user(current_user.id)
+    init_trace()
+    orch = BillingOrchestrator(db, current_user.id) if "expand_prompt" in ORCHESTRATOR_ENABLED_OPS else None
+    decision = None
+    if orch:
+        idem_key = make_idempotency_key(current_user.id, get_trace_id(), "expand_prompt", None)
+        decision, is_new = orch.create_decision(
+            operation="expand_prompt",
+            provider="openai",
+            model=expansion_model,
+            trace_id=get_trace_id(),
+            idempotency_key=idem_key,
+        )
+        # No idempotency skip for expand_prompt — each call is intentionally unique
 
     try:
         response = await client.chat.completions.create(
@@ -410,7 +433,15 @@ async def expand_prompt(
         usage = response.usage
 
         # Record billing
-        if usage:
+        if orch and decision and usage:
+            orch.record_actual(
+                decision.id,
+                actual_input_tokens=usage.prompt_tokens,
+                actual_output_tokens=usage.completion_tokens,
+                defer_debit=False,
+            )
+        elif usage:
+            # Fallback if orchestrator not enabled
             billing = BillingService(db, current_user.id)
             billing.record_usage(
                 operation="expand_prompt",
@@ -425,8 +456,13 @@ async def expand_prompt(
     except HTTPException:
         raise
     except Exception as e:
+        if orch and decision:
+            orch.fail_decision(decision.id, str(e))
         logger.error(f"Failed to expand prompt: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to expand prompt: {str(e)}")
+    finally:
+        set_billing_user(None)
+        set_trace_id(None)
 
 
 # --- LoRA Routes ---
