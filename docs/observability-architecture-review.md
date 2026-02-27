@@ -1,6 +1,6 @@
 # Observability Architecture Review — Cura AI
 
-*Internal design review document. February 2026. Revised with implementation feedback.*
+*Internal design review document. February 2026. Revised with implementation feedback and second-pass audit (Feb 27).*
 
 ---
 
@@ -89,7 +89,7 @@
 | HTTP client | Axios | 1.6.5 |
 | State | TanStack Query | 5.17.9 |
 | Toasts | Sonner | 2.0.7 |
-| Backend | FastAPI / Uvicorn | Python 3.12 |
+| Backend | FastAPI / Uvicorn | Python 3.11 |
 | Job runner | Celery | with Redis broker |
 | Broker/cache | Redis 7 | 3 DBs (cache/broker/results) |
 | Database | PostgreSQL 16 + pgvector 0.7 | 1536-dim embeddings |
@@ -191,13 +191,47 @@ The **PostgreSQL `jobs` table** is the single source of truth. The frontend poll
 - Task lifecycle: start, complete, fail with duration and error details
 - Billing decisions: trace_id, operation, estimated vs actual costs
 - AUDIT-level provider logs: `OPENAI_AUDIT`, `ANTHROPIC_AUDIT` with full request/response detail
+- **Upload chunks** (recently added): per-chunk `write_log()` with file counts, new/dup/fail breakdown, and duration_ms (`api/images.py`)
 
 **What is NOT logged:**
 - HTTP request/response (no middleware) — latency, status codes, payload sizes
 - Database query timing
 - Redis operations
-- File upload/download operations
+- File download / serving operations (thumbnails, originals, generated images)
 - Frontend errors, user actions, page views
+
+### Recently Implemented: Upload Pipeline Observability
+
+The following was added in February 2026 and addresses several gaps from the original review:
+
+**Backend (`api/images.py`, `workers/tasks.py`, `services/image_service.py`):**
+
+- **Chunk-level timing + counters in `Job.result` JSON** (no migration needed):
+  ```json
+  {
+    "first_chunk_at": "2026-02-27T14:30:01.123",
+    "last_chunk_at": "2026-02-27T14:30:05.678",
+    "processing_done_at": "2026-02-27T14:30:12.345",
+    "total_received": 200,
+    "new_count": 180, "duplicate_count": 15, "failed_count": 5,
+    "chunks_received": 14,
+    "chunk_timings": [{"chunk_idx": 0, "n_files": 15, "n_new": 13, "n_dup": 1, "n_fail": 1, "api_ms": 1234}]
+  }
+  ```
+- **`with_for_update()` row lock** on `job.result` merge — serializes parallel chunk writers, fixing the race condition where concurrent chunks overwrote each other's `image_ids`. Uses `lazyload(Job.image)` to avoid PostgreSQL's "FOR UPDATE cannot be applied to nullable side of outer join" error (see [H.9](#h9-lazyload-pattern)).
+- **`processing_done_at` timestamp** stamped in `job.result` when Celery finalizes the job — enables upload-phase vs processing-phase duration breakdown.
+- **`started_at` set on INGEST job creation** (was previously missing).
+- **Per-chunk `write_log()`** call with chunk index, file counts, and duration.
+- **Re-delivery guard fix**: `_finish_ingest_job_item()` now called on skipped re-delivered images (prevents jobs from hanging forever after worker restart).
+- **`IntegrityError` handling in `fast_ingest()`**: gracefully returns `None` (duplicate) instead of 500 error on concurrent duplicate uploads.
+- **Deferred PIL metadata**: `compute_image_metadata()` removed from `fast_ingest()` — dimensions and phash are computed by the Celery worker. Saves ~20-50ms per file in the HTTP handler.
+
+**Frontend (`jobs/page.tsx`, `utils.ts`, `images/page.tsx`, `UploadContext.tsx`, `useJobNotifications.ts`):**
+
+- **Duration on job progress bar**: completed jobs show elapsed time (e.g., "50/50 · 12s").
+- **`IngestSummaryPill`**: INGEST jobs show "200 received" pill with hover tooltip ("180 new, 15 dup, 5 failed").
+- **`min_status: 'ingested'` filter on Unfiled query**: PENDING images (no thumbnails) are hidden from the UI.
+- **Cache invalidation fix**: `UploadContext` and `useJobNotifications` now also invalidate `['unfiled-images']` and `['all-images']` query keys (previously only `['images']` was invalidated, which didn't match `ImageGrid`'s prefixed keys).
 
 ### Metrics
 
@@ -630,7 +664,7 @@ This is the highest-leverage work. Everything else builds on it.
 
 1. **Thread-local context in async code** (`billing_context.py:6`)
    - `_ctx = threading.local()` is thread-local, not task-local. FastAPI runs async handlers on the event loop — `threading.local()` may not scope correctly when async handlers share threads. In Celery, the risk depends on the concurrency model (prefork = separate processes, so thread-locals are safe; threads/gevent/eventlet = shared, not safe).
-   - **Fix:** Use `contextvars.ContextVar` instead of `threading.local()`. Python 3.12 has full support. This is correct for both FastAPI (async-aware) and Celery prefork (each fork gets its own context).
+   - **Fix:** Use `contextvars.ContextVar` instead of `threading.local()`. Python 3.11+ has full support. This is correct for both FastAPI (async-aware) and Celery prefork (each fork gets its own context).
    - **Caveat:** Celery does NOT automatically propagate `contextvars` across process boundaries. When the API dispatches a task to a worker (separate process), context is lost. You must explicitly pass `trace_id`, `session_id`, etc. as task kwargs. The `contextvars` fix helps within a single process (e.g., within a FastAPI request handler, or within a Celery task's execution), not across the API→worker boundary. Cross-process propagation requires explicit kwarg passing (Phase 1, task 1.1).
 
 2. **trace_id not generated for most API endpoints**
@@ -661,6 +695,52 @@ This is the highest-leverage work. Everything else builds on it.
    - Returns `{"status": "healthy"}` without checking any dependency. A backend with a dead DB connection would still report healthy.
    - **Fix:** Phase 0 — add DB, Redis, storage checks.
 
+<a id="h9-lazyload-pattern"></a>
+9. **`with_for_update()` requires `lazyload()` on Job model** (discovered during implementation)
+   - The `Job` model has `lazy="joined"` on its `image` relationship, which generates a LEFT JOIN. PostgreSQL's `FOR UPDATE` cannot be applied to the nullable side of an outer join, causing `psycopg2.errors.FeatureNotSupported`.
+   - **Fix (implemented):** Add `.options(lazyload(Job.image))` to any `with_for_update()` query on the `Job` model. This suppresses the eager join.
+   - **Broader risk:** Any model with `lazy="joined"` on a nullable FK will hit this. Future `with_for_update()` usage on other models should be checked for the same pattern.
+
+10. **TanStack Query cache invalidation is key-prefix fragile**
+    - `ImageGrid` uses prefixed query keys like `['unfiled-images', filter, page]` and `['all-images', filter, page]`. Invalidating `['images']` does NOT match these — TanStack Query's `invalidateQueries` matches keys that *start with* the provided prefix.
+    - **Discovered when:** Upload completed but the Unfiled section showed stale "No Preview" ghosts until hard reload.
+    - **Fix (implemented):** `UploadContext` and `useJobNotifications` now also invalidate `['unfiled-images']` and `['all-images']`.
+    - **Broader risk:** Any new `ImageGrid` instance with a different `queryKeyPrefix` will silently miss cache invalidations. Consider a convention: either use a shared prefix (e.g., all image queries start with `['images', ...]`) or maintain a central list of image-related query keys to invalidate.
+
+11. **Celery task re-delivery and idempotency gaps**
+    - With `acks_late=True` (Celery default) or worker crashes, tasks can be re-delivered. The re-delivery guard in `process_ingest_batch` (check `status != PENDING`) was missing a `_finish_ingest_job_item()` call, causing jobs to hang forever.
+    - **Fix (implemented):** Re-delivery guard now calls `_finish_ingest_job_item(db, job_id, failed=False)` before skipping.
+    - **Gap:** There is no systematic idempotency analysis per task type. Each task has its own guard pattern. A table of idempotency guarantees per task type would prevent similar bugs. Training tasks use `acks_late=False` + `max_retries=0` to avoid re-delivery entirely, but other tasks rely on application-level guards.
+
+12. **Storage orphan files are undetectable**
+    - `fast_ingest()` writes files to storage *before* creating the DB record. If the process crashes between `save_image()` and `db.flush()`, the file is orphaned — it exists in storage with no corresponding `images.object_key` reference.
+    - **No cleanup mechanism exists.** No Celery beat task, no admin endpoint, no reconciliation job.
+    - **Fix:** Add a periodic reconciliation task that lists storage objects and compares against `images.object_key` + `generated_images.object_key`. Delete orphans older than 1 hour. Track orphan count as a metric.
+
+13. **`folder.image_count` denormalization drift**
+    - `folder_service.py:add_images_to_folder()` computes `image_count` as `COUNT(*) + added` without row locking. Under concurrent `add_images_to_folder` calls (e.g., two uploads to the same folder), the count can drift from actual.
+    - **Impact:** Displayed folder image count may be wrong. Not a data loss bug, but a UI accuracy issue.
+    - **Fix:** Compute count purely from `COUNT(*)` after flushing, or use `with_for_update()` on the folder row.
+
+14. **Frontend error swallowing in TanStack Query**
+    - Many `useQuery` calls have no `onError` handler. When a query fails (e.g., network error, 500), TanStack Query silently retries 3 times then stops — the UI just shows a loading spinner forever.
+    - The Axios interceptor handles 401 (token refresh) but non-401 errors in query functions are not surfaced to the user unless the component explicitly checks `isError`.
+    - **Impact:** Users see infinite loading states instead of actionable error messages.
+    - **Fix:** Add a global `QueryClient` `onError` handler that shows a Sonner toast for unexpected query failures. Or add `error.tsx` error boundaries per route.
+
+15. **Default worker concurrency=1 creates ingest bottleneck**
+    - `docker-compose.yml` sets `--concurrency=1` on the default Celery worker. A 100-image upload dispatches ~7 `process_ingest_batch` tasks that execute sequentially. Each task reads files from storage and generates 3 thumbnails per image.
+    - **Impact:** Queue wait time for later ingest batches grows linearly. The user sees "50/50" progress but folder assignment is delayed by the sequential processing.
+    - **Metric to track:** Queue wait time for the default queue (Phase 1, item 1.6). If `started_at - created_at` for ingest tasks regularly exceeds 30s, increase concurrency to 2.
+    - **Caution:** Increasing concurrency increases DB connection pool pressure (currently `pool_size=5, max_overflow=5`).
+
+16. **`min_status` filter not applied consistently across UI views**
+    - The Unfiled query on `/images` now filters `min_status: 'ingested'` to hide PENDING images (no thumbnails). But other views may still show them:
+      - All Images page (`/images/all`) — needs verification
+      - Folder detail page (`/images/folder/[id]`) — folder assignment is deferred, so PENDING images shouldn't appear, but race conditions are possible
+      - Search results — PENDING images have no embedding, so they won't appear in semantic search, but could appear in tag/text search if tags are set before status advances (unlikely but unverified)
+    - **Fix:** Audit all `imagesApi.list()` call sites. Any view that renders thumbnails should filter `min_status: 'ingested'` to avoid "No Preview" states.
+
 ### What Could Not Be Determined from Code
 
 | Unknown | Evidence Checked | Next Step |
@@ -673,6 +753,9 @@ This is the highest-leverage work. Everything else builds on it.
 | Frontend bundle size / performance budget | No Lighthouse CI, no bundle analyzer configured | Add `@next/bundle-analyzer` for visibility |
 | Provider rate limit handling | `tenacity` is in deps but usage patterns vary by provider | Audit all `@retry` decorators for consistent backoff strategy |
 | Cost of telemetry overhead | No measurements | Benchmark OTel SDK overhead on provider call hot paths before enabling 100% tracing |
+| `min_status` filter consistency | Only `/images` (Unfiled) verified | Audit `/images/all`, `/images/folder/[id]`, search results, cluster detail for PENDING image visibility |
+| Storage orphan count | No tooling exists | Implement reconciliation job; count orphans as a metric |
+| `folder.image_count` drift | Not measured | Add admin reconciliation endpoint or periodic check |
 
 ---
 
