@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models.billing import UsageRecord
 from app.models.cost_decision import CostDecision, DecisionStatus
+from app.services.billing_service import BillingService, InsufficientBalanceError
 from app.services.cost_calculator import USD_TO_SPARKS, calculate_cost, get_catalog_entry
 
 logger = logging.getLogger(__name__)
@@ -123,9 +124,26 @@ class BillingOrchestrator:
         self.db.add(decision)
         self.db.flush()
 
+        # Reserve estimated sparks to prevent concurrent overspend
+        reserved = 0
+        if estimated_sparks and estimated_sparks > 0:
+            svc = BillingService(self.db, self.user_id)
+            if not svc.reserve_sparks(estimated_sparks, decision.id):
+                decision.status = DecisionStatus.FAILED.value
+                decision.error_message = "Insufficient balance for reservation"
+                self.db.commit()
+                raise InsufficientBalanceError(
+                    f"User {self.user_id} has insufficient credits "
+                    f"(need ~{estimated_sparks} sparks)"
+                )
+            reserved = estimated_sparks
+
+        decision.reserved_sparks = reserved
+        self.db.commit()
+
         logger.info(
-            "ORCH decision | id=%s op=%s %s/%s trace=%s est_sparks=%s",
-            decision.id, operation, provider, model, trace_id, estimated_sparks,
+            "ORCH decision | id=%s op=%s %s/%s trace=%s est_sparks=%s reserved=%s",
+            decision.id, operation, provider, model, trace_id, estimated_sparks, reserved,
         )
 
         return decision, True
@@ -189,17 +207,24 @@ class BillingOrchestrator:
         decision.response_snapshot = response_snapshot
         decision.updated_at = datetime.utcnow()
 
+        reserved = decision.reserved_sparks or 0
+        svc = BillingService(self.db, self.user_id)
+
         if charged_cost > 0 and not defer_debit:
-            from app.services.billing_service import BillingService
             spark_amount = charged_cost * USD_TO_SPARKS
-            svc = BillingService(self.db, self.user_id)
-            svc.debit_usage(
-                amount=spark_amount,
+            svc.release_and_debit(
+                reserved_amount=reserved,
+                actual_amount=spark_amount,
                 description=f"{decision.operation} via {decision.provider}/{decision.model}",
                 usage_record_id=record.id,
             )
+            decision.reserved_sparks = 0
             decision.status = DecisionStatus.CHARGED.value
         else:
+            # Deferred debit or zero cost — just release the reservation
+            if reserved > 0:
+                svc.release_reservation(reserved)
+                decision.reserved_sparks = 0
             decision.status = DecisionStatus.EXECUTED.value
 
         self.db.commit()
@@ -212,18 +237,28 @@ class BillingOrchestrator:
         return record
 
     def fail_decision(self, decision_id: int, error_message: str) -> None:
-        """Mark a decision as failed."""
+        """Mark a decision as failed and release any reservation."""
         decision = self.db.query(CostDecision).filter(CostDecision.id == decision_id).first()
         if decision:
+            reserved = decision.reserved_sparks or 0
+            if reserved > 0:
+                svc = BillingService(self.db, self.user_id)
+                svc.release_reservation(reserved)
+                decision.reserved_sparks = 0
             decision.status = DecisionStatus.FAILED.value
             decision.error_message = error_message
             decision.updated_at = datetime.utcnow()
             self.db.commit()
 
     def cancel_decision(self, decision_id: int) -> None:
-        """Mark a decision as cancelled."""
+        """Mark a decision as cancelled and release any reservation."""
         decision = self.db.query(CostDecision).filter(CostDecision.id == decision_id).first()
         if decision:
+            reserved = decision.reserved_sparks or 0
+            if reserved > 0:
+                svc = BillingService(self.db, self.user_id)
+                svc.release_reservation(reserved)
+                decision.reserved_sparks = 0
             decision.status = DecisionStatus.CANCELLED.value
             decision.updated_at = datetime.utcnow()
             self.db.commit()

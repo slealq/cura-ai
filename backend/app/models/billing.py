@@ -109,6 +109,7 @@ class UserBalance(Base):
         Numeric(12, 4), nullable=False, default=Decimal("0")
     )
     balance_sparks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reserved_sparks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     currency: Mapped[str] = mapped_column(String(16), nullable=False, default="credits")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False

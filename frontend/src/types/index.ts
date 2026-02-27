@@ -488,6 +488,8 @@ export interface TokenResponse {
 
 export interface UserBalance {
   balance: number;
+  reserved: number;
+  available: number;
   currency: string;
 }
 
@@ -609,6 +611,134 @@ export interface BillingLogListResponse {
   total: number;
   skip: number;
   limit: number;
+}
+
+// --- Reconciliation / Anomalies / Metrics types ---
+
+export interface ReconciliationRow {
+  operation: string;
+  provider: string;
+  model: string;
+  total_decisions: number;
+  avg_estimated_sparks: number;
+  avg_actual_sparks: number;
+  avg_delta: number;
+  avg_delta_pct: number;
+  min_delta: number;
+  max_delta: number;
+  total_estimated: number;
+  total_actual: number;
+}
+
+export interface ReconciliationResponse {
+  items: ReconciliationRow[];
+  threshold_pct: number;
+  threshold_violations: number;
+}
+
+export interface AnomalyEntry {
+  id: number;
+  user_id: number | null;
+  anomaly_type: string;
+  provider: string | null;
+  model: string | null;
+  operation: string | null;
+  detail: Record<string, unknown> | null;
+  resolved: boolean;
+  created_at: string;
+}
+
+export interface AnomalyListResponse {
+  items: AnomalyEntry[];
+  total: number;
+  skip: number;
+  limit: number;
+}
+
+export interface AnomalyGroupSummary {
+  anomaly_type: string;
+  provider: string | null;
+  model: string | null;
+  operation: string | null;
+  count: number;
+}
+
+export interface AnomalySummaryResponse {
+  groups: AnomalyGroupSummary[];
+  total_unresolved: number;
+  last_24h_count: number;
+}
+
+export interface OperationMetric {
+  operation: string;
+  count: number;
+  avg_sparks: number;
+  failure_count: number;
+}
+
+export interface ProviderMetric {
+  provider: string;
+  count: number;
+  avg_sparks: number;
+  failure_count: number;
+}
+
+export interface MetricAlert {
+  level: string;
+  message: string;
+}
+
+export interface MetricsResponse {
+  hours: number;
+  total_operations: number;
+  ops_per_hour: number;
+  failure_rate: number;
+  cancel_rate: number;
+  pending_decisions: number;
+  avg_delta_pct: number;
+  catalog_miss_count: number;
+  by_operation: OperationMetric[];
+  by_provider: ProviderMetric[];
+  alerts: MetricAlert[];
+}
+
+export interface EvaluationCostsResponse {
+  breakdown: {
+    generate_per_image: number;
+    describe_per_image: number;
+    embed_per_image: number;
+    vision_eval_per_image: number;
+    creative_prompts: number;
+    assessment: number;
+    per_reference_pair: number;
+    per_creative_pair: number;
+  };
+  totals: {
+    reference: number;
+    creative: number;
+    overhead: number;
+    total: number;
+  };
+  params: {
+    base_model: string;
+    sample_count: number;
+    creative_count: number;
+  };
+  providers: {
+    generation: string;
+    vision: string;
+    evaluation: string;
+    embedding: string;
+  };
+}
+
+export interface SummarizeCostsResponse {
+  per_cluster: number;
+  cluster_count: number;
+  total: number;
+  provider: string;
+  estimated_input_tokens: number;
+  estimated_output_tokens: number;
 }
 
 // --- Operations Monitor types ---

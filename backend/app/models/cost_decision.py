@@ -76,6 +76,7 @@ class CostDecision(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    reserved_sparks: Mapped[int | None] = mapped_column(Integer, nullable=True)
     idempotency_key: Mapped[str | None] = mapped_column(String(256), nullable=True, unique=True)
 
     created_at: Mapped[datetime] = mapped_column(

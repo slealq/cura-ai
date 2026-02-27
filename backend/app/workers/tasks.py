@@ -1064,7 +1064,7 @@ def summarize_clusters(self, cluster_ids: list[int], user_id: int, job_id: int |
 
         # Aggregate costs from all summarize calls onto the job
         try:
-            finalize_job_billing(db, user_id, job_id)
+            finalize_job_billing(db, user_id, job_id, create_debit=True)
         except Exception:
             logger.warning(f"Failed to finalize billing for summarize job {job_id}", exc_info=True)
 
@@ -1774,3 +1774,45 @@ def cleanup_old_pipeline_logs():
     count = _cleanup(days=7)
     if count:
         logger.info(f"Cleaned up {count} old pipeline log entries")
+
+
+@celery_app.task
+def cleanup_stale_reservations():
+    """Release reservations from stale PENDING decisions (older than 2 hours)."""
+    from datetime import timedelta
+
+    from app.models.cost_decision import CostDecision, DecisionStatus
+    from app.services.billing_service import BillingService
+
+    db = SessionLocal()
+    try:
+        cutoff = datetime.utcnow() - timedelta(hours=2)
+        stale = (
+            db.query(CostDecision)
+            .filter(
+                CostDecision.status == DecisionStatus.PENDING.value,
+                CostDecision.created_at < cutoff,
+                CostDecision.reserved_sparks > 0,
+            )
+            .all()
+        )
+        for decision in stale:
+            released = decision.reserved_sparks
+            svc = BillingService(db, decision.user_id)
+            svc.release_reservation(released)
+            decision.reserved_sparks = 0
+            decision.status = DecisionStatus.FAILED.value
+            decision.error_message = "stale reservation cleanup"
+            decision.updated_at = datetime.utcnow()
+            db.commit()
+            logger.info(
+                "STALE_CLEANUP | decision=%s user=%s released=%d sparks",
+                decision.id, decision.user_id, released,
+            )
+        if stale:
+            logger.info("Cleaned up %d stale reservations", len(stale))
+    except Exception:
+        logger.warning("Failed to clean up stale reservations", exc_info=True)
+        db.rollback()
+    finally:
+        db.close()

@@ -1,6 +1,8 @@
 import axios from 'axios';
 import type {
   AdminUserBalance,
+  AnomalyListResponse,
+  AnomalySummaryResponse,
   APIKeyInfo,
   AuthUser,
   BatchJobImage,
@@ -14,6 +16,7 @@ import type {
   DecisionListResponse,
   EditConfig,
   EditCosts,
+  EvaluationCostsResponse,
   EvaluationListResponse,
   Folder,
   FolderBrief,
@@ -31,6 +34,7 @@ import type {
   LoraEvaluation,
   LoraListResponse,
   LoraModel,
+  MetricsResponse,
   ModelBulkUpdateRequest,
   PipelineStats,
   PlatformUsageSummary,
@@ -38,8 +42,10 @@ import type {
   PromptPreset,
   ProviderConfig,
   ProviderModel,
+  ReconciliationResponse,
   SearchResponse,
   StepResponse,
+  SummarizeCostsResponse,
   TokenResponse,
   TraceResponse,
   TrainingConfig,
@@ -1333,6 +1339,65 @@ export const billingApi = {
 
   adminGetTrace: async (traceId: string): Promise<TraceResponse> => {
     const { data } = await api.get(`/billing/admin/trace/${traceId}`);
+    return data;
+  },
+
+  adminGetReconciliation: async (params?: {
+    start_date?: string;
+    end_date?: string;
+    operation?: string;
+    provider?: string;
+    threshold_pct?: number;
+  }): Promise<ReconciliationResponse> => {
+    const { data } = await api.get('/billing/admin/reconciliation', { params });
+    return data;
+  },
+
+  adminGetAnomalies: async (params?: {
+    skip?: number;
+    limit?: number;
+    anomaly_type?: string;
+    resolved?: boolean;
+    provider?: string;
+    operation?: string;
+    start_date?: string;
+    end_date?: string;
+  }): Promise<AnomalyListResponse> => {
+    const { data } = await api.get('/billing/admin/anomalies', { params });
+    return data;
+  },
+
+  adminGetAnomalySummary: async (): Promise<AnomalySummaryResponse> => {
+    const { data } = await api.get('/billing/admin/anomalies/summary');
+    return data;
+  },
+
+  adminResolveAnomaly: async (id: number): Promise<void> => {
+    await api.patch(`/billing/admin/anomalies/${id}/resolve`);
+  },
+
+  adminCreateCatalogFromAnomaly: async (id: number): Promise<CostCatalogEntry> => {
+    const { data } = await api.post(`/billing/admin/anomalies/${id}/create-catalog-entry`);
+    return data;
+  },
+
+  adminGetMetrics: async (hours: number = 24): Promise<MetricsResponse> => {
+    const { data } = await api.get('/billing/admin/metrics', { params: { hours } });
+    return data;
+  },
+
+  getEvaluationCosts: async (params: {
+    base_model?: string;
+    sample_count?: number;
+    creative_count?: number;
+    vision_eval_provider?: string;
+  }): Promise<EvaluationCostsResponse> => {
+    const { data } = await api.get('/billing/evaluation-costs', { params });
+    return data;
+  },
+
+  getSummarizeCosts: async (clusterCount: number = 1): Promise<SummarizeCostsResponse> => {
+    const { data } = await api.get('/billing/summarize-costs', { params: { cluster_count: clusterCount } });
     return data;
   },
 };

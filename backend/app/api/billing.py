@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.settings import (
@@ -15,7 +16,7 @@ from app.api.settings import (
 )
 from app.core.security import get_current_user, require_admin
 from app.db.base import get_db
-from app.models.billing import CostCatalog, UsageRecord
+from app.models.billing import BillingAnomaly, CostCatalog, UsageRecord
 from app.models.user import User
 from app.services.billing_service import BillingService
 from app.services.cost_calculator import estimate_sparks as _estimate_sparks
@@ -29,6 +30,8 @@ router = APIRouter(prefix="/billing", tags=["billing"])
 
 class BalanceResponse(BaseModel):
     balance: int
+    reserved: int
+    available: int
     currency: str
 
 
@@ -145,6 +148,143 @@ class BillingLogListResponse(BaseModel):
     limit: int
 
 
+# --- Reconciliation / Anomalies / Metrics schemas ---
+
+
+class ReconciliationRow(BaseModel):
+    operation: str
+    provider: str
+    model: str
+    total_decisions: int
+    avg_estimated_sparks: float
+    avg_actual_sparks: float
+    avg_delta: float
+    avg_delta_pct: float
+    min_delta: float
+    max_delta: float
+    total_estimated: int
+    total_actual: int
+
+
+class ReconciliationResponse(BaseModel):
+    items: list[ReconciliationRow]
+    threshold_pct: float
+    threshold_violations: int
+
+
+class AnomalyResponse(BaseModel):
+    id: int
+    user_id: int | None
+    anomaly_type: str
+    provider: str | None
+    model: str | None
+    operation: str | None
+    detail: dict | None
+    resolved: bool
+    created_at: str
+
+
+class AnomalyListResponse(BaseModel):
+    items: list[AnomalyResponse]
+    total: int
+    skip: int
+    limit: int
+
+
+class AnomalyGroupSummary(BaseModel):
+    anomaly_type: str
+    provider: str | None
+    model: str | None
+    operation: str | None
+    count: int
+
+
+class AnomalySummaryResponse(BaseModel):
+    groups: list[AnomalyGroupSummary]
+    total_unresolved: int
+    last_24h_count: int
+
+
+class OperationMetric(BaseModel):
+    operation: str
+    count: int
+    avg_sparks: float
+    failure_count: int
+
+
+class ProviderMetric(BaseModel):
+    provider: str
+    count: int
+    avg_sparks: float
+    failure_count: int
+
+
+class MetricAlert(BaseModel):
+    level: str
+    message: str
+
+
+class MetricsResponse(BaseModel):
+    hours: int
+    total_operations: int
+    ops_per_hour: float
+    failure_rate: float
+    cancel_rate: float
+    pending_decisions: int
+    avg_delta_pct: float
+    catalog_miss_count: int
+    by_operation: list[OperationMetric]
+    by_provider: list[ProviderMetric]
+    alerts: list[MetricAlert]
+
+
+class EvaluationCostBreakdown(BaseModel):
+    generate_per_image: int
+    describe_per_image: int
+    embed_per_image: int
+    vision_eval_per_image: int
+    creative_prompts: int
+    assessment: int
+    per_reference_pair: int
+    per_creative_pair: int
+
+
+class EvaluationCostTotals(BaseModel):
+    reference: int
+    creative: int
+    overhead: int
+    total: int
+
+
+class EvaluationCostParams(BaseModel):
+    base_model: str
+    sample_count: int
+    creative_count: int
+
+
+class EvaluationCostProviders(BaseModel):
+    generation: str
+    vision: str
+    evaluation: str
+    embedding: str
+
+
+class EvaluationCostsResponse(BaseModel):
+    breakdown: EvaluationCostBreakdown
+    totals: EvaluationCostTotals
+    params: EvaluationCostParams
+    providers: EvaluationCostProviders
+
+
+class SummarizeCostsResponse(BaseModel):
+    per_cluster: int
+    cluster_count: int
+    total: int
+    provider: str
+    estimated_input_tokens: int
+    estimated_output_tokens: int
+
+
 # --- User endpoints ---
 
 @router.get("/balance", response_model=BalanceResponse)
@@ -154,7 +294,13 @@ def get_balance(
 ):
     svc = BillingService(db, current_user.id)
     balance = svc.get_balance()
-    return {"balance": balance, "currency": "credits"}
+    reserved = svc.get_reserved()
+    return {
+        "balance": balance,
+        "reserved": reserved,
+        "available": balance - reserved,
+        "currency": "credits",
+    }
 
 
 @router.get("/transactions", response_model=TransactionListResponse)
@@ -397,6 +543,35 @@ def estimate_vision_costs(
     }
 
 
+@router.get("/evaluation-costs", response_model=EvaluationCostsResponse)
+def get_evaluation_costs(
+    base_model: str = Query("flux-dev"),
+    sample_count: int = Query(5, ge=1, le=50),
+    creative_count: int = Query(0, ge=0, le=20),
+    vision_eval_provider: str | None = None,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Estimate evaluation costs broken down by sub-operation."""
+    return BillingService.get_evaluation_costs(
+        db, current_user.id,
+        base_model=base_model,
+        sample_count=sample_count,
+        creative_count=creative_count,
+        vision_eval_provider=vision_eval_provider,
+    )
+
+
+@router.get("/summarize-costs", response_model=SummarizeCostsResponse)
+def get_summarize_costs(
+    cluster_count: int = Query(1, ge=1, le=500),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Estimate cluster summarization costs."""
+    return BillingService.get_summarize_costs(db, current_user.id, cluster_count)
+
+
 # --- Admin endpoints ---
 
 @router.get("/admin/users", response_model=list[AdminUserBalance])
@@ -436,7 +611,13 @@ def admin_add_credits(
         created_by=current_user.id,
     )
     balance = svc.get_balance()
-    return {"balance": balance, "currency": "credits"}
+    reserved = svc.get_reserved()
+    return {
+        "balance": balance,
+        "reserved": reserved,
+        "available": balance - reserved,
+        "currency": "credits",
+    }
 
 
 @router.get("/admin/summary", response_model=PlatformSummaryResponse)
@@ -652,6 +833,216 @@ def admin_delete_catalog_entry(
     if not success:
         raise HTTPException(status_code=404, detail="Catalog entry not found")
     return {"status": "deleted"}
+
+
+# --- Reconciliation endpoints ---
+
+
+@router.get("/admin/reconciliation", response_model=ReconciliationResponse)
+def admin_get_reconciliation(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    operation: str | None = None,
+    provider: str | None = None,
+    threshold_pct: float = Query(20.0, ge=0, le=100),
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Get reconciliation summary: estimated vs actual sparks."""
+    start = datetime.fromisoformat(start_date) if start_date else None
+    end = datetime.fromisoformat(end_date) if end_date else None
+    return BillingService.get_reconciliation_summary(
+        db, start, end, operation, provider, threshold_pct,
+    )
+
+
+# --- Anomaly endpoints ---
+
+
+@router.get("/admin/anomalies", response_model=AnomalyListResponse)
+def admin_get_anomalies(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    anomaly_type: str | None = None,
+    resolved: bool | None = None,
+    provider: str | None = None,
+    operation: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Get paginated anomaly list with filters."""
+    query = db.query(BillingAnomaly)
+    if anomaly_type:
+        query = query.filter(BillingAnomaly.anomaly_type == anomaly_type)
+    if resolved is not None:
+        query = query.filter(BillingAnomaly.resolved == resolved)
+    if provider:
+        query = query.filter(BillingAnomaly.provider == provider)
+    if operation:
+        query = query.filter(BillingAnomaly.operation == operation)
+    if start_date:
+        query = query.filter(BillingAnomaly.created_at >= datetime.fromisoformat(start_date))
+    if end_date:
+        query = query.filter(BillingAnomaly.created_at <= datetime.fromisoformat(end_date))
+
+    total = query.count()
+    rows = query.order_by(BillingAnomaly.created_at.desc()).offset(skip).limit(limit).all()
+    return {
+        "items": [
+            {
+                "id": a.id,
+                "user_id": a.user_id,
+                "anomaly_type": a.anomaly_type,
+                "provider": a.provider,
+                "model": a.model,
+                "operation": a.operation,
+                "detail": a.detail,
+                "resolved": a.resolved,
+                "created_at": a.created_at.isoformat(),
+            }
+            for a in rows
+        ],
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+    }
+
+
+@router.get("/admin/anomalies/summary", response_model=AnomalySummaryResponse)
+def admin_get_anomaly_summary(
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Get anomaly summary: grouped counts + totals."""
+    from datetime import timedelta
+
+    groups = (
+        db.query(
+            BillingAnomaly.anomaly_type,
+            BillingAnomaly.provider,
+            BillingAnomaly.model,
+            BillingAnomaly.operation,
+            func.count(BillingAnomaly.id).label("count"),
+        )
+        .filter(BillingAnomaly.resolved.is_(False))
+        .group_by(
+            BillingAnomaly.anomaly_type,
+            BillingAnomaly.provider,
+            BillingAnomaly.model,
+            BillingAnomaly.operation,
+        )
+        .all()
+    )
+    total_unresolved = (
+        db.query(func.count(BillingAnomaly.id))
+        .filter(BillingAnomaly.resolved.is_(False))
+        .scalar()
+    ) or 0
+    cutoff_24h = datetime.utcnow() - timedelta(hours=24)
+    last_24h_count = (
+        db.query(func.count(BillingAnomaly.id))
+        .filter(BillingAnomaly.created_at >= cutoff_24h)
+        .scalar()
+    ) or 0
+    return {
+        "groups": [
+            {
+                "anomaly_type": g.anomaly_type,
+                "provider": g.provider,
+                "model": g.model,
+                "operation": g.operation,
+                "count": g.count,
+            }
+            for g in groups
+        ],
+        "total_unresolved": total_unresolved,
+        "last_24h_count": last_24h_count,
+    }
+
+
+@router.patch("/admin/anomalies/{anomaly_id}/resolve")
+def admin_resolve_anomaly(
+    anomaly_id: int,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Mark an anomaly as resolved."""
+    anomaly = db.query(BillingAnomaly).filter(BillingAnomaly.id == anomaly_id).first()
+    if not anomaly:
+        raise HTTPException(status_code=404, detail="Anomaly not found")
+    anomaly.resolved = True
+    db.commit()
+    return {"status": "resolved", "id": anomaly_id}
+
+
+@router.post("/admin/anomalies/{anomaly_id}/create-catalog-entry", response_model=CatalogEntryResponse)
+def admin_create_catalog_from_anomaly(
+    anomaly_id: int,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Create a placeholder catalog entry from an anomaly and mark it resolved."""
+    anomaly = db.query(BillingAnomaly).filter(BillingAnomaly.id == anomaly_id).first()
+    if not anomaly:
+        raise HTTPException(status_code=404, detail="Anomaly not found")
+    if not anomaly.provider or not anomaly.model or not anomaly.operation:
+        raise HTTPException(status_code=400, detail="Anomaly missing provider/model/operation")
+
+    # Check if entry already exists
+    existing = (
+        db.query(CostCatalog)
+        .filter(
+            CostCatalog.provider == anomaly.provider,
+            CostCatalog.model == anomaly.model,
+            CostCatalog.operation == anomaly.operation,
+            CostCatalog.is_active.is_(True),
+        )
+        .first()
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="Catalog entry already exists")
+
+    entry = BillingService.upsert_catalog_entry(
+        db,
+        provider=anomaly.provider,
+        model=anomaly.model,
+        operation=anomaly.operation,
+        cost_per_input_token=Decimal("0"),
+        cost_per_output_token=Decimal("0"),
+        cost_per_call=Decimal("0"),
+        platform_markup=Decimal("2.0"),
+    )
+    anomaly.resolved = True
+    db.commit()
+
+    return {
+        "id": entry.id,
+        "provider": entry.provider,
+        "model": entry.model,
+        "operation": entry.operation,
+        "cost_per_input_token": float(entry.cost_per_input_token) if entry.cost_per_input_token else None,
+        "cost_per_output_token": float(entry.cost_per_output_token) if entry.cost_per_output_token else None,
+        "cost_per_call": float(entry.cost_per_call) if entry.cost_per_call else None,
+        "platform_markup": float(entry.platform_markup),
+        "is_active": entry.is_active,
+        "created_at": entry.created_at.isoformat(),
+        "updated_at": entry.updated_at.isoformat(),
+    }
+
+
+# --- Metrics endpoint ---
+
+
+@router.get("/admin/metrics", response_model=MetricsResponse)
+def admin_get_metrics(
+    hours: int = Query(24, ge=1, le=168),
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Get billing health metrics for the given time window."""
+    return BillingService.get_metrics(db, hours)
 
 
 # --- Operations Monitor schemas ---

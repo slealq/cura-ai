@@ -54,10 +54,15 @@ export default function BillingPage() {
             <p className="text-sm text-muted-foreground mb-1">Available Sparks</p>
             <p className={cn(
               'text-5xl font-bold',
-              balance.balance < 10 ? 'text-red-500' : 'text-foreground'
+              (balance.available ?? balance.balance) < 10 ? 'text-red-500' : 'text-foreground'
             )}>
-              {formatNumber(balance.balance)}
+              {formatNumber(balance.available ?? balance.balance)}
             </p>
+            {(balance.reserved ?? 0) > 0 && (
+              <p className="text-xs text-muted-foreground mt-1">
+                {formatNumber(balance.reserved)} reserved for in-progress operations
+              </p>
+            )}
             <p className="text-xs text-muted-foreground mt-2">1 spark = $0.001 USD</p>
           </>
         ) : null}

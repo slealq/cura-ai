@@ -64,8 +64,9 @@ function getSparkTier(balance: number) {
   return { label: 'Overloaded', color: 'text-cyan-400', bg: 'bg-cyan-400', glow: 'shadow-cyan-400/40', barBg: 'bg-cyan-400/10', pct: Math.min(100, 85 + ((balance - 5000) / 10000) * 15) };
 }
 
-function SparkBalance({ balance }: { balance: number }) {
-  const tier = getSparkTier(balance);
+function SparkBalance({ balance, reserved }: { balance: number; reserved: number }) {
+  const displayBalance = reserved > 0 ? balance - reserved : balance;
+  const tier = getSparkTier(displayBalance);
   return (
     <div className={cn(
       'rounded-lg border border-border px-3 py-2.5 transition-all',
@@ -74,7 +75,7 @@ function SparkBalance({ balance }: { balance: number }) {
     )}>
       <div className="flex items-center justify-between mb-1.5">
         <div className="flex items-center gap-1.5">
-          <Zap className={cn('h-3.5 w-3.5', tier.color, balance > 0 && 'drop-shadow-sm')} />
+          <Zap className={cn('h-3.5 w-3.5', tier.color, displayBalance > 0 && 'drop-shadow-sm')} />
           <span className={cn('text-[11px] font-semibold uppercase tracking-wider', tier.color)}>
             {tier.label}
           </span>
@@ -84,8 +85,13 @@ function SparkBalance({ balance }: { balance: number }) {
         </span>
       </div>
       <div className="text-lg font-bold tracking-tight leading-none mb-1.5">
-        {formatNumber(balance)}
+        {formatNumber(displayBalance)}
       </div>
+      {reserved > 0 && (
+        <div className="text-[10px] text-muted-foreground mb-1" title={`${formatNumber(reserved)} sparks reserved for in-progress operations`}>
+          {formatNumber(reserved)} reserved
+        </div>
+      )}
       <div className="h-1 rounded-full bg-muted/50 overflow-hidden">
         <div
           className={cn('h-full rounded-full transition-all duration-700 ease-out', tier.bg)}
@@ -146,7 +152,7 @@ export default function Sidebar() {
 
       {balanceData && (
         <Link href="/billing" className="block mx-4 mt-4 group">
-          <SparkBalance balance={balanceData.balance} />
+          <SparkBalance balance={balanceData.balance} reserved={balanceData.reserved ?? 0} />
         </Link>
       )}
 

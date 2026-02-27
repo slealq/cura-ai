@@ -1,20 +1,22 @@
 """Service for credit balance management and usage tracking."""
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.base import SessionLocal
 from app.models.billing import (
     BalanceTransaction,
+    BillingAnomaly,
     CostCatalog,
     TransactionType,
     UsageRecord,
     UserBalance,
 )
+from app.models.cost_decision import CostDecision
 from app.models.user import User
 from app.services.cost_calculator import USD_TO_SPARKS
 from app.services.cost_calculator import calculate_cost as _calc_cost
@@ -64,6 +66,7 @@ class BillingService:
                 user_id=self.user_id,
                 balance=Decimal("0"),
                 balance_sparks=0,
+                reserved_sparks=0,
                 currency="credits",
             )
             self.db.add(balance)
@@ -75,15 +78,91 @@ class BillingService:
         """Get current credit balance in integer sparks."""
         return self._get_or_create_balance().balance_sparks
 
+    def get_available_balance(self) -> int:
+        """Get available balance (balance - reserved) in integer sparks."""
+        bal = self._get_or_create_balance()
+        return bal.balance_sparks - bal.reserved_sparks
+
+    def get_reserved(self) -> int:
+        """Get total reserved sparks."""
+        return self._get_or_create_balance().reserved_sparks
+
     def has_sufficient_balance(self) -> bool:
-        """Check if user has balance > 0."""
-        return self.get_balance() > 0
+        """Check if user has available balance > 0."""
+        return self.get_available_balance() > 0
 
     def check_balance_or_raise(self):
-        """Raise InsufficientBalanceError if balance <= 0."""
+        """Raise InsufficientBalanceError if available balance <= 0."""
         if not self.has_sufficient_balance():
             raise InsufficientBalanceError(
                 f"User {self.user_id} has insufficient credits"
+            )
+
+    # --- Reservation methods ---
+
+    def reserve_sparks(self, amount: int, decision_id: int | None = None) -> bool:
+        """Atomically reserve sparks for an upcoming operation.
+
+        Uses UPDATE ... WHERE to ensure (balance_sparks - reserved_sparks) >= amount.
+        Returns False if insufficient available balance.
+        """
+        if amount <= 0:
+            return True
+
+        self._get_or_create_balance()
+
+        rows_updated = (
+            self.db.query(UserBalance)
+            .filter(
+                UserBalance.user_id == self.user_id,
+                (UserBalance.balance_sparks - UserBalance.reserved_sparks) >= amount,
+            )
+            .update(
+                {UserBalance.reserved_sparks: UserBalance.reserved_sparks + amount},
+                synchronize_session="fetch",
+            )
+        )
+        if rows_updated == 0:
+            return False
+
+        self.db.flush()
+        logger.info(
+            "RESERVE | user=%s amount=%d decision=%s",
+            self.user_id, amount, decision_id,
+        )
+        return True
+
+    def release_reservation(self, amount: int) -> None:
+        """Release a reservation, clamping reserved_sparks to 0 floor."""
+        if not amount or amount <= 0:
+            return
+
+        self._get_or_create_balance()
+
+        # Use GREATEST to clamp to 0
+        self.db.execute(
+            UserBalance.__table__.update()
+            .where(UserBalance.user_id == self.user_id)
+            .values(reserved_sparks=func.greatest(
+                UserBalance.reserved_sparks - amount, 0
+            ))
+        )
+        self.db.flush()
+        logger.info(
+            "RELEASE_RESERVATION | user=%s amount=%d", self.user_id, amount,
+        )
+
+    def release_and_debit(
+        self, reserved_amount: int, actual_amount: Decimal, description: str,
+        usage_record_id: int | None = None,
+    ) -> None:
+        """Release reservation then debit actual cost in one transaction."""
+        self.release_reservation(reserved_amount)
+        if actual_amount > 0:
+            self.debit_usage(
+                amount=actual_amount,
+                description=description,
+                usage_record_id=usage_record_id,
             )
 
     def add_credits(
@@ -406,6 +485,385 @@ class BillingService:
             sparks, _ = _estimate_sparks(db, provider, model, operation)
             result[base_model] = sparks
         return result
+
+    # --- Reconciliation & Metrics ---
+
+    @staticmethod
+    def get_reconciliation_summary(
+        db: Session,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+        operation: str | None = None,
+        provider: str | None = None,
+        threshold_pct: float = 20.0,
+    ) -> dict:
+        """Reconcile estimated vs actual sparks across cost decisions."""
+        query = (
+            db.query(
+                CostDecision.operation,
+                CostDecision.provider,
+                CostDecision.model,
+                func.count(CostDecision.id).label("total_decisions"),
+                func.avg(CostDecision.estimated_sparks).label("avg_estimated"),
+                func.avg(UsageRecord.delta_sparks).label("avg_actual"),
+                func.min(UsageRecord.delta_sparks - CostDecision.estimated_sparks).label("min_delta"),
+                func.max(UsageRecord.delta_sparks - CostDecision.estimated_sparks).label("max_delta"),
+                func.sum(CostDecision.estimated_sparks).label("total_estimated"),
+                func.sum(UsageRecord.delta_sparks).label("total_actual"),
+            )
+            .join(UsageRecord, UsageRecord.cost_decision_id == CostDecision.id)
+            .filter(
+                CostDecision.status.in_(["charged", "executed"]),
+                CostDecision.estimated_sparks.isnot(None),
+                UsageRecord.delta_sparks.isnot(None),
+            )
+        )
+        if start_date:
+            query = query.filter(CostDecision.created_at >= start_date)
+        if end_date:
+            query = query.filter(CostDecision.created_at <= end_date)
+        if operation:
+            query = query.filter(CostDecision.operation == operation)
+        if provider:
+            query = query.filter(CostDecision.provider == provider)
+
+        query = query.group_by(CostDecision.operation, CostDecision.provider, CostDecision.model)
+        rows = query.all()
+
+        items = []
+        threshold_violations = 0
+        for row in rows:
+            avg_est = float(row.avg_estimated or 0)
+            avg_act = float(row.avg_actual or 0)
+            avg_delta = avg_act - avg_est
+            avg_delta_pct = (avg_delta / avg_est * 100) if avg_est != 0 else 0.0
+            if abs(avg_delta_pct) > threshold_pct:
+                threshold_violations += 1
+            items.append({
+                "operation": row.operation,
+                "provider": row.provider,
+                "model": row.model,
+                "total_decisions": row.total_decisions,
+                "avg_estimated_sparks": round(avg_est, 1),
+                "avg_actual_sparks": round(avg_act, 1),
+                "avg_delta": round(avg_delta, 1),
+                "avg_delta_pct": round(avg_delta_pct, 1),
+                "min_delta": float(row.min_delta or 0),
+                "max_delta": float(row.max_delta or 0),
+                "total_estimated": int(row.total_estimated or 0),
+                "total_actual": int(row.total_actual or 0),
+            })
+
+        return {
+            "items": items,
+            "threshold_pct": threshold_pct,
+            "threshold_violations": threshold_violations,
+        }
+
+    @staticmethod
+    def get_metrics(db: Session, hours: int = 24) -> dict:
+        """Get billing health metrics for the given time window."""
+        cutoff = datetime.utcnow() - timedelta(hours=hours)
+
+        # Decision counts
+        total_ops = (
+            db.query(func.count(CostDecision.id))
+            .filter(CostDecision.created_at >= cutoff)
+            .scalar()
+        ) or 0
+
+        failed_count = (
+            db.query(func.count(CostDecision.id))
+            .filter(CostDecision.created_at >= cutoff, CostDecision.status == "failed")
+            .scalar()
+        ) or 0
+
+        cancelled_count = (
+            db.query(func.count(CostDecision.id))
+            .filter(CostDecision.created_at >= cutoff, CostDecision.status == "cancelled")
+            .scalar()
+        ) or 0
+
+        # Stale pending decisions (> 30 min old)
+        stale_cutoff = datetime.utcnow() - timedelta(minutes=30)
+        pending_decisions = (
+            db.query(func.count(CostDecision.id))
+            .filter(
+                CostDecision.status == "pending",
+                CostDecision.created_at < stale_cutoff,
+            )
+            .scalar()
+        ) or 0
+
+        # Average delta percentage
+        avg_delta_pct_row = (
+            db.query(
+                func.avg(
+                    (UsageRecord.delta_sparks - CostDecision.estimated_sparks)
+                    * 100.0
+                    / func.nullif(CostDecision.estimated_sparks, 0)
+                )
+            )
+            .join(UsageRecord, UsageRecord.cost_decision_id == CostDecision.id)
+            .filter(
+                CostDecision.created_at >= cutoff,
+                CostDecision.estimated_sparks.isnot(None),
+                UsageRecord.delta_sparks.isnot(None),
+            )
+            .scalar()
+        )
+        avg_delta_pct = round(float(avg_delta_pct_row), 1) if avg_delta_pct_row is not None else 0.0
+
+        # Catalog misses
+        catalog_miss_count = (
+            db.query(func.count(BillingAnomaly.id))
+            .filter(
+                BillingAnomaly.anomaly_type == "catalog_miss",
+                BillingAnomaly.created_at >= cutoff,
+            )
+            .scalar()
+        ) or 0
+
+        failure_rate = failed_count / total_ops if total_ops > 0 else 0.0
+        cancel_rate = cancelled_count / total_ops if total_ops > 0 else 0.0
+        ops_per_hour = total_ops / hours if hours > 0 else 0.0
+
+        # By operation breakdown
+        by_operation = (
+            db.query(
+                CostDecision.operation,
+                func.count(CostDecision.id).label("count"),
+                func.avg(
+                    case(
+                        (UsageRecord.delta_sparks.isnot(None), UsageRecord.delta_sparks),
+                        else_=CostDecision.estimated_sparks,
+                    )
+                ).label("avg_sparks"),
+                func.count(
+                    case((CostDecision.status == "failed", CostDecision.id))
+                ).label("failure_count"),
+            )
+            .outerjoin(UsageRecord, UsageRecord.cost_decision_id == CostDecision.id)
+            .filter(CostDecision.created_at >= cutoff)
+            .group_by(CostDecision.operation)
+            .all()
+        )
+
+        # By provider breakdown
+        by_provider = (
+            db.query(
+                CostDecision.provider,
+                func.count(CostDecision.id).label("count"),
+                func.avg(
+                    case(
+                        (UsageRecord.delta_sparks.isnot(None), UsageRecord.delta_sparks),
+                        else_=CostDecision.estimated_sparks,
+                    )
+                ).label("avg_sparks"),
+                func.count(
+                    case((CostDecision.status == "failed", CostDecision.id))
+                ).label("failure_count"),
+            )
+            .outerjoin(UsageRecord, UsageRecord.cost_decision_id == CostDecision.id)
+            .filter(CostDecision.created_at >= cutoff)
+            .group_by(CostDecision.provider)
+            .all()
+        )
+
+        # Alerts
+        alerts = []
+        if failure_rate > 0.10:
+            alerts.append({"level": "warning", "message": f"High failure rate: {failure_rate:.1%}"})
+        if catalog_miss_count > 5:
+            alerts.append({"level": "warning", "message": f"{catalog_miss_count} catalog misses in {hours}h"})
+        if pending_decisions > 10:
+            alerts.append({"level": "critical", "message": f"{pending_decisions} stale pending decisions (>30min)"})
+
+        return {
+            "hours": hours,
+            "total_operations": total_ops,
+            "ops_per_hour": round(ops_per_hour, 1),
+            "failure_rate": round(failure_rate, 4),
+            "cancel_rate": round(cancel_rate, 4),
+            "pending_decisions": pending_decisions,
+            "avg_delta_pct": avg_delta_pct,
+            "catalog_miss_count": catalog_miss_count,
+            "by_operation": [
+                {
+                    "operation": row.operation,
+                    "count": row.count,
+                    "avg_sparks": round(float(row.avg_sparks or 0), 1),
+                    "failure_count": row.failure_count,
+                }
+                for row in by_operation
+            ],
+            "by_provider": [
+                {
+                    "provider": row.provider,
+                    "count": row.count,
+                    "avg_sparks": round(float(row.avg_sparks or 0), 1),
+                    "failure_count": row.failure_count,
+                }
+                for row in by_provider
+            ],
+            "alerts": alerts,
+        }
+
+    @staticmethod
+    def get_evaluation_costs(
+        db: Session,
+        user_id: int,
+        base_model: str = "flux-dev",
+        sample_count: int = 5,
+        creative_count: int = 0,
+        vision_eval_provider: str | None = None,
+    ) -> dict:
+        """Estimate evaluation costs broken down by sub-operation."""
+        from app.services.settings_service import SettingsService
+
+        settings = SettingsService(db, user_id)
+        provider_config = settings.get_provider_config()
+
+        # Resolve generation model for this base_model (with_lora variant)
+        gen_map = BillingService.GENERATION_MODEL_MAP.get(base_model, {})
+        gen_variant = gen_map.get("with_lora", gen_map.get("without_lora"))
+        if gen_variant:
+            gen_provider, gen_model, gen_op = gen_variant
+        else:
+            gen_provider, gen_model, gen_op = "fal", "fal-ai/flux-lora", "generate"
+
+        generate_sparks, _ = _estimate_sparks(db, gen_provider, gen_model, gen_op)
+
+        # Vision/describe provider
+        vision_provider_key = provider_config.get("vision_provider", "openai")
+        if vision_provider_key == "openai":
+            vision_model = provider_config.get("openai_vision_model", "gpt-4o-mini")
+            vision_prov = "openai"
+        elif vision_provider_key == "anthropic":
+            vision_model = provider_config.get("anthropic_vision_model", "claude-sonnet-4-20250514")
+            vision_prov = "anthropic"
+        else:
+            vision_model = provider_config.get("fal_vision_model", "x-ai/grok-2-vision-1212")
+            vision_prov = "fal"
+
+        # Eval provider (override or same as vision)
+        if vision_eval_provider:
+            eval_prov = vision_eval_provider
+            if eval_prov == "openai":
+                eval_model = provider_config.get("openai_vision_model", "gpt-4o-mini")
+            elif eval_prov == "anthropic":
+                eval_model = provider_config.get("anthropic_vision_model", "claude-sonnet-4-20250514")
+            else:
+                eval_model = provider_config.get("fal_vision_model", "x-ai/grok-2-vision-1212")
+        else:
+            eval_prov = vision_prov
+            eval_model = vision_model
+
+        describe_sparks, _ = _estimate_sparks(
+            db, vision_prov, vision_model, "describe",
+            estimated_input_tokens=1500, estimated_output_tokens=500,
+        )
+        embed_sparks, _ = _estimate_sparks(
+            db, "openai", "text-embedding-3-small", "embed",
+            estimated_input_tokens=500,
+        )
+        vision_eval_sparks, _ = _estimate_sparks(
+            db, eval_prov, eval_model, "evaluate",
+            estimated_input_tokens=2000, estimated_output_tokens=300,
+        )
+
+        # Creative prompts generation (one-time call)
+        creative_prompts_sparks, _ = _estimate_sparks(
+            db, eval_prov, eval_model, "evaluate",
+            estimated_input_tokens=2000, estimated_output_tokens=500,
+        ) if creative_count > 0 else (0, None)
+
+        # Assessment (one-time call)
+        assessment_sparks, _ = _estimate_sparks(
+            db, eval_prov, eval_model, "evaluate",
+            estimated_input_tokens=3000, estimated_output_tokens=800,
+        )
+
+        per_ref = generate_sparks + describe_sparks + embed_sparks + vision_eval_sparks
+        per_creative = generate_sparks + vision_eval_sparks
+        total_ref = sample_count * per_ref
+        total_creative = creative_count * per_creative
+        total = total_ref + total_creative + creative_prompts_sparks + assessment_sparks
+
+        return {
+            "breakdown": {
+                "generate_per_image": generate_sparks,
+                "describe_per_image": describe_sparks,
+                "embed_per_image": embed_sparks,
+                "vision_eval_per_image": vision_eval_sparks,
+                "creative_prompts": creative_prompts_sparks,
+                "assessment": assessment_sparks,
+                "per_reference_pair": per_ref,
+                "per_creative_pair": per_creative,
+            },
+            "totals": {
+                "reference": total_ref,
+                "creative": total_creative,
+                "overhead": creative_prompts_sparks + assessment_sparks,
+                "total": total,
+            },
+            "params": {
+                "base_model": base_model,
+                "sample_count": sample_count,
+                "creative_count": creative_count,
+            },
+            "providers": {
+                "generation": f"{gen_provider}/{gen_model}",
+                "vision": f"{vision_prov}/{vision_model}",
+                "evaluation": f"{eval_prov}/{eval_model}",
+                "embedding": "openai/text-embedding-3-small",
+            },
+        }
+
+    @staticmethod
+    def get_summarize_costs(
+        db: Session,
+        user_id: int,
+        cluster_count: int = 1,
+    ) -> dict:
+        """Estimate cluster summarization costs."""
+        from app.services.settings_service import SettingsService
+        from app.services.token_estimator import estimate_prompt_tokens
+
+        settings = SettingsService(db, user_id)
+        provider_config = settings.get_provider_config()
+
+        lang_provider = provider_config.get("language_provider", "openai")
+        if lang_provider == "openai":
+            lang_model = provider_config.get("openai_language_model", "gpt-4o-mini")
+        elif lang_provider == "anthropic":
+            lang_model = provider_config.get("anthropic_language_model", "claude-sonnet-4-20250514")
+        else:
+            lang_model = provider_config.get("fal_language_model", "x-ai/grok-2-vision-1212")
+
+        # Try DB averages for tokens
+        avg_in, avg_out = BillingService.get_average_tokens(
+            db, lang_provider, lang_model, "summarize",
+        )
+        # Fallback: ~3500 chars input (~815 tokens), 500 output tokens
+        input_tokens = avg_in if avg_in is not None else estimate_prompt_tokens("x" * 3500)
+        output_tokens = avg_out if avg_out is not None else 500
+
+        per_cluster, _ = _estimate_sparks(
+            db, lang_provider, lang_model, "summarize",
+            estimated_input_tokens=input_tokens,
+            estimated_output_tokens=output_tokens,
+        )
+        total = per_cluster * cluster_count
+
+        return {
+            "per_cluster": per_cluster,
+            "cluster_count": cluster_count,
+            "total": total,
+            "provider": f"{lang_provider}/{lang_model}",
+            "estimated_input_tokens": input_tokens,
+            "estimated_output_tokens": output_tokens,
+        }
 
     # --- Output token averages for cost estimation ---
 

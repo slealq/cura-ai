@@ -6,6 +6,12 @@ import { Loader2, Search, ChevronDown, ChevronRight, X } from 'lucide-react';
 import { billingApi } from '@/lib/api';
 import { cn, formatDateCompact } from '@/lib/utils';
 import type { CostDecisionEntry, TraceResponse } from '@/types';
+import ReconciliationView from './ReconciliationView';
+import AnomaliesView from './AnomaliesView';
+import MetricsView from './MetricsView';
+
+const TABS = ['Operations', 'Reconciliation', 'Anomalies', 'Metrics'] as const;
+type Tab = typeof TABS[number];
 
 const STATUS_COLORS: Record<string, string> = {
   pending: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400',
@@ -29,6 +35,7 @@ function truncate(str: string | null, len: number): string {
 }
 
 export default function OperationsMonitor() {
+  const [activeTab, setActiveTab] = useState<Tab>('Operations');
   const [page, setPage] = useState(0);
   const [filters, setFilters] = useState<{
     trace_id?: string;
@@ -66,6 +73,29 @@ export default function OperationsMonitor() {
     <section className="space-y-4">
       <h2 className="text-lg font-semibold">Operations Monitor</h2>
 
+      {/* Sub-tab bar */}
+      <div className="flex gap-1 border-b">
+        {TABS.map((tab) => (
+          <button
+            key={tab}
+            className={cn(
+              'px-3 py-1.5 text-sm font-medium border-b-2 -mb-px transition-colors',
+              activeTab === tab
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground',
+            )}
+            onClick={() => setActiveTab(tab)}
+          >
+            {tab}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'Reconciliation' && <ReconciliationView />}
+      {activeTab === 'Anomalies' && <AnomaliesView />}
+      {activeTab === 'Metrics' && <MetricsView />}
+
+      {activeTab === 'Operations' && <>
       {/* Filter bar */}
       <div className="flex flex-wrap gap-2 items-center">
         <div className="relative">
@@ -183,6 +213,7 @@ export default function OperationsMonitor() {
           onClose={() => setSelectedTraceId(null)}
         />
       )}
+      </>}
     </section>
   );
 }

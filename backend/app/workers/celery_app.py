@@ -102,6 +102,10 @@ celery_app.conf.update(
             "task": "app.workers.tasks.cleanup_old_pipeline_logs",
             "schedule": 86400.0,  # once per day
         },
+        "cleanup-stale-reservations": {
+            "task": "app.workers.tasks.cleanup_stale_reservations",
+            "schedule": 3600.0,  # once per hour
+        },
     },
 )
 
