@@ -67,6 +67,8 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
           }
 
           queryClient.invalidateQueries({ queryKey: ['images'] });
+          queryClient.invalidateQueries({ queryKey: ['unfiled-images'] });
+          queryClient.invalidateQueries({ queryKey: ['all-images'] });
           queryClient.invalidateQueries({ queryKey: ['stats'] });
           queryClient.invalidateQueries({ queryKey: ['jobs'] });
         } catch (err) {
@@ -78,6 +80,8 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
               { id: TOAST_ID },
             );
             queryClient.invalidateQueries({ queryKey: ['images'] });
+            queryClient.invalidateQueries({ queryKey: ['unfiled-images'] });
+            queryClient.invalidateQueries({ queryKey: ['all-images'] });
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             queryClient.invalidateQueries({ queryKey: ['stats'] });
           } else {

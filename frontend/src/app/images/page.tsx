@@ -126,7 +126,7 @@ export default function ImagesPage() {
       <ImageGrid
         title="Unfiled"
         queryKeyPrefix="unfiled-images"
-        fetchImages={(params) => imagesApi.list({ ...params, in_folder: false })}
+        fetchImages={(params) => imagesApi.list({ ...params, in_folder: false, min_status: 'ingested' })}
       />
 
       {/* Create Folder Dialog */}

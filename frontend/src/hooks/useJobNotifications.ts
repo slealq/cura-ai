@@ -88,6 +88,8 @@ export function useJobNotifications() {
         if (FOLDER_AFFECTING_JOBS.has(job.job_type)) {
           queryClient.invalidateQueries({ queryKey: ['folders'] });
           queryClient.invalidateQueries({ queryKey: ['images'] });
+          queryClient.invalidateQueries({ queryKey: ['unfiled-images'] });
+          queryClient.invalidateQueries({ queryKey: ['all-images'] });
           queryClient.invalidateQueries({ queryKey: ['stats'] });
         }
 

@@ -5,7 +5,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, lazyload
 
 from app.core.config import get_settings
 from app.core.security import get_current_user, get_current_user_from_token_param
@@ -194,7 +194,7 @@ async def upload_images_batch(
     # Track image IDs + observability counters on the job with row lock
     # to serialize parallel chunk writers (fixes race on job.result merge)
     all_chunk_ids = [u.image_id for u in uploaded if u.image_id > 0]
-    locked_job = db.query(Job).filter(Job.id == job.id).with_for_update().first()
+    locked_job = db.query(Job).options(lazyload(Job.image)).filter(Job.id == job.id).with_for_update().first()
     prev = locked_job.result or {}
     chunk_idx = prev.get("chunks_received", 0)
     locked_job.result = {
