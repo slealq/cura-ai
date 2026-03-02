@@ -114,15 +114,17 @@ def _init_sentry():
             db.close()
 
         import sentry_sdk
+
+        from app.core.sentry_config import get_sentry_init_kwargs
         sentry_sdk.init(
             dsn=dsn,
             environment=settings.environment,
             # TEMPORARY: 1.0 for 2 weeks to baseline backend traces.
             # Reduce to 0.2 after baseline data is collected.
             traces_sample_rate=1.0,
-            send_default_pii=False,
+            **get_sentry_init_kwargs(),
         )
-        logger.info("Sentry SDK initialized")
+        logger.info("Sentry SDK initialized (logs enabled)")
     except Exception as e:
         logger.warning(f"Failed to initialize Sentry: {e}")
 

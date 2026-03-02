@@ -9,6 +9,65 @@ from app.models.pipeline_log import LogCategory, LogLevel, PipelineLog
 
 logger = logging.getLogger(__name__)
 
+_SENTRY_LOG_FNS = None
+
+
+def _get_sentry_log_fns():
+    """Lazy-load sentry_sdk.logger functions."""
+    global _SENTRY_LOG_FNS
+    if _SENTRY_LOG_FNS is None:
+        try:
+            from sentry_sdk import logger as sentry_logger
+            _SENTRY_LOG_FNS = {
+                LogLevel.INFO: sentry_logger.info,
+                LogLevel.WARNING: sentry_logger.warning,
+                LogLevel.ERROR: sentry_logger.error,
+            }
+        except (ImportError, Exception):
+            _SENTRY_LOG_FNS = {}
+    return _SENTRY_LOG_FNS
+
+
+def _emit_sentry_log(
+    level, message, pipeline_log_id, category, task_name, provider, model,
+    operation, duration_ms, input_tokens, output_tokens, success,
+    user_id, job_id, image_id,
+):
+    """Emit a structured log to Sentry Logs. Best-effort, never raises."""
+    try:
+        log_fns = _get_sentry_log_fns()
+        log_fn = log_fns.get(level)
+        if not log_fn:
+            return
+
+        attrs = {"log.category": category.value, "log.pipeline_log_id": str(pipeline_log_id)}
+        if task_name:
+            attrs["task.name"] = task_name
+        if provider:
+            attrs["ai.provider"] = provider
+        if model:
+            attrs["ai.model"] = model
+        if operation:
+            attrs["ai.operation"] = operation
+        if duration_ms is not None:
+            attrs["ai.duration_ms"] = float(duration_ms)
+        if input_tokens is not None:
+            attrs["ai.input_tokens"] = float(input_tokens)
+        if output_tokens is not None:
+            attrs["ai.output_tokens"] = float(output_tokens)
+        if success is not None:
+            attrs["ai.success"] = success
+        if user_id is not None:
+            attrs["app.user_id"] = str(user_id)
+        if job_id is not None:
+            attrs["app.job_id"] = str(job_id)
+        if image_id is not None:
+            attrs["app.image_id"] = str(image_id)
+
+        log_fn(message, attributes=attrs)
+    except Exception:
+        pass
+
 
 def write_log(
     category: LogCategory,
@@ -65,6 +124,13 @@ def write_log(
         )
         db.add(entry)
         db.commit()
+
+        # Bridge to Sentry Logs with structured attributes
+        _emit_sentry_log(
+            level, message, entry.id, category, task_name, provider, model,
+            operation, duration_ms, input_tokens, output_tokens, success,
+            effective_user_id, job_id, effective_image_id,
+        )
 
         # Record usage for successful API calls
         if category == LogCategory.API_CALL and success is True:

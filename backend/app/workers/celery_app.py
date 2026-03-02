@@ -129,15 +129,16 @@ def init_sentry_on_worker(sender, **kwargs):
         import sentry_sdk
 
         from app.core.config import get_settings as _get_settings
+        from app.core.sentry_config import get_sentry_init_kwargs
         sentry_sdk.init(
             dsn=dsn,
             environment=_get_settings().environment,
             # TEMPORARY: 1.0 for 2 weeks to baseline worker traces.
             # Reduce to 0.2 after baseline data is collected.
             traces_sample_rate=1.0,
-            send_default_pii=False,
+            **get_sentry_init_kwargs(),
         )
-        logger.info("Sentry SDK initialized in Celery worker")
+        logger.info("Sentry SDK initialized in Celery worker (logs enabled)")
 
         # Initialize OpenTelemetry (must be after Sentry so spans export to Sentry)
         from app.core.otel import configure_otel
