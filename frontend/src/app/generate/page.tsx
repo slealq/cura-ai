@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { generationApi, settingsApi, billingApi } from '@/lib/api';
 import { Loader2, Sparkles, ChevronDown, ChevronUp, X, Plus, Trash2, Zap, Wand2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { trackFunnelStep } from '@/lib/observability';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import GeneratedImageCard from '@/components/GeneratedImageCard';
@@ -224,6 +225,13 @@ function GeneratePageInner() {
   const generateMutation = useMutation({
     mutationFn: generationApi.generate,
     onSuccess: (data) => {
+      if (loraSelections.length > 0) {
+        trackFunnelStep('training', 'first_generation', {
+          loraIds: loraSelections.map((s) => s.id),
+          baseModel,
+          numImages: data.generated_image_ids.length,
+        });
+      }
       toast.success(`Generation started (${data.generated_image_ids.length} images)`);
       queryClient.invalidateQueries({ queryKey: ['generated-images'] });
       queryClient.invalidateQueries({ queryKey: ['jobs'] });

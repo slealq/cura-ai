@@ -83,8 +83,16 @@ export function getLastTraceId(): string | null {
   return lastTraceId;
 }
 
-// Attach Bearer token + correlation headers to all requests
+// Augment Axios config to carry request timing metadata
+declare module 'axios' {
+  interface InternalAxiosRequestConfig {
+    metadata?: { startTime: number };
+  }
+}
+
+// Attach Bearer token + correlation headers + timing to all requests
 api.interceptors.request.use((config) => {
+  config.metadata = { startTime: Date.now() };
   const token = localStorage.getItem('access_token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
@@ -110,15 +118,40 @@ function addRefreshSubscriber(cb: (token: string) => void) {
   refreshSubscribers.push(cb);
 }
 
+// Slow request threshold (ms)
+const SLOW_REQUEST_THRESHOLD = 2000;
+
 // Extract meaningful error messages + handle 401 with token refresh
 api.interceptors.response.use(
   (response) => {
     // Capture correlation IDs from response headers
     const traceId = response.headers['x-trace-id'];
     if (traceId) lastTraceId = traceId;
+
+    // Track slow requests
+    const startTime = response.config.metadata?.startTime;
+    if (startTime) {
+      const duration = Date.now() - startTime;
+      if (duration > SLOW_REQUEST_THRESHOLD) {
+        import('@/lib/observability').then(({ trackSlowRequest }) => {
+          trackSlowRequest(response.config.url || '', response.config.method || 'get', duration);
+        });
+      }
+    }
+
     return response;
   },
   async (error) => {
+    // Track slow failed requests
+    const startTime = error.config?.metadata?.startTime;
+    if (startTime) {
+      const duration = Date.now() - startTime;
+      if (duration > SLOW_REQUEST_THRESHOLD) {
+        import('@/lib/observability').then(({ trackSlowRequest }) => {
+          trackSlowRequest(error.config?.url || '', error.config?.method || 'get', duration);
+        });
+      }
+    }
     const originalRequest = error.config;
 
     // If 401 and not already retrying, try refreshing the token

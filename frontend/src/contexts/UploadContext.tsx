@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { imagesApi } from '@/lib/api';
+import { trackFunnelStep } from '@/lib/observability';
 import type { BatchUploadResponse } from '@/types';
 
 interface UploadState {
@@ -33,7 +34,9 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
       if (uploadingRef.current) return;
       uploadingRef.current = true;
       setState({ isUploading: true, progress: { uploaded: 0, total: files.length } });
+      const uploadStart = Date.now();
 
+      trackFunnelStep('upload', 'upload_started', { fileCount: files.length });
       toast.loading(`Uploading 0/${files.length} files...`, { id: TOAST_ID, duration: Infinity });
 
       (async () => {
@@ -53,6 +56,13 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
 
           const count = data.uploaded.length;
           const failCount = data.failed.length;
+          const durationMs = Date.now() - uploadStart;
+
+          trackFunnelStep('upload', 'upload_complete', {
+            succeeded: count,
+            failed: failCount,
+            durationMs,
+          });
 
           if (count > 0) {
             toast.success(

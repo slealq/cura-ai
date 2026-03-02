@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { jobsApi } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
+import { trackFunnelStep } from '@/lib/observability';
 import type { Job } from '@/types';
 
 const JOB_TYPE_LABELS: Record<string, string> = {
@@ -83,6 +84,14 @@ export function useJobNotifications() {
           description: `Job #${job.id}`,
           duration: 3000,
         });
+
+        // Track funnel completion events
+        if (job.job_type === 'ingest') {
+          trackFunnelStep('upload', 'images_visible', { jobId: job.id });
+        }
+        if (job.job_type === 'lora_train') {
+          trackFunnelStep('training', 'training_complete', { jobId: job.id });
+        }
 
         // Refresh folder list when ingest/delete jobs complete (deferred folder assignment)
         if (FOLDER_AFFECTING_JOBS.has(job.job_type)) {

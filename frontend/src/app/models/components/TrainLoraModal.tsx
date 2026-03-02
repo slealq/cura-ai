@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { generationApi, foldersApi, clustersApi, settingsApi, billingApi } from '@/lib/api';
 import { X, Zap } from 'lucide-react';
 import { toast } from 'sonner';
+import { trackFunnelStep } from '@/lib/observability';
 import ModelSelector from '@/components/ModelSelector';
 import FluxTrainForm, { type FluxTrainData } from './FluxTrainForm';
 import QwenTrainForm, { type QwenTrainData } from './QwenTrainForm';
@@ -78,6 +79,7 @@ export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
   const trainMutation = useMutation({
     mutationFn: generationApi.trainLora,
     onSuccess: (data) => {
+      trackFunnelStep('training', 'train_started', { jobId: data.job_id, baseModel });
       toast.success(`Training started! Job #${data.job_id}`);
       queryClient.invalidateQueries({ queryKey: ['lora-models'] });
       queryClient.invalidateQueries({ queryKey: ['jobs'] });
@@ -89,10 +91,12 @@ export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
   });
 
   const handleFluxSubmit = (data: FluxTrainData) => {
+    trackFunnelStep('training', 'config_saved', { baseModel, source: data.folder_id ? 'folder' : 'cluster' });
     trainMutation.mutate(data);
   };
 
   const handleQwenSubmit = (data: QwenTrainData) => {
+    trackFunnelStep('training', 'config_saved', { baseModel, source: data.folder_id ? 'folder' : 'cluster' });
     trainMutation.mutate(data);
   };
 
