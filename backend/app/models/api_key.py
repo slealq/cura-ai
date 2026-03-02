@@ -13,6 +13,7 @@ class APIProvider(str, enum.Enum):
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     FAL = "fal"
+    SENTRY = "sentry"
 
 
 class APIKeyStatus(str, enum.Enum):

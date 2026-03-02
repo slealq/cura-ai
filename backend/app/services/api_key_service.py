@@ -178,6 +178,17 @@ class APIKeyService:
                 valid=False, status=APIKeyStatus.UNKNOWN, error=str(e)
             )
 
+    async def validate_sentry_dsn(self, dsn: str) -> APIKeyValidationResult:
+        """Validate a Sentry DSN by checking its format."""
+        import re
+        # Sentry DSN format: https://<key>@<host>/<project_id>
+        pattern = r"^https://[a-f0-9]+@[^/]+/\d+$"
+        if not re.match(pattern, dsn):
+            return APIKeyValidationResult(
+                valid=False, status=APIKeyStatus.INVALID, error="Invalid DSN format (expected https://<key>@<host>/<project_id>)"
+            )
+        return APIKeyValidationResult(valid=True, status=APIKeyStatus.ACTIVE)
+
     async def validate_and_save_key(
         self,
         provider: APIProvider,
@@ -190,6 +201,8 @@ class APIKeyService:
             result = await self.validate_anthropic_key(key_value)
         elif provider == APIProvider.FAL:
             result = await self.validate_fal_key(key_value)
+        elif provider == APIProvider.SENTRY:
+            result = await self.validate_sentry_dsn(key_value)
         else:
             raise ValueError(f"Unknown provider: {provider}")
 

@@ -11,7 +11,19 @@ import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { UploadProvider } from '@/contexts/UploadContext';
 import { useJobNotifications } from '@/hooks/useJobNotifications';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
+import { initSentry } from '@/lib/sentry';
+
+function SentryInit() {
+  const didInit = useRef(false);
+  useEffect(() => {
+    if (!didInit.current) {
+      didInit.current = true;
+      initSentry();
+    }
+  }, []);
+  return null;
+}
 
 function AppShell({ children }: { children: React.ReactNode }) {
   const { resolvedTheme } = useTheme();
@@ -116,6 +128,7 @@ export default function RootLayout({
           <ThemeProvider>
             <AuthProvider>
               <UploadProvider>
+                <SentryInit />
                 <AuthGate>{children}</AuthGate>
               </UploadProvider>
             </AuthProvider>

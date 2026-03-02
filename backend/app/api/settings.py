@@ -399,6 +399,7 @@ ENV_VAR_MAP = {
     APIProvider.OPENAI: app_settings.openai_api_key,
     APIProvider.ANTHROPIC: app_settings.anthropic_api_key,
     APIProvider.FAL: app_settings.fal_api_key,
+    # Sentry has no env var fallback — always stored in DB
 }
 
 
@@ -501,6 +502,21 @@ async def delete_api_key(
     service = get_api_key_service(db, current_user.id)
     if not service.delete_key(api_provider):
         raise HTTPException(status_code=404, detail=f"No stored key for {provider}")
+
+
+@router.get("/sentry-dsn")
+async def get_sentry_dsn(db: Session = Depends(get_db)):
+    """Get the Sentry DSN for client-side initialization (public, no auth required).
+
+    Sentry DSNs are write-only ingestion URLs and safe to expose to clients.
+    """
+    from app.models.api_key import APIKey
+
+    key = db.query(APIKey).filter(APIKey.provider == "sentry", APIKey.status == "active").first()
+    if key:
+        from app.services.encryption import decrypt_api_key
+        return {"dsn": decrypt_api_key(key.encrypted_key)}
+    return {"dsn": None}
 
 
 # --- Provider config endpoints ---

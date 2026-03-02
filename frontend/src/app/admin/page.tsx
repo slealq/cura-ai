@@ -316,10 +316,11 @@ export default function AdminPage() {
         {apiKeysLoading ? (
           <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {(apiKeys || []).map((info: APIKeyInfo) => {
-              const providerLabels: Record<string, string> = { openai: 'OpenAI', anthropic: 'Anthropic', fal: 'fal.ai' };
+              const providerLabels: Record<string, string> = { openai: 'OpenAI', anthropic: 'Anthropic', fal: 'fal.ai', sentry: 'Sentry' };
               const label = providerLabels[info.provider] || info.provider;
+              const isSentry = info.provider === 'sentry';
               const isEditing = editingProvider === info.provider;
 
               const statusColor: Record<string, string> = {
@@ -366,19 +367,21 @@ export default function AdminPage() {
                     <div className="space-y-2">
                       <div className="relative">
                         <input
-                          type={showKeyInput ? 'text' : 'password'}
+                          type={isSentry || showKeyInput ? 'text' : 'password'}
                           value={keyInput}
                           onChange={(e) => setKeyInput(e.target.value)}
-                          placeholder="Enter API key..."
+                          placeholder={isSentry ? 'https://<key>@<host>/<project_id>' : 'Enter API key...'}
                           className="w-full px-3 py-2 pr-9 bg-background border rounded-md text-sm font-mono"
                         />
-                        <button
-                          type="button"
-                          onClick={() => setShowKeyInput(!showKeyInput)}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                        >
-                          {showKeyInput ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                        </button>
+                        {!isSentry && (
+                          <button
+                            type="button"
+                            onClick={() => setShowKeyInput(!showKeyInput)}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                          >
+                            {showKeyInput ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          </button>
+                        )}
                       </div>
                       <div className="flex gap-2">
                         <button

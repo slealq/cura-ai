@@ -67,11 +67,32 @@ const api = axios.create({
   },
 });
 
-// Attach Bearer token to all requests
+// Generate a session_id once per browser session, persist in localStorage
+function getSessionId(): string {
+  let sid = localStorage.getItem('session_id');
+  if (!sid) {
+    sid = crypto.randomUUID();
+    localStorage.setItem('session_id', sid);
+  }
+  return sid;
+}
+
+// Store the last trace_id from a response for Sentry breadcrumbs
+let lastTraceId: string | null = null;
+export function getLastTraceId(): string | null {
+  return lastTraceId;
+}
+
+// Attach Bearer token + correlation headers to all requests
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('access_token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
+  }
+  // Correlation IDs
+  config.headers['X-Session-Id'] = getSessionId();
+  if (!config.headers['X-Trace-Id']) {
+    config.headers['X-Trace-Id'] = crypto.randomUUID().replace(/-/g, '');
   }
   return config;
 });
@@ -91,7 +112,12 @@ function addRefreshSubscriber(cb: (token: string) => void) {
 
 // Extract meaningful error messages + handle 401 with token refresh
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // Capture correlation IDs from response headers
+    const traceId = response.headers['x-trace-id'];
+    if (traceId) lastTraceId = traceId;
+    return response;
+  },
   async (error) => {
     const originalRequest = error.config;
 
@@ -861,6 +887,12 @@ export const settingsApi = {
   // Model discovery
   getProviderModels: async (provider: string): Promise<ProviderModel[]> => {
     const { data } = await api.get(`/settings/models/${provider}`);
+    return data;
+  },
+
+  // Sentry DSN (public, no auth)
+  getSentryDsn: async (): Promise<{ dsn: string | null }> => {
+    const { data } = await api.get('/settings/sentry-dsn');
     return data;
   },
 };
