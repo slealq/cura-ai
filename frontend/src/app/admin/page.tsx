@@ -750,7 +750,7 @@ export default function AdminPage() {
                 {logsData?.items.map((entry: BillingLogEntry) => {
                   const isExpanded = expandedLogId === entry.id;
                   const hasDetail = entry.detail !== null;
-                  const sparks = hasDetail ? entry.detail!.sparks : entry.charged_cost * 1000;
+                  const sparks = hasDetail ? (entry.detail!.sparks ?? 0) : (entry.charged_cost ?? 0) * 1000;
                   return (
                     <Fragment key={entry.id}>
                       <tr
@@ -786,10 +786,10 @@ export default function AdminPage() {
                             : '-'}
                         </td>
                         <td className="text-right px-4 py-2.5 font-mono text-xs">
-                          ${entry.raw_cost.toFixed(6)}
+                          ${(entry.raw_cost ?? 0).toFixed(6)}
                         </td>
                         <td className="text-right px-4 py-2.5 font-mono text-xs">
-                          ${entry.charged_cost.toFixed(6)}
+                          ${(entry.charged_cost ?? 0).toFixed(6)}
                         </td>
                         <td className="text-right px-4 py-2.5 font-mono text-xs font-medium">
                           {sparks.toFixed(2)}
@@ -801,15 +801,15 @@ export default function AdminPage() {
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
                               <div>
                                 <span className="text-muted-foreground">Rate/Input Token</span>
-                                <p className="font-mono">{entry.detail!.cost_per_input_token.toFixed(10)}</p>
+                                <p className="font-mono">{(entry.detail!.cost_per_input_token ?? 0).toFixed(10)}</p>
                               </div>
                               <div>
                                 <span className="text-muted-foreground">Rate/Output Token</span>
-                                <p className="font-mono">{entry.detail!.cost_per_output_token.toFixed(10)}</p>
+                                <p className="font-mono">{(entry.detail!.cost_per_output_token ?? 0).toFixed(10)}</p>
                               </div>
                               <div>
                                 <span className="text-muted-foreground">Rate/Call</span>
-                                <p className="font-mono">${entry.detail!.cost_per_call.toFixed(6)}</p>
+                                <p className="font-mono">${(entry.detail!.cost_per_call ?? 0).toFixed(6)}</p>
                               </div>
                               <div>
                                 <span className="text-muted-foreground">Platform Markup</span>
@@ -817,15 +817,15 @@ export default function AdminPage() {
                               </div>
                               <div>
                                 <span className="text-muted-foreground">Input Cost</span>
-                                <p className="font-mono">${entry.detail!.input_cost.toFixed(8)}</p>
+                                <p className="font-mono">${(entry.detail!.input_cost ?? 0).toFixed(8)}</p>
                               </div>
                               <div>
                                 <span className="text-muted-foreground">Output Cost</span>
-                                <p className="font-mono">${entry.detail!.output_cost.toFixed(8)}</p>
+                                <p className="font-mono">${(entry.detail!.output_cost ?? 0).toFixed(8)}</p>
                               </div>
                               <div>
                                 <span className="text-muted-foreground">Call Cost</span>
-                                <p className="font-mono">${entry.detail!.call_cost.toFixed(8)}</p>
+                                <p className="font-mono">${(entry.detail!.call_cost ?? 0).toFixed(8)}</p>
                               </div>
                               {entry.pipeline_log_id && (
                                 <div>
