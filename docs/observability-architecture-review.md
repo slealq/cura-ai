@@ -17,6 +17,7 @@
 - [H) Risks / Gaps / Open Questions](#h-risks--gaps--open-questions)
 - [I) Privacy Model — Per-User Telemetry Toggle](#i-privacy-model--per-user-telemetry-toggle)
 - [J) Implementation Roadmap — Plan Moving Forward](#j-implementation-roadmap--plan-moving-forward)
+- [K) Sentry Logs Integration — Backend Structured Logs to Sentry](#k-sentry-logs-integration--backend-structured-logs-to-sentry)
 - [Appendix: Key File References](#appendix-key-file-references)
 
 ---
@@ -1160,6 +1161,7 @@ Observability is not a project with an end date. After Phase 3, the system enter
 | **Phase 0** | ~1 week | First Sentry alert fires on a real error | H.2, H.3, H.8 | Error → trace_id → request chain. Health check verifies dependencies |
 | **Phase 1** | 2-3 weeks | End-to-end distributed trace visible (browser → API → worker → provider) | H.4, H.7, H.12 | Full distributed tracing. Queue metrics. Structured logs. Orphan cleanup |
 | **Phase 2** | 2-3 weeks | Upload funnel dashboard shows completion rates | H.14 | Frontend performance baseline. User funnels. Session replay evaluation |
+| **Phase 2.5** | 2-3 days | Backend logs visible in Sentry Explore > Logs | — | All `logging` + `write_log()` calls reach Sentry with trace correlation. Section K |
 | **Phase 3** | 2-3 weeks | SLO dashboard green; first alert-driven incident response | — | Proactive monitoring. Cost visibility. On-call runbook. Anomaly detection |
 
 **Total estimated duration:** 8-12 weeks (Phases 0-3), with the prerequisite done before Phase 0 starts.
@@ -1181,12 +1183,244 @@ Observability is not a project with an end date. After Phase 3, the system enter
 
 ---
 
+## K) Sentry Logs Integration — Backend Structured Logs to Sentry
+
+*Added March 2026. Sits between Phase 2 (frontend RUM) and Phase 3 (SLOs/alerting). Backend-only change.*
+
+### K.1) Problem Statement
+
+The backend has two independent logging paths:
+
+1. **Python `logging` module** — 178 calls across 42 files. Outputs to stdout as structured JSON (Docker) or human-readable (TTY). Includes `trace_id` and `session_id` via the custom `LogRecordFactory` in `logging_config.py`. Used for app lifecycle (startup, health, OTel init), task progress, queue wait times, and OpenAI audit traces.
+
+2. **`write_log()` to DB** — 125 calls across 11 files. Writes to the `pipeline_logs` PostgreSQL table via `log_service.py`. Structured fields: category, level, provider, model, operation, duration, tokens, cost. Used for AI provider API calls, task execution lifecycle, and billing-aware audit logging.
+
+Neither path reaches Sentry. Logs are only visible via `docker logs`, `cura logs`, or the admin Debug page (which queries `pipeline_logs`). When investigating an error in Sentry, you see the stack trace, breadcrumbs, and OTel spans, but no log context from the request or worker task. You have to SSH/exec into the container and grep stdout to correlate.
+
+### K.2) Solution: Sentry Structured Logs
+
+Sentry SDK 2.35+ supports a first-class Logs product (`enable_logs=True`). Logs appear in **Explore > Logs** in the Sentry UI, with:
+
+- Full-text search on message body
+- Attribute-based filtering (e.g., `app.trace_id:abc123`, `provider:fal`)
+- Automatic `trace_id` / `span_id` correlation — click a log to jump to its trace waterfall
+- Custom columns for any attribute
+
+Two mechanisms send logs to Sentry:
+
+| Mechanism | What it captures | Code changes needed |
+|---|---|---|
+| `LoggingIntegration(sentry_logs_level=logging.INFO)` | All Python `logging.info()`+ calls across the codebase | Zero — auto-captures existing calls |
+| `sentry_sdk.logger.info("msg", attributes={...})` | Direct structured logs with typed attributes | Per-call — used for `write_log()` bridge |
+
+### K.3) Design Decisions
+
+1. **Auto-capture Python `logging` via `LoggingIntegration`** — enables `sentry_logs_level=logging.INFO` so all existing `logger.info/warning/error` calls reach Sentry with zero code changes to individual modules. The `extra` dict on log calls becomes searchable attributes.
+
+2. **Bridge `write_log()` to `sentry_sdk.logger`** — add a call to `sentry_sdk.logger` inside `write_log()` so every DB-logged event also reaches Sentry Logs with structured attributes (provider, model, operation, duration, tokens, success). The DB write remains for the admin Debug page and billing audit trail. Sentry Logs provides the cross-service search and trace correlation.
+
+3. **Filter noisy logs via `before_send_log`** — health check logs, Celery heartbeat noise, and SQLAlchemy pool events are filtered out before leaving the process. This avoids burning the 5GB/month free quota on noise.
+
+4. **Log level mapping** — Python `logging.INFO` → Sentry `info`, `logging.WARNING` → `warning`, `logging.ERROR` → `error`. We do NOT send `DEBUG` to Sentry (too noisy, only 9 calls in codebase anyway).
+
+5. **`write_log()` severity mapping** — `LogLevel.INFO` → `sentry_sdk.logger.info`, `LogLevel.WARNING` → `sentry_sdk.logger.warning`, `LogLevel.ERROR` → `sentry_sdk.logger.error`. `LogLevel.DEBUG` skipped.
+
+6. **Quota awareness** — Sentry provides 5GB/month free, $0.50/GB overage. At current scale (~178 `logging` calls + ~125 `write_log` calls per request cycle, ~2 users), volume is well under quota. The `before_send_log` filter is the safety valve.
+
+### K.4) Implementation Tasks
+
+#### Task 1: Bump sentry-sdk minimum version
+
+**Modify:** `backend/pyproject.toml`
+
+Change `"sentry-sdk[fastapi,celery]>=2.0.0"` to `"sentry-sdk[fastapi,celery]>=2.35.0"`.
+
+The `enable_logs` top-level option and `LoggingIntegration.sentry_logs_level` parameter require SDK 2.35+. Current installed version is 2.54.0, so this is just a spec guard for future installs.
+
+---
+
+#### Task 2: Enable Sentry Logs in API init
+
+**Modify:** `backend/app/main.py` — `_init_sentry()`
+
+- Add `import logging` at top of function
+- Add `enable_logs=True` to `sentry_sdk.init()`
+- Add `LoggingIntegration` to `integrations` list:
+  ```python
+  LoggingIntegration(
+      level=logging.INFO,              # breadcrumbs from INFO+
+      event_level=logging.ERROR,       # error events from ERROR+
+      sentry_logs_level=logging.INFO,  # Sentry Logs from INFO+
+  )
+  ```
+- Add `before_send_log` callback that filters out:
+  - Health check requests (`"health"` in message)
+  - SQLAlchemy pool events (`"pool"` in logger name)
+  - Celery mingle/gossip messages
+
+---
+
+#### Task 3: Enable Sentry Logs in Celery worker init
+
+**Modify:** `backend/app/workers/celery_app.py` — `init_sentry_on_worker()`
+
+Same changes as Task 2: `enable_logs=True`, `LoggingIntegration` with `sentry_logs_level`, and `before_send_log` callback.
+
+Extract the shared `before_send_log` and integration factory into a helper to avoid duplication.
+
+---
+
+#### Task 4: Create shared Sentry init helper
+
+**Create:** `backend/app/core/sentry_config.py`
+
+Extract shared config into a helper used by both `main.py` and `celery_app.py`:
+
+```python
+def get_sentry_integrations():
+    """Return Sentry integrations list with logging enabled."""
+    from sentry_sdk.integrations.logging import LoggingIntegration
+    return [
+        LoggingIntegration(
+            level=logging.INFO,
+            event_level=logging.ERROR,
+            sentry_logs_level=logging.INFO,
+        ),
+    ]
+
+def before_send_log(log, _hint):
+    """Filter noisy logs before sending to Sentry."""
+    body = log.get("body", "")
+    # Health check noise
+    if "/health" in body:
+        return None
+    # Celery internal chatter
+    if "mingle" in body.lower() or "gossip" in body.lower():
+        return None
+    return log
+```
+
+---
+
+#### Task 5: Bridge `write_log()` to Sentry Logs
+
+**Modify:** `backend/app/services/log_service.py`
+
+After the DB write succeeds, emit a corresponding `sentry_sdk.logger` call with structured attributes:
+
+```python
+# After db.commit() for the PipelineLog entry:
+try:
+    from sentry_sdk import logger as sentry_logger
+
+    attrs = {
+        "log.category": category.value,
+        "log.pipeline_log_id": str(entry.id),
+    }
+    if task_name:
+        attrs["task.name"] = task_name
+    if provider:
+        attrs["ai.provider"] = provider
+    if model:
+        attrs["ai.model"] = model
+    if operation:
+        attrs["ai.operation"] = operation
+    if duration_ms is not None:
+        attrs["ai.duration_ms"] = float(duration_ms)
+    if input_tokens is not None:
+        attrs["ai.input_tokens"] = float(input_tokens)
+    if output_tokens is not None:
+        attrs["ai.output_tokens"] = float(output_tokens)
+    if success is not None:
+        attrs["ai.success"] = success
+    if effective_user_id is not None:
+        attrs["app.user_id"] = str(effective_user_id)
+    if job_id is not None:
+        attrs["app.job_id"] = str(job_id)
+    if effective_image_id is not None:
+        attrs["app.image_id"] = str(effective_image_id)
+
+    log_fn = {
+        LogLevel.DEBUG: None,  # skip DEBUG
+        LogLevel.INFO: sentry_logger.info,
+        LogLevel.WARNING: sentry_logger.warning,
+        LogLevel.ERROR: sentry_logger.error,
+    }.get(level)
+    if log_fn:
+        log_fn(message, attributes=attrs)
+except Exception:
+    pass  # Sentry log emission is best-effort
+```
+
+This gives every `write_log()` call rich searchable attributes in Sentry: you can filter by `ai.provider:fal`, `ai.operation:generate`, `ai.success:false`, `app.job_id:42`, etc.
+
+---
+
+#### Task 6: Enrich existing `logging.extra` calls with structured data
+
+**Modify:** `backend/app/workers/tasks.py`, `backend/app/workers/generation_tasks.py`
+
+Several log calls already use `extra={}` for structured context (e.g., queue wait times, duplication detection). The `LoggingIntegration` automatically converts `extra` keys into Sentry Log attributes. Review and ensure the most important `extra` fields use consistent naming:
+
+- `extra={"event_type": "queue_wait", "queue_wait_ms": ...}` — already good
+- `extra={"event_type": "duplicate_skip", ...}` — already good
+
+No changes needed for most calls — the `LoggingIntegration` handles the mapping automatically. Just verify no sensitive data (passwords, tokens) leaks via `extra`.
+
+---
+
+### K.5) Files Summary
+
+| File | Action | Task |
+|---|---|---|
+| `backend/pyproject.toml` | MODIFY | 1 |
+| `backend/app/core/sentry_config.py` | CREATE | 4 |
+| `backend/app/main.py` | MODIFY | 2 |
+| `backend/app/workers/celery_app.py` | MODIFY | 3 |
+| `backend/app/services/log_service.py` | MODIFY | 5 |
+| `backend/app/workers/tasks.py` | AUDIT | 6 |
+| `backend/app/workers/generation_tasks.py` | AUDIT | 6 |
+
+### K.6) Implementation Order
+
+```
+Task 1 (version bump) ──> Task 4 (shared helper) ──┬──> Task 2 (API init)
+                                                    └──> Task 3 (worker init)
+                                                          └──> Task 5 (write_log bridge)
+                                                                └──> Task 6 (audit extra fields)
+```
+
+Tasks 2 and 3 can run in parallel after Task 4. Task 5 depends on Sentry being initialized (Tasks 2/3). Task 6 is a lightweight audit pass.
+
+### K.7) Verification
+
+1. **Python `logging` in Sentry**: Start backend, hit `GET /api/images/stats` → check Sentry Explore > Logs for `logger:app.api.images` entries
+2. **`write_log()` in Sentry**: Upload an image → check Sentry Logs for entries with `ai.provider:*`, `ai.operation:tag` attributes
+3. **Trace correlation**: Click a log entry → verify it links to the correct trace waterfall showing the API request + worker spans
+4. **`app.trace_id` search**: Copy `app.trace_id` from an API transaction → search Sentry Logs by that value → see all logs from that request chain (API + workers)
+5. **Filter check**: Hit `GET /health` → verify NO log appears in Sentry (filtered by `before_send_log`)
+6. **Worker logs**: Generate an image → check Sentry Logs for worker-side entries with `task.name:generate_image`, `ai.provider:fal`
+7. **Build passes**: `docker compose build backend` succeeds
+
+### K.8) Quota Estimate
+
+| Source | Calls per image cycle | Avg message size | Volume per 1000 images |
+|---|---|---|---|
+| Python `logging` (task lifecycle) | ~15 | ~200 bytes | ~3 MB |
+| `write_log()` (provider API calls) | ~5 | ~500 bytes (with attributes) | ~2.5 MB |
+| Python `logging` (startup, misc) | ~10/restart | ~150 bytes | negligible |
+
+**Estimated monthly volume at current scale (~50 images/day):** ~80 MB/month. Well under the 5GB free tier. The `before_send_log` filter provides headroom if volume grows.
+
+---
+
 ## Appendix: Key File References
 
 ### Backend
 
 | File | Relevance |
 |---|---|
+| `backend/app/core/sentry_config.py` | Shared Sentry init config: integrations, `before_send_log` filter (Section K) |
 | `backend/app/main.py` | FastAPI app, logging config, health check, middleware |
 | `backend/app/services/billing_context.py` | Thread-local context: trace_id, user_id, job_id, idempotency keys |
 | `backend/app/services/log_service.py` | `write_log()` — central structured logging to pipeline_logs table |
@@ -1209,8 +1443,9 @@ Observability is not a project with an end date. After Phase 3, the system enter
 
 | File | Relevance |
 |---|---|
-| `frontend/src/app/layout.tsx` | Root layout, TanStack Query setup, Toaster |
-| `frontend/src/lib/api.ts` | Axios client, interceptors, upload chunking, error handling |
+| `frontend/src/lib/observability.ts` | Centralized observability helpers: setUser, trackNavigation, trackFunnelStep, etc. (Phase 2) |
+| `frontend/src/app/layout.tsx` | Root layout, TanStack Query setup, QueryCache/MutationCache error handlers, SentryUserSync |
+| `frontend/src/lib/api.ts` | Axios client, interceptors, slow request detection, upload chunking, error handling |
 | `frontend/src/contexts/AuthContext.tsx` | Session/token management |
 | `frontend/src/contexts/UploadContext.tsx` | Upload progress tracking |
 | `frontend/src/hooks/useJobNotifications.ts` | Job polling (5s), status change detection |

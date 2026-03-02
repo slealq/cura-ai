@@ -132,7 +132,9 @@ def init_sentry_on_worker(sender, **kwargs):
         sentry_sdk.init(
             dsn=dsn,
             environment=_get_settings().environment,
-            traces_sample_rate=0.2,
+            # TEMPORARY: 1.0 for 2 weeks to baseline worker traces.
+            # Reduce to 0.2 after baseline data is collected.
+            traces_sample_rate=1.0,
             send_default_pii=False,
         )
         logger.info("Sentry SDK initialized in Celery worker")

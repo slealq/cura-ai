@@ -5,6 +5,8 @@ with streaming responses and request body consumption.
 """
 import uuid
 
+import sentry_sdk
+
 from app.services.billing_context import init_trace, set_session_id, set_trace_id
 
 
@@ -32,6 +34,9 @@ class RequestContextMiddleware:
         incoming_session = headers.get(b"x-session-id", b"").decode() or None
         if incoming_session:
             set_session_id(incoming_session)
+
+        # Tag Sentry scope so API transactions are searchable by app.trace_id
+        sentry_sdk.set_tag("app.trace_id", trace_id)
 
         # Always generate a fresh request_id
         request_id = uuid.uuid4().hex

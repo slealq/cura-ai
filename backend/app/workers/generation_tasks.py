@@ -92,6 +92,16 @@ def _init_task_context(user_id, job_id=None, trace_id=None, session_id=None):
         init_trace()
     if session_id:
         set_session_id(session_id)
+    # Tag Sentry scope so the worker transaction is searchable by our custom
+    # trace_id (which differs from the OTel W3C trace ID).
+    try:
+        import sentry_sdk
+        sentry_sdk.set_tag("app.trace_id", get_trace_id())
+        if job_id is not None:
+            sentry_sdk.set_tag("app.job_id", str(job_id))
+        sentry_sdk.set_tag("app.user_id", str(user_id))
+    except Exception:
+        pass
 
 
 def _download_lora_weights(db: Session, lora_model_id: int, lora_url: str, user_id: int) -> None:

@@ -27,6 +27,17 @@ def configure_otel(service_name: str, app=None) -> None:
 
         resource = Resource.create({"service.name": service_name})
         provider = TracerProvider(resource=resource)
+
+        # Register SentrySpanProcessor so OTel spans export to Sentry.
+        # Without this, TracerProvider has no processors and all spans
+        # (provider_span, CeleryInstrumentor, etc.) are silently dropped.
+        try:
+            from sentry_sdk.integrations.opentelemetry import SentrySpanProcessor
+            provider.add_span_processor(SentrySpanProcessor())
+            logger.info("SentrySpanProcessor registered on TracerProvider")
+        except (ImportError, Exception) as e:
+            logger.debug(f"SentrySpanProcessor registration skipped: {e}")
+
         trace.set_tracer_provider(provider)
 
         # Auto-instrument libraries
