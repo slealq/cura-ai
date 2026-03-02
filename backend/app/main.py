@@ -7,14 +7,25 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import api_router
 from app.core.config import get_settings
 
-# Configure logging with trace_id support
-from app.services.billing_context import TraceIdFilter
+# Configure logging with trace_id support — use a record factory so that
+# every log record (including third-party loggers like uvicorn) gets trace_id.
+from app.services.billing_context import get_trace_id
 
+_original_record_factory = logging.getLogRecordFactory()
+
+
+def _trace_record_factory(*args, **kwargs):
+    record = _original_record_factory(*args, **kwargs)
+    if not hasattr(record, "trace_id"):
+        record.trace_id = get_trace_id() or "-"
+    return record
+
+
+logging.setLogRecordFactory(_trace_record_factory)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - [trace=%(trace_id)s] %(message)s",
 )
-logging.getLogger().addFilter(TraceIdFilter())
 logger = logging.getLogger(__name__)
 
 settings = get_settings()

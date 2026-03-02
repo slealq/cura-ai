@@ -12,15 +12,23 @@ logger = logging.getLogger(__name__)
 
 @setup_logging.connect
 def configure_worker_logging(**kwargs):
-    """Configure Celery worker logging with trace_id filter."""
-    from app.services.billing_context import TraceIdFilter
+    """Configure Celery worker logging with trace_id in every log record."""
+    from app.services.billing_context import get_trace_id
 
+    _original_factory = logging.getLogRecordFactory()
+
+    def _trace_record_factory(*args, **kw):
+        record = _original_factory(*args, **kw)
+        if not hasattr(record, "trace_id"):
+            record.trace_id = get_trace_id() or "-"
+        return record
+
+    logging.setLogRecordFactory(_trace_record_factory)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - [trace=%(trace_id)s] %(message)s",
         force=True,
     )
-    logging.getLogger().addFilter(TraceIdFilter())
 
 settings = get_settings()
 

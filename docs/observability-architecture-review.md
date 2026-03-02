@@ -16,6 +16,8 @@
 - [G) Phased Rollout Plan](#g-phased-rollout-plan)
 - [H) Risks / Gaps / Open Questions](#h-risks--gaps--open-questions)
 - [I) Privacy Model — Per-User Telemetry Toggle](#i-privacy-model--per-user-telemetry-toggle)
+- [J) Implementation Roadmap — Plan Moving Forward](#j-implementation-roadmap--plan-moving-forward)
+- [Appendix: Key File References](#appendix-key-file-references)
 
 ---
 
@@ -759,54 +761,6 @@ This is the highest-leverage work. Everything else builds on it.
 
 ---
 
-## Appendix: Key File References
-
-### Backend
-
-| File | Relevance |
-|---|---|
-| `backend/app/main.py` | FastAPI app, logging config, health check, middleware |
-| `backend/app/services/billing_context.py` | Thread-local context: trace_id, user_id, job_id, idempotency keys |
-| `backend/app/services/log_service.py` | `write_log()` — central structured logging to pipeline_logs table |
-| `backend/app/services/billing_orchestrator.py` | Cost decision lifecycle, idempotency, trace_id usage |
-| `backend/app/services/billing_service.py` | `finalize_job_billing()`, usage record creation |
-| `backend/app/workers/celery_app.py` | Celery config, rate limits, queue routing, worker logging setup |
-| `backend/app/workers/tasks.py` | All pipeline tasks (ingest, tag, describe, embed, cluster, etc.) |
-| `backend/app/workers/generation_tasks.py` | Training, generation, editing, evaluation tasks |
-| `backend/app/models/job.py` | Job model: statuses, types, cost tracking fields |
-| `backend/app/models/pipeline_log.py` | PipelineLog model: structured log schema |
-| `backend/app/models/billing.py` | UsageRecord, UserBalance, BalanceTransaction models |
-| `backend/app/models/cost_decision.py` | CostDecision model: billing lifecycle tracking |
-| `backend/app/providers/openai_provider.py` | OpenAI API call logging pattern (AUDIT logs) |
-| `backend/app/providers/anthropic_provider.py` | Anthropic API call logging pattern |
-| `backend/app/providers/fal_provider.py` | fal.ai provider: request_id tracking, cancellation |
-| `backend/app/db/base.py` | SQLAlchemy pool config (pool_size=5, max_overflow=5) |
-| `backend/app/core/security.py` | JWT auth, user extraction dependencies |
-
-### Frontend
-
-| File | Relevance |
-|---|---|
-| `frontend/src/app/layout.tsx` | Root layout, TanStack Query setup, Toaster |
-| `frontend/src/lib/api.ts` | Axios client, interceptors, upload chunking, error handling |
-| `frontend/src/contexts/AuthContext.tsx` | Session/token management |
-| `frontend/src/contexts/UploadContext.tsx` | Upload progress tracking |
-| `frontend/src/hooks/useJobNotifications.ts` | Job polling (5s), status change detection |
-| `frontend/src/app/admin/MetricsView.tsx` | Admin metrics dashboard (30s polling) |
-| `frontend/src/app/admin/OperationsMonitor.tsx` | Admin billing operations monitoring |
-| `frontend/package.json` | Dependencies (no observability SDKs) |
-
-### Infrastructure
-
-| File | Relevance |
-|---|---|
-| `docker-compose.yml` | All local services, health checks, Redis DB allocation |
-| `infra/modules/container_apps/main.tf` | Log Analytics workspace, Container App environment |
-| `.github/workflows/deploy-dev.yml` | CI/CD health checks, smoke tests |
-| `.github/workflows/ci.yml` | PR validation (lint + build) |
-
----
-
 ## I) Privacy Model — Per-User Telemetry Toggle
 
 ### Current State: No Privacy Restrictions
@@ -861,3 +815,414 @@ User model:
 All accounts used for internal testing/development should have `telemetry_private = false`. The seed admin (`stuart.leal23@gmail.com`) and any accounts created during development default to non-private. New user registrations default to `telemetry_private = true`.
 
 > **TODO (pre-launch):** Implement the `telemetry_private` flag on User model, add the Sentry `before_send` scrubber, update `write_log()` to respect the flag, and update provider AUDIT logging. Track this as a separate work item when real user onboarding is planned.
+
+---
+
+## J) Implementation Roadmap — Plan Moving Forward
+
+Sections A–H diagnose the current state and catalog every gap. Section I defines the privacy boundary. This section answers: *what are we actually building, what does "done" look like at each stage, and what comes after?*
+
+### J.1) Architecture Decision: Confirmed Stack
+
+**We are building Option 3 (Best-of-Breed Composable)** from Section F. OpenTelemetry is the tracing and metrics backbone from day one. Each tool is chosen for what it does best — not as a monolithic platform.
+
+| Tool | Role | Introduced In |
+|---|---|---|
+| **Sentry** (Python SDK + Next.js SDK) | Error tracking, crash reporting, basic performance traces | Phase 0 |
+| **OpenTelemetry Python SDK** | Distributed tracing, custom spans, metrics export | Phase 1 |
+| **`python-json-logger`** | Structured JSON logging (machine-parseable in Docker/Azure) | Phase 1 |
+| **Celery Flower** | Queue depth, active workers, task rate visualization | Phase 1 |
+| **Azure Log Analytics** | Infrastructure log aggregation (already provisioned) | Existing |
+| **PostHog** (or Sentry Replay) | Session replay, frontend analytics, user funnels | Phase 2 |
+| **Sentry Performance / OTel export** | SLO tracking, latency percentiles, alert rules | Phase 3 |
+
+**What was excluded and why:**
+
+- **Datadog** — Cost prohibitive for a small team; per-host pricing doesn't fit a containerized architecture that scales to zero.
+- **Self-hosted Grafana + Prometheus** — Operational burden of running monitoring infrastructure exceeds the value at current scale. Revisit post-Phase 3 if Azure Monitor costs become a concern.
+- **Azure Application Insights** — Limited Celery/worker support. Log Analytics workspace is already provisioned for infra logs; Application Insights would add cost without covering the async worker gap.
+
+#### Trace Scoping Decision
+
+A `trace_id` is generated **per user action**, not per HTTP request. The frontend creates a `trace_id` for multi-request actions (upload, train, generate) and sends it as `X-Trace-Id`. The backend middleware adopts the incoming `trace_id` if present; otherwise generates a new one. Each HTTP request still gets its own `request_id` for per-call granularity.
+
+This matters because our upload flow sends multiple chunk requests for a single user action. With per-request tracing, correlating "all 10 chunks of this 50-image upload" requires a separate `upload_id` grouping mechanism. With per-action tracing, a single `trace_id` already groups the entire upload → ingest → thumbnail → folder assignment chain.
+
+| ID | Scope | Created By | Propagated Via |
+|---|---|---|---|
+| `trace_id` | User action (upload, train, generate, search) | Frontend (or backend middleware if absent) | `X-Trace-Id` header → Celery task kwargs |
+| `request_id` | Single HTTP request | Backend middleware | `X-Request-Id` response header |
+| `session_id` | Browser session (survives navigation) | Frontend (`localStorage`) | `X-Session-Id` header |
+| `job_id` | Async unit of work | Backend (Job row creation) | Celery task kwargs |
+| `celery_task_id` | Celery execution unit | Celery framework | Automatic |
+
+#### Metrics Emission: OTel-First
+
+All custom metrics use the **OpenTelemetry Metrics SDK**, exported to the same backend as traces (Sentry initially, swappable to Grafana Cloud / Azure Monitor). We do not introduce a separate Prometheus client library. Flower provides queue metrics via its own UI — we do not scrape it as a Prometheus target.
+
+This keeps one mental model: OTel for traces + metrics, Sentry for errors + performance, stdout JSON for logs. No mixing of metrics libraries early.
+
+#### Sampling Strategy
+
+| Signal | Sample Rate | Rationale |
+|---|---|---|
+| **Errors** (Sentry events) | 100% | Every error matters. No sampling. |
+| **Traces** (OTel spans) | 20% default, 100% on error | Low-volume system; 20% gives enough signal. On-error traces always captured to support debugging. |
+| **Provider audit payloads** | Off by default | Full request/response bodies are opt-in via `AUDIT_PROVIDER_PAYLOADS=true`. They can explode volume/cost and pollute logs. Enabled only for targeted debugging sessions, not as a steady-state default — even in dev. |
+| **Structured logs** (stdout JSON) | 100% | Logs are cheap and searchable. No sampling. |
+| **pipeline_logs** (DB rows) | 100% for operations, skip for heartbeats | DB rows for actual work (tag, describe, embed, provider calls). Skip periodic health/beat noise. |
+
+#### Incident Questions → Signals Mapping
+
+Instrumentation exists to answer real questions. If a signal doesn't help debug a real incident, it's noise. This table maps the incidents we expect to the signals that answer them.
+
+| Incident | Signals That Answer It |
+|---|---|
+| "Upload feels slow" | Upload chunk duration p95, `queue_wait_ms` p95 for ingest queue, `thumbnail_generate_ms` per image, oldest pending ingest job age |
+| "Jobs are stuck" | Oldest pending job age per queue, queue depth, Flower active tasks gauge, worker heartbeat presence, `queue_wait_ms` spike |
+| "Costs are spiking" | Cost per operation per hour (from `usage_records`), provider rate-limit count, retry count, token usage per model |
+| "Provider is flaky" | Provider error rate by model, provider latency p95 by model, rate-limit 429 count, timeout count |
+| "Images not appearing after upload" | Ingest job status distribution, `process_ingest_batch` task duration, thumbnail generation errors, cache invalidation events |
+| "Search returns bad results" | Embedding generation errors, embed task success rate, search latency p95, result count distribution |
+| "Training failed silently" | `train_lora` task final status, fal.ai request_id trace, fal.ai polling duration, fal.ai error response body |
+| "Users dropping off" | Upload funnel completion rate, training funnel completion rate, session duration, rage click count (Phase 2) |
+
+### J.2) H-Item Phase Mapping
+
+Every item from Section H is tracked below. Nothing is left unaddressed.
+
+| H# | Issue | Disposition | Phase / Action | Acceptance Criteria |
+|---|---|---|---|---|
+| H.1 | Thread-local context in async code | **Prerequisite** | Prerequisite (1-2 days) | `billing_context.py` uses `contextvars.ContextVar`; all existing tests pass; `trace_id` is isolated per concurrent async request |
+| H.2 | `trace_id` not generated for most API endpoints | Phase 0 | Phase 0, task 0.1 | Every API response includes `X-Trace-Id` header; `trace_id` present in all structured log entries |
+| H.3 | No frontend-to-backend correlation | Phase 0 | Phase 0, tasks 0.2–0.3 | Browser sends `X-Session-Id` on every request; Sentry events tagged with `session_id` and `trace_id` |
+| H.4 | No queue wait time tracking | Phase 1 | Phase 1, task 1.6 | `queue_wait_ms` logged for every job transition to RUNNING; queryable in structured logs |
+| H.5 | Celery task results expire in 24h | **Accepted** | No action needed | Job status lives in PostgreSQL (durable). Redis result expiry is cosmetic — no user-facing impact |
+| H.6 | No dead letter queue | **Accepted** | No action needed | By design: expensive tasks use `max_retries=0`. Job table captures all failure details for post-mortem |
+| H.7 | AUDIT logs at WARNING level | Phase 1 | Phase 1, task 1.7 | Provider audit logs use a dedicated `audit` logger at DEBUG level; WARNING level reserved for actual warnings |
+| H.8 | Health check is trivial | Phase 0 | Phase 0, task 0.7 | `GET /health` returns per-dependency status (DB, Redis, storage); returns degraded when any dependency is down |
+| H.9 | `with_for_update()` requires `lazyload()` | **Already fixed** | Documented in H | `.options(lazyload(Job.image))` applied; pattern documented for future `with_for_update()` usage |
+| H.10 | TanStack Query cache invalidation fragile | **Already fixed** | Documented in H | `UploadContext` and `useJobNotifications` invalidate all image-related query key prefixes |
+| H.11 | Celery task re-delivery idempotency gaps | **Already fixed** | Documented in H | Re-delivery guard calls `_finish_ingest_job_item()` before skipping |
+| H.12 | Storage orphan files undetectable | Phase 1 | Phase 1 (new: orphan reconciliation task) | Celery beat task runs daily; compares storage objects vs DB `object_key` columns; deletes orphans > 1 hour old; orphan count emitted as metric |
+| H.13 | `folder.image_count` denormalization drift | **Separate bugfix** | Standalone PR | `image_count` computed from `COUNT(*)` after flush, or folder row locked with `with_for_update()` |
+| H.14 | Frontend error swallowing in TanStack Query | Phase 2 | Phase 2 (new: global error handler) | Global `QueryClient.onError` shows Sonner toast for non-401 failures; `error.tsx` boundaries per route |
+| H.15 | Default worker concurrency=1 bottleneck | **Accepted (monitor)** | Phase 1 metric gates decision | Queue wait time metric (H.4) tracks bottleneck severity; increase concurrency to 2 if `started_at - created_at` regularly exceeds 30s |
+| H.16 | `min_status` filter inconsistent across views | **Separate bugfix** | Standalone PR | All `imagesApi.list()` call sites that render thumbnails pass `min_status: 'ingested'` |
+
+### J.3) Phase Deliverables — What Changes After Each Phase
+
+#### Prerequisite: `contextvars` Migration (1-2 days)
+
+**Addresses:** H.1
+
+| Before | After |
+|---|---|
+| `billing_context.py` uses `threading.local()` — unsafe for async FastAPI handlers sharing threads | `contextvars.ContextVar` — correct scoping for both async handlers and Celery prefork workers |
+| Concurrent async requests could read each other's `trace_id` | Each request/task has isolated context |
+
+**Watch-outs:** `contextvars` fixes scoping within a single process, but has secondary traps:
+
+- **`BackgroundTasks`** — FastAPI's `BackgroundTasks` run after the response is sent. The `ContextVar` values from the request are still in scope (same async context), but the response is already gone. If a background task writes logs, they'll carry the request's `trace_id` — which is correct but surprising if you expect background tasks to be "detached."
+- **Streaming responses** — If we ever add `StreamingResponse` endpoints, the generator runs across multiple event loop iterations. `ContextVar` values set in middleware persist correctly (they're bound to the `Task`, not the iteration), but verify this if streaming is introduced.
+- **Fire-and-forget async calls** — Any `asyncio.create_task()` inside a request handler gets a *copy* of the current context (Python 3.11+ behavior). This is usually correct, but mutations in the spawned task won't propagate back. Avoid `create_task()` for request-scoped work; use it only for truly independent background operations.
+
+**Rule of thumb:** Set context at the very top of middleware (first thing). Use `try/finally` or a context manager to ensure cleanup even on exceptions. Never rely on implicit context propagation across process or `create_task()` boundaries — always pass IDs explicitly.
+
+**Artifacts created:**
+- Updated `backend/app/services/billing_context.py`
+
+**Definition of Done:**
+1. `_ctx = threading.local()` replaced with `ContextVar` instances
+2. All getters/setters updated to use `ContextVar.get()` / `.set()`
+3. Middleware sets context in `try/finally` block ensuring cleanup on exceptions
+4. Existing unit tests pass without modification
+5. Manual test: two concurrent API requests have distinct `trace_id` values (verified via log output)
+6. Celery prefork tasks retain isolated context (verified via test task)
+
+---
+
+#### Phase 0: Correlation + Error Capture (~1 week)
+
+**Addresses:** H.2, H.3, H.8
+
+| Before | After |
+|---|---|
+| Errors appear in Docker logs with no correlation | Every error in Sentry links to a `trace_id` → grep backend logs → see the full request chain |
+| No way to connect a user's browser session to backend requests | `session_id` + `trace_id` headers link browser → API → logs → Sentry |
+| Health check returns `{"status": "healthy"}` even when DB is down | Health check verifies DB, Redis, storage; returns per-dependency status |
+| Frontend React errors silently crash components | `error.tsx` and `global-error.tsx` catch rendering errors, report to Sentry |
+
+**Artifacts created:**
+- `backend/app/middleware/request_id.py` — request middleware generating `trace_id` + `request_id`
+- Sentry backend config in `backend/app/main.py`
+- `frontend/sentry.client.config.ts` + `frontend/sentry.server.config.ts`
+- `frontend/src/app/error.tsx` + `frontend/src/app/global-error.tsx`
+- Updated `GET /health` endpoint
+
+**Definition of Done:**
+1. Every API response includes `X-Trace-Id` and `X-Request-Id` headers
+2. Frontend sends `X-Session-Id` on every Axios request
+3. Sentry dashboard shows backend errors tagged with `trace_id`, `request_id`, `user_id`
+4. Sentry dashboard shows frontend errors tagged with `session_id`
+5. `GET /health` returns `{"status": "degraded", "checks": {"db": "ok", "redis": "fail", ...}}` when a dependency is down
+6. `global-error.tsx` catches a deliberate rendering error and it appears in Sentry within 30 seconds
+
+---
+
+#### Phase 1: Distributed Tracing + Worker Correlation + Queue Visibility (2-3 weeks)
+
+**Addresses:** H.4, H.7, H.12
+
+| Before | After |
+|---|---|
+| Celery tasks have no `trace_id` link to the API request that spawned them | `trace_id` flows API → Celery task → provider call; full distributed trace visible |
+| No queue wait time metric; no idea if jobs are waiting minutes in the queue | `queue_wait_ms` computed and logged for every job; alerts possible on threshold |
+| Provider audit logs pollute WARNING level | Dedicated audit logger at DEBUG; warnings reserved for real issues |
+| No visibility into queue depth or worker utilization | Flower dashboard + beat task logging queue depths every 60s |
+| Queue depth alone can look "fine" if producers stop — no throughput pairing | Queue depth paired with oldest pending job age and completion rate per queue |
+| Storage orphans accumulate silently | Daily reconciliation task detects and cleans orphans; count tracked as metric |
+| Logs are plain text — hard to parse, impossible to query at scale | Structured JSON logging; machine-parseable in Docker and Azure Log Analytics |
+| No sub-step visibility inside ingest pipeline | Step-level timing fields on each pipeline task (thumbnail, phash, tag, describe, embed) |
+
+**Logging plane policy:** Phase 1 introduces structured JSON on stdout alongside the existing `pipeline_logs` DB table and Sentry events. These three planes serve different purposes and must not diverge on correlation data:
+
+| Plane | What goes here | What must always be present | What's exclusive to this plane |
+|---|---|---|---|
+| **stdout JSON** (Docker / Azure Log Analytics) | All operational logs, request summaries, task lifecycle, slow queries | `trace_id`, `request_id`, `job_id`, `user_id` | Infrastructure-level noise (health beats, Redis pings) — never written to DB |
+| **pipeline_logs** (PostgreSQL) | Operation audit trail: provider calls, cost decisions, billing events, task outcomes | `trace_id`, `job_id`, `user_id`, `category`, `level` | Powers admin UI views (MetricsView, OperationsMonitor). Product-facing, not just ops |
+| **Sentry** | Errors, exceptions, performance traces | `trace_id`, `request_id`, `session_id`, `user_id` | Stack traces, breadcrumbs, session replay (Phase 2). Error-first view |
+
+**Rule:** Every log entry that touches a user request or async task must include `trace_id` and `job_id` (if applicable) in all three planes. An incident should be debuggable starting from any plane and cross-referencing the others by `trace_id`.
+
+**Step spans for ingest pipeline:** Even before full OTel spans, capture sub-step timing as structured fields in `pipeline_logs` and stdout JSON. This lets us answer "which sub-step got slower" without requiring a trace backend:
+
+| Field | Measured In | What It Captures |
+|---|---|---|
+| `thumbnail_generate_ms` | `process_ingest_batch` | Time to generate 3 thumbnails (200/400/800px) per image |
+| `phash_ms` | `process_ingest_batch` | Perceptual hash computation |
+| `storage_read_ms` | `process_ingest_batch` | Time to read original file from storage (local or Azure Blob) |
+| `db_write_ms` | `process_ingest_batch` | Time for final DB flush (status update + metadata) |
+| `tag_ms` | `tag_image` | Provider call duration for tagging |
+| `describe_ms` | `describe_image` | Provider call duration for description |
+| `embed_ms` | `embed_image` | Embedding generation duration |
+
+These fields graduate to proper OTel span attributes once the SDK is integrated — no rework, just wrapping the existing timing in a `tracer.start_as_current_span()` call.
+
+**Artifacts created:**
+- OpenTelemetry SDK initialization in `backend/app/main.py` and `backend/app/workers/celery_app.py`
+- OTel span wrappers in each provider (`openai_provider.py`, `anthropic_provider.py`, `fal_provider.py`)
+- `trace_id` / `session_id` / `job_id` propagation in all `.apply_async()` call sites
+- Queue depth + oldest pending job age beat task in `backend/app/workers/tasks.py`
+- Orphan reconciliation beat task
+- JSON log formatter configuration (human-readable on TTY, JSON in Docker/Azure)
+- Slow query event hook in `backend/app/db/base.py`
+- Step timing instrumentation in `tasks.py` (`process_ingest_batch`, `tag_image`, `describe_image`, `embed_image`)
+
+**Definition of Done:**
+1. Click a Sentry error → see distributed trace → see API request → Celery task → provider call with tokens/cost/duration
+2. `queue_wait_ms` appears in structured logs for every job that transitions to RUNNING
+3. Queue depth for default, clustering, and generation queues logged every 60s, paired with oldest pending job age and completion rate
+4. Provider audit logs no longer appear at WARNING level
+5. All logs in Docker output are valid JSON (verified: `docker logs backend | head -20 | python3 -m json.tool`)
+6. Orphan reconciliation task runs on schedule; orphan count queryable in logs
+7. `thumbnail_generate_ms`, `phash_ms`, `tag_ms`, `describe_ms`, `embed_ms` appear as fields in structured logs for their respective tasks
+8. Every structured log entry for a user request or task includes `trace_id` (verified by sampling 10 log lines)
+
+---
+
+#### Phase 2: Frontend RUM + UX Funnels (2-3 weeks)
+
+**Addresses:** H.14
+
+| Before | After |
+|---|---|
+| Failed TanStack queries show infinite loading spinners | Global error handler shows Sonner toast; `error.tsx` boundaries catch component crashes |
+| No visibility into frontend performance (LCP, CLS, INP) | Web Vitals reported to Sentry Performance; baseline established |
+| No idea where users drop off in multi-step flows | Upload and training funnels tracked with completion rates |
+| Upload failures are silent unless the user checks the Jobs page | Upload lifecycle instrumented: chunk success/failure rates, total time, retries |
+
+**Artifacts created:**
+- Global `QueryClient` `onError` handler in `frontend/src/app/layout.tsx`
+- `error.tsx` error boundaries per route
+- Web Vitals reporting config
+- Funnel event tracking (upload flow, training flow)
+- Upload lifecycle instrumentation in `UploadContext.tsx`
+- Session replay evaluation setup (Sentry Replay or PostHog)
+
+**Definition of Done:**
+1. A deliberate 500 error on any API endpoint shows a Sonner toast with an actionable message (not infinite spinner)
+2. Web Vitals (LCP, CLS, INP) appear in Sentry Performance dashboard with baseline measurements
+3. Upload funnel shows: files selected → upload started → upload complete → images visible, with drop-off percentages
+4. Training funnel shows: config saved → train started → training complete → first generation
+5. Slow API requests (>2s) are tagged in Sentry with endpoint and duration
+6. Session replay decision documented (tool chosen, privacy masking rules defined per Section I)
+
+---
+
+#### Phase 3: SLOs + Alerts + Cost Dashboards (2-3 weeks)
+
+**Addresses:** Completes the observability stack. No specific H items — this phase builds on Phases 0-2.
+
+| Before | After |
+|---|---|
+| Problems discovered when users complain or logs are manually checked | Alerts fire before users notice; on-call engineer gets notified within 5 minutes of SLO breach |
+| Cost data exists in `usage_records` but requires manual SQL queries to analyze | Cost dashboard in admin UI: trends over time, per-provider, per-model, projected monthly spend |
+| No defined service level expectations | SLOs documented: API p99 < 500ms, job completion > 95%, upload success > 99%, provider errors < 5% |
+| Debugging production issues requires SSH and log grep | On-call runbook: step-by-step for common failure modes with links to dashboards and traces |
+
+**Artifacts created:**
+- SLO definitions document with burn rate thresholds
+- Alert rules in Sentry and/or Azure Monitor (error rate spike, queue depth, worker crash, health check, cost anomaly)
+- Cost dashboard extension in `frontend/src/app/admin/MetricsView.tsx`
+- Anomaly detection enhancements in `AnomaliesView`
+- On-call runbook (`docs/runbook.md`)
+
+**Definition of Done:**
+1. SLOs for the 4 key metrics are defined, measurable, and tracked in a dashboard
+2. An alert fires within 5 minutes when: error rate doubles, queue depth exceeds 50, a worker crashes, or health check fails
+3. Cost dashboard shows: daily/weekly/monthly trends, breakdown by provider and model, per-user cost, projected monthly spend
+4. Anomaly detection flags cost spikes >2x daily average
+5. On-call runbook covers: queue depth check, stuck worker recovery, failed job retry, provider outage response, distributed trace lookup
+6. A simulated incident (kill a worker) triggers the correct alert and the runbook steps resolve it
+
+### J.4) Post-Phase 3 Roadmap
+
+These initiatives build on the observability foundation. None are blockers for Phases 0-3 — they represent the next layer of operational maturity.
+
+| # | Initiative | Dependencies | Estimated Effort | Priority |
+|---|---|---|---|---|
+| P4.1 | **Architecture Decision Records (ADRs)** — Formalize key decisions (OTel as backbone, Sentry vs alternatives, privacy model) as lightweight ADRs in `docs/adr/` | Phase 0 complete (decisions validated) | 2-3 days | High |
+| P4.2 | **Load testing** — k6 or Locust scripts targeting upload, search, and generation flows. Establish performance baselines and find breaking points | Phase 1 (need metrics to measure) | 1 week | High |
+| P4.3 | **Cost optimization** — Analyze `usage_records` to identify expensive operations, evaluate model substitution (e.g., cheaper embedding models), tune provider retry/timeout settings | Phase 3 (need cost dashboard) | 1 week | Medium |
+| P4.4 | **Chaos engineering** — Controlled failure injection: kill workers mid-task, simulate provider outages, drop Redis connections. Validate recovery paths | Phase 3 (need alerts + runbook) | 1 week | Medium |
+| P4.5 | **Developer onboarding docs** — "How to add a new Celery task with proper observability" guide. Covers: span creation, context propagation, structured log fields, SLO impact | Phase 1 (patterns established) | 2-3 days | Medium |
+| P4.6 | **PROD readiness review** — Checklist: all SLOs green for 2 weeks, runbook tested, alerts validated, privacy model implemented (Section I), Terraform `prod/` provisioned | Phase 3 + Section I implemented | 1 week | High |
+| P4.7 | **Worker concurrency tuning** — Use queue wait time metrics (H.4/H.15) to determine optimal concurrency per queue. Adjust DB pool size to match | Phase 1 (need queue metrics) | 2-3 days | Low |
+| P4.8 | **Observability-driven feature prioritization** — Use funnel data, error rates, and cost analysis to prioritize product features. Example: if upload funnel shows 20% drop-off at thumbnail generation, that's a higher priority than a new editing model | Phase 2 (need funnel data) | Ongoing | Medium |
+
+### J.5) Continuous Improvement Loop
+
+Observability is not a project with an end date. After Phase 3, the system enters a continuous feedback loop:
+
+```
+         ┌──────────────────────────────────────────────┐
+         │                                              │
+         ▼                                              │
+    ┌─────────┐     ┌─────────────┐     ┌─────────┐    │
+    │ MEASURE │────►│   ANALYZE   │────►│   ACT   │────┘
+    │         │     │             │     │         │
+    │ Metrics │     │ Dashboards  │     │ Fix     │
+    │ Traces  │     │ SLO review  │     │ Tune    │
+    │ Logs    │     │ Anomalies   │     │ Decide  │
+    │ Funnels │     │ Cost trends │     │ Invest  │
+    └─────────┘     └─────────────┘     └─────────┘
+```
+
+#### Weekly Review (15 min)
+
+| Check | Source | Action Trigger |
+|---|---|---|
+| SLO burn rate | Sentry Performance / OTel dashboard | Any SLO below 99% target for the week |
+| Top 5 Sentry issues | Sentry Issues dashboard | New unresolved issue with >10 occurrences |
+| Queue wait times (p50, p95) | Structured logs query | p95 queue wait > 30s on any queue |
+| Provider error rate | Structured logs + Sentry | Any provider > 5% error rate |
+| Cost trend (week-over-week) | Admin cost dashboard | >20% increase without a corresponding usage increase |
+| Upload success rate | Funnel data | Below 99% success rate |
+
+#### Monthly Review (30 min)
+
+| Check | Source | Action Trigger |
+|---|---|---|
+| SLO compliance (30-day window) | Aggregated SLO data | Any SLO below target for the month |
+| Funnel conversion rates | PostHog / analytics | >5% drop-off change from previous month |
+| Cost per operation trend | `usage_records` aggregation | Cost per operation increasing without model/feature change |
+| Alert noise ratio | Alert history | >30% of alerts are false positives — tune thresholds |
+| Orphan file count | Reconciliation task logs | Orphan count trending upward — investigate root cause |
+| Telemetry overhead | OTel SDK metrics | Tracing adds >5ms p99 to provider calls — reduce sample rate |
+
+#### Quarterly Review (1 hr)
+
+| Check | Source | Action Trigger |
+|---|---|---|
+| SLO target revision | 90-day SLO data | Targets too easy (100% hit) or too aggressive (never met) — recalibrate |
+| Tooling re-evaluation | Team experience + costs | Tool friction, missing features, or cost growth warrants alternatives |
+| ADR review | `docs/adr/` directory | Any decision older than 6 months should be validated against current needs |
+| Capacity planning | Usage trends + cost data | Projected growth requires infrastructure changes (scale Container Apps, upgrade DB tier) |
+| Privacy audit | Section I implementation | Verify `telemetry_private` flag is respected across all telemetry paths |
+| Telemetry coverage | Code review | New features or providers added without observability — add spans/metrics |
+
+### J.6) Timeline Summary
+
+| Phase | Duration | Key Milestone | H Items Addressed | Cumulative Capability |
+|---|---|---|---|---|
+| **Prerequisite** | 1-2 days | `contextvars` migration merged | H.1 | Safe async context for all subsequent work |
+| **Phase 0** | ~1 week | First Sentry alert fires on a real error | H.2, H.3, H.8 | Error → trace_id → request chain. Health check verifies dependencies |
+| **Phase 1** | 2-3 weeks | End-to-end distributed trace visible (browser → API → worker → provider) | H.4, H.7, H.12 | Full distributed tracing. Queue metrics. Structured logs. Orphan cleanup |
+| **Phase 2** | 2-3 weeks | Upload funnel dashboard shows completion rates | H.14 | Frontend performance baseline. User funnels. Session replay evaluation |
+| **Phase 3** | 2-3 weeks | SLO dashboard green; first alert-driven incident response | — | Proactive monitoring. Cost visibility. On-call runbook. Anomaly detection |
+
+**Total estimated duration:** 8-12 weeks (Phases 0-3), with the prerequisite done before Phase 0 starts.
+
+**Parallel work streams** (can happen alongside any phase):
+- **H.13** (folder `image_count` drift) — standalone bugfix PR, no observability dependency
+- **H.16** (`min_status` filter audit) — standalone bugfix PR, no observability dependency
+- **PROD provisioning** — gated by P4.6 (PROD readiness review), not by observability phases. Terraform is ready; provisioning can start after Phase 3 SLOs are green for 2 weeks
+
+**Items accepted as-is (no action):**
+- **H.5** (Celery result expiry) — PostgreSQL is the durable job store; Redis results are secondary
+- **H.6** (no DLQ) — by design for expensive tasks; Job table captures failures
+- **H.15** (worker concurrency=1) — monitor via Phase 1 queue metrics; increase only if data justifies it
+
+**Items already resolved:**
+- **H.9** (`lazyload` pattern) — fix implemented and documented
+- **H.10** (cache invalidation) — fix implemented, query key prefixes broadened
+- **H.11** (re-delivery guard) — fix implemented, `_finish_ingest_job_item()` called on skip
+
+---
+
+## Appendix: Key File References
+
+### Backend
+
+| File | Relevance |
+|---|---|
+| `backend/app/main.py` | FastAPI app, logging config, health check, middleware |
+| `backend/app/services/billing_context.py` | Thread-local context: trace_id, user_id, job_id, idempotency keys |
+| `backend/app/services/log_service.py` | `write_log()` — central structured logging to pipeline_logs table |
+| `backend/app/services/billing_orchestrator.py` | Cost decision lifecycle, idempotency, trace_id usage |
+| `backend/app/services/billing_service.py` | `finalize_job_billing()`, usage record creation |
+| `backend/app/workers/celery_app.py` | Celery config, rate limits, queue routing, worker logging setup |
+| `backend/app/workers/tasks.py` | All pipeline tasks (ingest, tag, describe, embed, cluster, etc.) |
+| `backend/app/workers/generation_tasks.py` | Training, generation, editing, evaluation tasks |
+| `backend/app/models/job.py` | Job model: statuses, types, cost tracking fields |
+| `backend/app/models/pipeline_log.py` | PipelineLog model: structured log schema |
+| `backend/app/models/billing.py` | UsageRecord, UserBalance, BalanceTransaction models |
+| `backend/app/models/cost_decision.py` | CostDecision model: billing lifecycle tracking |
+| `backend/app/providers/openai_provider.py` | OpenAI API call logging pattern (AUDIT logs) |
+| `backend/app/providers/anthropic_provider.py` | Anthropic API call logging pattern |
+| `backend/app/providers/fal_provider.py` | fal.ai provider: request_id tracking, cancellation |
+| `backend/app/db/base.py` | SQLAlchemy pool config (pool_size=5, max_overflow=5) |
+| `backend/app/core/security.py` | JWT auth, user extraction dependencies |
+
+### Frontend
+
+| File | Relevance |
+|---|---|
+| `frontend/src/app/layout.tsx` | Root layout, TanStack Query setup, Toaster |
+| `frontend/src/lib/api.ts` | Axios client, interceptors, upload chunking, error handling |
+| `frontend/src/contexts/AuthContext.tsx` | Session/token management |
+| `frontend/src/contexts/UploadContext.tsx` | Upload progress tracking |
+| `frontend/src/hooks/useJobNotifications.ts` | Job polling (5s), status change detection |
+| `frontend/src/app/admin/MetricsView.tsx` | Admin metrics dashboard (30s polling) |
+| `frontend/src/app/admin/OperationsMonitor.tsx` | Admin billing operations monitoring |
+| `frontend/package.json` | Dependencies (no observability SDKs) |
+
+### Infrastructure
+
+| File | Relevance |
+|---|---|
+| `docker-compose.yml` | All local services, health checks, Redis DB allocation |
+| `infra/modules/container_apps/main.tf` | Log Analytics workspace, Container App environment |
+| `.github/workflows/deploy-dev.yml` | CI/CD health checks, smoke tests |
+| `.github/workflows/ci.yml` | PR validation (lint + build) |
