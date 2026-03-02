@@ -16,6 +16,7 @@ from app.models.user import User
 from app.services.evaluation_service import get_evaluation_service
 from app.services.generation_service import get_generation_service
 from app.services.settings_service import get_settings_service
+from app.workers.dispatch import dispatch
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -566,7 +567,7 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db), c
 
     # Dispatch Celery task
     from app.workers.generation_tasks import train_lora as train_lora_task
-    task = train_lora_task.delay(lora.id, job.id, current_user.id)
+    task = dispatch(train_lora_task, lora.id, job.id, current_user.id)
 
     job.celery_task_id = task.id
     db.commit()
@@ -830,7 +831,7 @@ async def recover_lora_training(lora_id: int, db: Session = Depends(get_db), cur
                     db.commit()
             # Dispatch best-effort weights download
             from app.workers.generation_tasks import download_lora_weights as dl_task
-            dl_task.delay(lora_id, current_user.id)
+            dispatch(dl_task, lora_id, current_user.id)
             return {"status": "recovered", "lora_url": result.lora_url, "request_id": request_id}
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Training completed but failed to fetch result: {e}")
@@ -849,7 +850,7 @@ async def recover_lora_training(lora_id: int, db: Session = Depends(get_db), cur
     else:
         # Still running — re-dispatch celery task to resume polling
         from app.workers.generation_tasks import train_lora as train_lora_task
-        task = train_lora_task.delay(lora_id, lora.job_id, current_user.id)
+        task = dispatch(train_lora_task, lora_id, lora.job_id, current_user.id)
         if lora.job_id:
             job = db.query(Job).filter(Job.id == lora.job_id).first()
             if job:
@@ -895,7 +896,7 @@ async def retry_lora_training(lora_id: int, db: Session = Depends(get_db), curre
 
     # Dispatch
     from app.workers.generation_tasks import train_lora as train_lora_task
-    task = train_lora_task.delay(lora_id, job.id, current_user.id)
+    task = dispatch(train_lora_task, lora_id, job.id, current_user.id)
 
     job.celery_task_id = task.id
     db.commit()
@@ -926,7 +927,7 @@ async def download_lora_weights_endpoint(lora_id: int, db: Session = Depends(get
         raise HTTPException(status_code=400, detail="Weights already downloaded")
 
     from app.workers.generation_tasks import download_lora_weights as dl_task
-    dl_task.delay(lora_id, current_user.id)
+    dispatch(dl_task, lora_id, current_user.id)
     return {"status": "download_started"}
 
 
@@ -948,7 +949,7 @@ async def download_all_lora_weights(db: Session = Depends(get_db), current_user:
 
     from app.workers.generation_tasks import download_lora_weights as dl_task
     for model in models:
-        dl_task.delay(model.id, current_user.id)
+        dispatch(dl_task, model.id, current_user.id)
 
     return {"status": "downloads_queued", "count": len(models)}
 
@@ -1094,10 +1095,10 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
     from app.workers.generation_tasks import generate_image as gen_task
 
     if request.num_images == 1:
-        task = gen_task.delay(gen_ids[0], job.id, current_user.id)
+        task = dispatch(gen_task, gen_ids[0], job.id, current_user.id)
         job.celery_task_id = task.id
     else:
-        task = batch_generate.delay(gen_ids, job.id, current_user.id)
+        task = dispatch(batch_generate, gen_ids, job.id, current_user.id)
         job.celery_task_id = task.id
 
     db.commit()
@@ -1408,7 +1409,7 @@ async def start_evaluation(lora_id: int, request: StartEvaluationRequest, db: Se
 
     # Dispatch Celery task
     from app.workers.generation_tasks import evaluate_lora as evaluate_task
-    task = evaluate_task.delay(evaluation.id, job.id, current_user.id)
+    task = dispatch(evaluate_task, evaluation.id, job.id, current_user.id)
 
     job.celery_task_id = task.id
     db.commit()

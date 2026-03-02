@@ -17,6 +17,7 @@ _last_usage_record_id_var: ContextVar[int | None] = ContextVar(
     "last_usage_record_id", default=None
 )
 _trace_id_var: ContextVar[str | None] = ContextVar("trace_id", default=None)
+_session_id_var: ContextVar[str | None] = ContextVar("session_id", default=None)
 _last_api_input_tokens_var: ContextVar[int | None] = ContextVar(
     "last_api_input_tokens", default=None
 )
@@ -93,6 +94,16 @@ def init_trace() -> str:
     trace_id = uuid.uuid4().hex
     set_trace_id(trace_id)
     return trace_id
+
+
+def set_session_id(session_id: str | None):
+    """Set the session ID for the current context."""
+    _session_id_var.set(session_id)
+
+
+def get_session_id() -> str | None:
+    """Get the session ID for the current context."""
+    return _session_id_var.get()
 
 
 def set_last_api_call_tokens(

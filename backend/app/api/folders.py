@@ -19,6 +19,7 @@ from app.services.folder_service import get_folder_service
 from app.services.image_service import get_image_service
 from app.services.settings_service import get_settings_service
 from app.services.storage import get_storage_service
+from app.workers.dispatch import dispatch
 from app.workers.tasks import delete_folder_with_images, run_batch_describe, run_batch_reprocess
 
 logger = logging.getLogger(__name__)
@@ -205,7 +206,7 @@ async def delete_folder(
         db.commit()
         db.refresh(job)
 
-        task = delete_folder_with_images.delay(folder_id, current_user.id, job.id)
+        task = dispatch(delete_folder_with_images, folder_id, current_user.id, job.id)
         job.celery_task_id = task.id
         db.commit()
 
@@ -289,7 +290,7 @@ async def reprocess_folder(folder_id: int, db: Session = Depends(get_db), curren
     db.commit()
     db.refresh(job)
 
-    task = run_batch_reprocess.delay(job.id, current_user.id, image_ids)
+    task = dispatch(run_batch_reprocess, job.id, current_user.id, image_ids)
     job.celery_task_id = task.id
     db.commit()
 
@@ -333,7 +334,8 @@ async def describe_folder(
     db.commit()
     db.refresh(job)
 
-    task = run_batch_describe.delay(
+    task = dispatch(
+        run_batch_describe,
         job.id, current_user.id, image_ids,
         tag_prompt=request.tag_prompt,
         description_prompt=request.description_prompt,

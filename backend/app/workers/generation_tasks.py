@@ -27,6 +27,7 @@ from app.services.billing_context import (
     make_idempotency_key,
     set_billing_job,
     set_billing_user,
+    set_session_id,
     set_trace_id,
 )
 from app.services.billing_orchestrator import ORCHESTRATOR_ENABLED_OPS, BillingOrchestrator
@@ -36,6 +37,7 @@ from app.services.generation_service import get_generation_service
 from app.services.image_service import get_image_service
 from app.services.log_service import write_log
 from app.workers.celery_app import celery_app
+from app.workers.dispatch import dispatch
 from app.workers.tasks import run_async as _run_async
 
 logger = logging.getLogger(__name__)
@@ -56,6 +58,12 @@ def _update_job_status(db: Session, job_id: int | None, status: JobStatus, **kwa
     job.status = status
     if status == JobStatus.RUNNING:
         job.started_at = datetime.utcnow()
+        if job.created_at:
+            queue_wait_ms = (job.started_at - job.created_at).total_seconds() * 1000
+            logger.info(
+                f"Job {job_id} started after {queue_wait_ms:.0f}ms in queue",
+                extra={"event_type": "queue_wait", "queue_wait_ms": queue_wait_ms, "job_id": job_id, "job_type": job.job_type.value if job.job_type else None},
+            )
     elif status in (JobStatus.COMPLETED, JobStatus.FAILED):
         job.completed_at = datetime.utcnow()
     for key, value in kwargs.items():
@@ -71,6 +79,19 @@ def _unwrap_error(e: Exception) -> str:
         except Exception as inner:
             return str(inner)
     return str(e)
+
+
+def _init_task_context(user_id, job_id=None, trace_id=None, session_id=None):
+    """Initialize billing and trace context for a Celery task."""
+    set_billing_user(user_id)
+    if job_id is not None:
+        set_billing_job(job_id)
+    if trace_id:
+        set_trace_id(trace_id)
+    else:
+        init_trace()
+    if session_id:
+        set_session_id(session_id)
 
 
 def _download_lora_weights(db: Session, lora_model_id: int, lora_url: str, user_id: int) -> None:
@@ -177,7 +198,7 @@ def _collect_example_prompts(db: Session, lora_model_id: int, user_id: int) -> N
 
 
 @celery_app.task(bind=True)
-def download_lora_weights(self, lora_model_id: int, user_id: int | None = None) -> dict:
+def download_lora_weights(self, lora_model_id: int, user_id: int | None = None, trace_id: str | None = None, session_id: str | None = None) -> dict:
     """Download and store LoRA weights for an existing completed model."""
     db = _get_db()
     try:
@@ -204,7 +225,7 @@ def download_lora_weights(self, lora_model_id: int, user_id: int | None = None) 
 
 
 @celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
-def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int | None = None) -> dict:
+def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int | None = None, trace_id: str | None = None, session_id: str | None = None) -> dict:
     """
     Train a LoRA model from folder images via fal.ai.
 
@@ -218,9 +239,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
     4. Save result URL to LoraModel record
     """
     task_start = time.monotonic()
-    set_billing_user(user_id)
-    set_billing_job(job_id)
-    init_trace()
+    _init_task_context(user_id, job_id=job_id, trace_id=trace_id, session_id=session_id)
     db = _get_db()
     try:
         # --- GUARD: Never re-submit training for already-completed models ---
@@ -559,7 +578,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
 
 
 @celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
-def generate_image(self, generated_image_id: int, job_id: int | None = None, user_id: int | None = None, from_batch: bool = False) -> dict:
+def generate_image(self, generated_image_id: int, job_id: int | None = None, user_id: int | None = None, from_batch: bool = False, trace_id: str | None = None, session_id: str | None = None) -> dict:
     """
     Generate a single image via fal.ai.
     """
@@ -571,9 +590,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
         user_id=user_id,
     )
     task_start = time.monotonic()
-    set_billing_user(user_id)
-    set_billing_job(job_id)
-    init_trace()
+    _init_task_context(user_id, job_id=job_id, trace_id=trace_id, session_id=session_id)
     db = _get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -768,7 +785,7 @@ def _mark_generated_images_cancelled(db: Session, generated_image_ids: list[int]
 
 
 @celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
-def batch_generate(self, generated_image_ids: list[int], job_id: int | None = None, user_id: int | None = None) -> dict:
+def batch_generate(self, generated_image_ids: list[int], job_id: int | None = None, user_id: int | None = None, trace_id: str | None = None, session_id: str | None = None) -> dict:
     """
     Generate multiple images. Dispatches individual generate_image tasks and polls for completion.
     """
@@ -780,9 +797,7 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
         user_id=user_id,
     )
     task_start = time.monotonic()
-    set_billing_user(user_id)
-    set_billing_job(job_id)
-    init_trace()
+    _init_task_context(user_id, job_id=job_id, trace_id=trace_id, session_id=session_id)
     db = _get_db()
     try:
         job = db.query(Job).filter(Job.id == job_id).first() if job_id else None
@@ -799,7 +814,7 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
 
         # Dispatch individual tasks with batch job_id so their PipelineLogs are tagged
         for gen_id in generated_image_ids:
-            generate_image.delay(gen_id, job_id=job_id, user_id=user_id, from_batch=True)
+            dispatch(generate_image, gen_id, job_id=job_id, user_id=user_id, from_batch=True)
 
         # Poll for completion
         poll_interval = 5
@@ -942,7 +957,7 @@ def _resolve_edit_sources(db: Session, gen_params: dict, user_id: int) -> list[s
 
 
 @celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
-def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id: int | None = None, from_batch: bool = False) -> dict:
+def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id: int | None = None, from_batch: bool = False, trace_id: str | None = None, session_id: str | None = None) -> dict:
     """Edit an image via fal.ai."""
     write_log(
         category=LogCategory.TASK,
@@ -952,9 +967,7 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
         user_id=user_id,
     )
     task_start = time.monotonic()
-    set_billing_user(user_id)
-    set_billing_job(job_id)
-    init_trace()
+    _init_task_context(user_id, job_id=job_id, trace_id=trace_id, session_id=session_id)
     db = _get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -1132,7 +1145,7 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
 
 
 @celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
-def batch_edit(self, generated_image_ids: list[int], job_id: int | None = None, user_id: int | None = None) -> dict:
+def batch_edit(self, generated_image_ids: list[int], job_id: int | None = None, user_id: int | None = None, trace_id: str | None = None, session_id: str | None = None) -> dict:
     """Edit multiple images. Dispatches individual edit_image tasks and polls for completion."""
     write_log(
         category=LogCategory.TASK,
@@ -1142,9 +1155,7 @@ def batch_edit(self, generated_image_ids: list[int], job_id: int | None = None, 
         user_id=user_id,
     )
     task_start = time.monotonic()
-    set_billing_user(user_id)
-    set_billing_job(job_id)
-    init_trace()
+    _init_task_context(user_id, job_id=job_id, trace_id=trace_id, session_id=session_id)
     db = _get_db()
     try:
         job = db.query(Job).filter(Job.id == job_id).first() if job_id else None
@@ -1161,7 +1172,7 @@ def batch_edit(self, generated_image_ids: list[int], job_id: int | None = None, 
 
         # Dispatch individual tasks with batch job_id so their PipelineLogs are tagged
         for gen_id in generated_image_ids:
-            edit_image.delay(gen_id, job_id=job_id, user_id=user_id, from_batch=True)
+            dispatch(edit_image, gen_id, job_id=job_id, user_id=user_id, from_batch=True)
 
         # Poll for completion
         poll_interval = 5
@@ -1281,7 +1292,7 @@ def _normalize_embedding_similarity(cosine_sim: float) -> float:
 
 
 @celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
-def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: int | None = None) -> dict:
+def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: int | None = None, trace_id: str | None = None, session_id: str | None = None) -> dict:
     """
     Evaluate a LoRA model by generating images from training set descriptions
     and comparing against originals, plus optional creative prompt evaluation.
@@ -1301,9 +1312,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
         user_id=user_id,
     )
     task_start = time.monotonic()
-    set_billing_user(user_id)
-    set_billing_job(job_id)
-    init_trace()
+    _init_task_context(user_id, job_id=job_id, trace_id=trace_id, session_id=session_id)
     db = _get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)

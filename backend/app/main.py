@@ -6,26 +6,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import api_router
 from app.core.config import get_settings
+from app.core.logging_config import configure_logging
+from app.middleware.request_context import RequestContextMiddleware
 
-# Configure logging with trace_id support — use a record factory so that
-# every log record (including third-party loggers like uvicorn) gets trace_id.
-from app.services.billing_context import get_trace_id
-
-_original_record_factory = logging.getLogRecordFactory()
-
-
-def _trace_record_factory(*args, **kwargs):
-    record = _original_record_factory(*args, **kwargs)
-    if not hasattr(record, "trace_id"):
-        record.trace_id = get_trace_id() or "-"
-    return record
-
-
-logging.setLogRecordFactory(_trace_record_factory)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - [trace=%(trace_id)s] %(message)s",
-)
+configure_logging("cura-api")
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
@@ -46,7 +30,12 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Trace-Id", "X-Request-Id"],
 )
+
+# Request context middleware — sets trace_id + request_id on every request.
+# Added after CORS so it executes first (ASGI: last added = first executed).
+app.add_middleware(RequestContextMiddleware)
 
 # Include API routes
 app.include_router(api_router, prefix="/api")
@@ -65,8 +54,75 @@ async def root():
 
 @app.get("/health")
 async def health():
-    """Health check endpoint."""
-    return {"status": "healthy"}
+    """Health check with dependency verification (DB, Redis, storage)."""
+    checks = {}
+
+    # Database check
+    try:
+        from sqlalchemy import text
+
+        from app.db.base import engine
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        checks["database"] = "ok"
+    except Exception as e:
+        checks["database"] = f"error: {e}"
+
+    # Redis check
+    try:
+        import redis as redis_lib
+        r = redis_lib.from_url(settings.redis_url, socket_timeout=2, socket_connect_timeout=2)
+        r.ping()
+        r.close()
+        checks["redis"] = "ok"
+    except Exception as e:
+        checks["redis"] = f"error: {e}"
+
+    # Storage check
+    try:
+        from app.services.storage import get_storage_service
+        svc = get_storage_service()
+        if settings.storage_backend == "azure":
+            svc._container_client.get_container_properties()
+        elif settings.storage_backend == "local":
+            import os
+            if not os.path.isdir(svc.local_path):
+                raise FileNotFoundError(f"Storage dir missing: {svc.local_path}")
+        checks["storage"] = "ok"
+    except Exception as e:
+        checks["storage"] = f"error: {e}"
+
+    status = "healthy" if all(v == "ok" for v in checks.values()) else "degraded"
+    return {"status": status, "checks": checks}
+
+
+def _init_sentry():
+    """Initialize Sentry SDK from DSN stored in the database."""
+    try:
+        from app.db.base import SessionLocal
+        from app.models.api_key import APIKey
+        from app.services.encryption import decrypt_api_key
+
+        db = SessionLocal()
+        try:
+            key = db.query(APIKey).filter(APIKey.provider == "sentry", APIKey.status == "active").first()
+            if not key:
+                logger.info("Sentry DSN not configured — skipping Sentry init")
+                return
+            dsn = decrypt_api_key(key.encrypted_key)
+        finally:
+            db.close()
+
+        import sentry_sdk
+        sentry_sdk.init(
+            dsn=dsn,
+            environment=settings.environment,
+            traces_sample_rate=0.2,
+            send_default_pii=False,
+        )
+        logger.info("Sentry SDK initialized")
+    except Exception as e:
+        logger.warning(f"Failed to initialize Sentry: {e}")
 
 
 @app.on_event("startup")
@@ -77,6 +133,13 @@ async def startup():
     # Ensure storage directories exist
     from app.services.storage import get_storage_service
     get_storage_service()
+
+    # Initialize Sentry from DB-stored DSN
+    _init_sentry()
+
+    # Initialize OpenTelemetry (must be after Sentry so spans export to Sentry)
+    from app.core.otel import configure_otel
+    configure_otel("cura-api", app=app)
 
     logger.info("Application started successfully")
 

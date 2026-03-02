@@ -19,6 +19,7 @@ from app.providers.base import (
     VisionEvalResult,
 )
 from app.providers.fal_provider import _ensure_fal_key
+from app.providers.tracing import provider_span
 from app.services.log_service import write_log
 
 logger = logging.getLogger(__name__)
@@ -96,13 +97,21 @@ class FalVisionTagger(BaseTagger):
 
         start = time.monotonic()
         try:
-            result = _fal_submit_and_poll(
-                FAL_OPENROUTER_ENDPOINT,
-                arguments=args,
-            )
+            with provider_span("fal_vision", "tag", self.model) as span:
+                result = _fal_submit_and_poll(
+                    FAL_OPENROUTER_ENDPOINT,
+                    arguments=args,
+                )
+                usage = result.get("usage", {})
+                if span and usage:
+                    input_tok = usage.get("prompt_tokens") or usage.get("input_tokens")
+                    output_tok = usage.get("completion_tokens") or usage.get("output_tokens")
+                    if input_tok is not None:
+                        span.set_attribute("ai.tokens.input", input_tok)
+                    if output_tok is not None:
+                        span.set_attribute("ai.tokens.output", output_tok)
             elapsed = (time.monotonic() - start) * 1000
             content = result.get("output", "")
-            usage = result.get("usage", {})
             write_log(
                 category=LogCategory.API_CALL,
                 message=f"fal.ai OpenRouter tagging completed ({self.model})",
@@ -198,13 +207,21 @@ class FalVisionDescriber(BaseDescriber):
 
         start = time.monotonic()
         try:
-            result = _fal_submit_and_poll(
-                FAL_OPENROUTER_ENDPOINT,
-                arguments=args,
-            )
+            with provider_span("fal_vision", "describe", self.model) as span:
+                result = _fal_submit_and_poll(
+                    FAL_OPENROUTER_ENDPOINT,
+                    arguments=args,
+                )
+                usage = result.get("usage", {})
+                if span and usage:
+                    input_tok = usage.get("prompt_tokens") or usage.get("input_tokens")
+                    output_tok = usage.get("completion_tokens") or usage.get("output_tokens")
+                    if input_tok is not None:
+                        span.set_attribute("ai.tokens.input", input_tok)
+                    if output_tok is not None:
+                        span.set_attribute("ai.tokens.output", output_tok)
             elapsed = (time.monotonic() - start) * 1000
             content = result.get("output", "")
-            usage = result.get("usage", {})
             write_log(
                 category=LogCategory.API_CALL,
                 message=f"fal.ai OpenRouter describe completed ({self.model})",
@@ -286,18 +303,26 @@ class FalVisionEvaluator(BaseEvaluator):
 
         start = time.monotonic()
         try:
-            result = _fal_submit_and_poll(
-                FAL_OPENROUTER_ENDPOINT,
-                arguments={
-                    "image_urls": [orig_uri, gen_uri],
-                    "prompt": prompt,
-                    "model": self.model,
-                    "max_tokens": 1000,
-                },
-            )
+            with provider_span("fal_vision", "evaluate_pair", self.model) as span:
+                result = _fal_submit_and_poll(
+                    FAL_OPENROUTER_ENDPOINT,
+                    arguments={
+                        "image_urls": [orig_uri, gen_uri],
+                        "prompt": prompt,
+                        "model": self.model,
+                        "max_tokens": 1000,
+                    },
+                )
+                usage = result.get("usage", {})
+                if span and usage:
+                    input_tok = usage.get("prompt_tokens") or usage.get("input_tokens")
+                    output_tok = usage.get("completion_tokens") or usage.get("output_tokens")
+                    if input_tok is not None:
+                        span.set_attribute("ai.tokens.input", input_tok)
+                    if output_tok is not None:
+                        span.set_attribute("ai.tokens.output", output_tok)
             elapsed = (time.monotonic() - start) * 1000
             content = result.get("output", "")
-            usage = result.get("usage", {})
             write_log(
                 category=LogCategory.API_CALL,
                 message=f"fal.ai OpenRouter evaluate completed ({self.model})",
@@ -344,18 +369,26 @@ class FalVisionEvaluator(BaseEvaluator):
 
         start = time.monotonic()
         try:
-            result = _fal_submit_and_poll(
-                FAL_OPENROUTER_ENDPOINT,
-                arguments={
-                    "image_urls": [data_uri],
-                    "prompt": prompt,
-                    "model": self.model,
-                    "max_tokens": 1000,
-                },
-            )
+            with provider_span("fal_vision", "evaluate_single", self.model) as span:
+                result = _fal_submit_and_poll(
+                    FAL_OPENROUTER_ENDPOINT,
+                    arguments={
+                        "image_urls": [data_uri],
+                        "prompt": prompt,
+                        "model": self.model,
+                        "max_tokens": 1000,
+                    },
+                )
+                usage = result.get("usage", {})
+                if span and usage:
+                    input_tok = usage.get("prompt_tokens") or usage.get("input_tokens")
+                    output_tok = usage.get("completion_tokens") or usage.get("output_tokens")
+                    if input_tok is not None:
+                        span.set_attribute("ai.tokens.input", input_tok)
+                    if output_tok is not None:
+                        span.set_attribute("ai.tokens.output", output_tok)
             elapsed = (time.monotonic() - start) * 1000
             content = result.get("output", "")
-            usage = result.get("usage", {})
             write_log(
                 category=LogCategory.API_CALL,
                 message=f"fal.ai OpenRouter creative evaluate completed ({self.model})",
@@ -417,17 +450,25 @@ class FalVisionEvaluator(BaseEvaluator):
 
         start = time.monotonic()
         try:
-            result = _fal_submit_and_poll(
-                FAL_OPENROUTER_ENDPOINT,
-                arguments={
-                    "prompt": prompt,
-                    "model": self.model,
-                    "max_tokens": 1000,
-                },
-            )
+            with provider_span("fal_vision", "summarize_assessments", self.model) as span:
+                result = _fal_submit_and_poll(
+                    FAL_OPENROUTER_ENDPOINT,
+                    arguments={
+                        "prompt": prompt,
+                        "model": self.model,
+                        "max_tokens": 1000,
+                    },
+                )
+                usage = result.get("usage", {})
+                if span and usage:
+                    input_tok = usage.get("prompt_tokens") or usage.get("input_tokens")
+                    output_tok = usage.get("completion_tokens") or usage.get("output_tokens")
+                    if input_tok is not None:
+                        span.set_attribute("ai.tokens.input", input_tok)
+                    if output_tok is not None:
+                        span.set_attribute("ai.tokens.output", output_tok)
             elapsed = (time.monotonic() - start) * 1000
             content = result.get("output", "")
-            usage = result.get("usage", {})
             write_log(
                 category=LogCategory.API_CALL,
                 message=f"fal.ai OpenRouter assessment summary completed ({self.model})",
@@ -471,17 +512,25 @@ class FalVisionEvaluator(BaseEvaluator):
 
         start = time.monotonic()
         try:
-            result = _fal_submit_and_poll(
-                FAL_OPENROUTER_ENDPOINT,
-                arguments={
-                    "prompt": prompt,
-                    "model": self.model,
-                    "max_tokens": 2000,
-                },
-            )
+            with provider_span("fal_vision", "generate_creative_prompts", self.model) as span:
+                result = _fal_submit_and_poll(
+                    FAL_OPENROUTER_ENDPOINT,
+                    arguments={
+                        "prompt": prompt,
+                        "model": self.model,
+                        "max_tokens": 2000,
+                    },
+                )
+                usage = result.get("usage", {})
+                if span and usage:
+                    input_tok = usage.get("prompt_tokens") or usage.get("input_tokens")
+                    output_tok = usage.get("completion_tokens") or usage.get("output_tokens")
+                    if input_tok is not None:
+                        span.set_attribute("ai.tokens.input", input_tok)
+                    if output_tok is not None:
+                        span.set_attribute("ai.tokens.output", output_tok)
             elapsed = (time.monotonic() - start) * 1000
             content = result.get("output", "")
-            usage = result.get("usage", {})
             write_log(
                 category=LogCategory.API_CALL,
                 message=f"fal.ai OpenRouter creative prompt generation completed ({self.model})",

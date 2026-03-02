@@ -26,6 +26,7 @@ from app.schemas import (
 from app.services.folder_service import get_folder_service
 from app.services.image_service import get_image_service
 from app.services.log_service import write_log
+from app.workers.dispatch import dispatch
 from app.workers.tasks import (
     describe_image,
     embed_image,
@@ -221,7 +222,7 @@ async def upload_images_batch(
 
     # Dispatch a single batch Celery task for all new images in this chunk
     if new_image_ids:
-        process_ingest_batch.delay(new_image_ids, current_user.id, job.id)
+        dispatch(process_ingest_batch, new_image_ids, current_user.id, job.id)
 
     # Immediately count items that won't go through Celery (duplicates + failures).
     # Only new images are counted by _finish_ingest_job_item in the Celery task.
@@ -512,7 +513,7 @@ async def reprocess_image(
 
     # Reset status and queue for reprocessing
     image_service.update_status(image_id, ImageStatus.INGESTED)
-    task = process_image_pipeline.delay(image_id, tag_prompt=tag_prompt, description_prompt=description_prompt, provider=provider, model=model, temperature=temperature, max_tokens_tag=max_tokens_tag, max_tokens_describe=max_tokens_describe, job_id=job.id, user_id=current_user.id)
+    task = dispatch(process_image_pipeline, image_id, tag_prompt=tag_prompt, description_prompt=description_prompt, provider=provider, model=model, temperature=temperature, max_tokens_tag=max_tokens_tag, max_tokens_describe=max_tokens_describe, job_id=job.id, user_id=current_user.id)
     job.celery_task_id = task.id
     db.commit()
 
@@ -579,7 +580,7 @@ async def tag_image_endpoint(
     db.commit()
     db.refresh(job)
 
-    task = tag_image.delay(image_id, tag_prompt=tag_prompt, provider=provider, model=model, temperature=temperature, max_tokens_override=max_tokens, job_id=job.id, user_id=current_user.id)
+    task = dispatch(tag_image, image_id, tag_prompt=tag_prompt, provider=provider, model=model, temperature=temperature, max_tokens_override=max_tokens, job_id=job.id, user_id=current_user.id)
     job.celery_task_id = task.id
     db.commit()
 
@@ -621,7 +622,7 @@ async def describe_image_endpoint(
     db.commit()
     db.refresh(job)
 
-    task = describe_image.delay(image_id, description_prompt=description_prompt, provider=provider, model=model, temperature=temperature, max_tokens_override=max_tokens, job_id=job.id, user_id=current_user.id)
+    task = dispatch(describe_image, image_id, description_prompt=description_prompt, provider=provider, model=model, temperature=temperature, max_tokens_override=max_tokens, job_id=job.id, user_id=current_user.id)
     job.celery_task_id = task.id
     db.commit()
 
@@ -655,7 +656,7 @@ async def embed_image_endpoint(
     db.commit()
     db.refresh(job)
 
-    task = embed_image.delay(image_id, job_id=job.id, user_id=current_user.id)
+    task = dispatch(embed_image, image_id, job_id=job.id, user_id=current_user.id)
     job.celery_task_id = task.id
     db.commit()
 

@@ -21,6 +21,7 @@ from app.providers.base import (
     TaggingResult,
     VisionEvalResult,
 )
+from app.providers.tracing import provider_span
 from app.services.log_service import write_log
 
 logger = logging.getLogger(__name__)
@@ -87,27 +88,31 @@ class AnthropicTagger(BaseTagger):
 
         start = time.monotonic()
         try:
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=self.token_limit,
-                **({"temperature": self.temperature} if self.temperature is not None else {}),
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": media_type,
-                                    "data": base64_image,
+            with provider_span("anthropic", "tag", self.model) as span:
+                response = await self.client.messages.create(
+                    model=self.model,
+                    max_tokens=self.token_limit,
+                    **({"temperature": self.temperature} if self.temperature is not None else {}),
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": media_type,
+                                        "data": base64_image,
+                                    },
                                 },
-                            },
-                            {"type": "text", "text": tag_prompt},
-                        ],
-                    }
-                ],
-            )
+                                {"type": "text", "text": tag_prompt},
+                            ],
+                        }
+                    ],
+                )
+                if span and hasattr(response, 'usage') and response.usage:
+                    span.set_attribute("ai.tokens.input", response.usage.input_tokens)
+                    span.set_attribute("ai.tokens.output", response.usage.output_tokens)
             elapsed = (time.monotonic() - start) * 1000
             content = response.content[0].text if response.content else ""
             write_log(
@@ -198,27 +203,31 @@ class AnthropicDescriber(BaseDescriber):
 
         start = time.monotonic()
         try:
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=self.token_limit,
-                **({"temperature": self.temperature} if self.temperature is not None else {}),
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": media_type,
-                                    "data": base64_image,
+            with provider_span("anthropic", "describe", self.model) as span:
+                response = await self.client.messages.create(
+                    model=self.model,
+                    max_tokens=self.token_limit,
+                    **({"temperature": self.temperature} if self.temperature is not None else {}),
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": media_type,
+                                        "data": base64_image,
+                                    },
                                 },
-                            },
-                            {"type": "text", "text": description_prompt},
-                        ],
-                    }
-                ],
-            )
+                                {"type": "text", "text": description_prompt},
+                            ],
+                        }
+                    ],
+                )
+                if span and hasattr(response, 'usage') and response.usage:
+                    span.set_attribute("ai.tokens.input", response.usage.input_tokens)
+                    span.set_attribute("ai.tokens.output", response.usage.output_tokens)
             elapsed = (time.monotonic() - start) * 1000
             content = response.content[0].text if response.content else ""
             write_log(
@@ -298,11 +307,15 @@ class AnthropicClusterSummarizer(BaseClusterSummarizer):
 
         start = time.monotonic()
         try:
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=self.token_limit,
-                messages=[{"role": "user", "content": prompt}],
-            )
+            with provider_span("anthropic", "summarize_cluster", self.model) as span:
+                response = await self.client.messages.create(
+                    model=self.model,
+                    max_tokens=self.token_limit,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                if span and hasattr(response, 'usage') and response.usage:
+                    span.set_attribute("ai.tokens.input", response.usage.input_tokens)
+                    span.set_attribute("ai.tokens.output", response.usage.output_tokens)
             elapsed = (time.monotonic() - start) * 1000
             write_log(
                 category=LogCategory.API_CALL,
@@ -512,34 +525,38 @@ class AnthropicEvaluator(BaseEvaluator):
 
         start = time.monotonic()
         try:
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=1000,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": orig_media,
-                                    "data": b64_original,
+            with provider_span("anthropic", "evaluate_pair", self.model) as span:
+                response = await self.client.messages.create(
+                    model=self.model,
+                    max_tokens=1000,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": orig_media,
+                                        "data": b64_original,
+                                    },
                                 },
-                            },
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": gen_media,
-                                    "data": b64_generated,
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": gen_media,
+                                        "data": b64_generated,
+                                    },
                                 },
-                            },
-                        ],
-                    }
-                ],
-            )
+                            ],
+                        }
+                    ],
+                )
+                if span and hasattr(response, 'usage') and response.usage:
+                    span.set_attribute("ai.tokens.input", response.usage.input_tokens)
+                    span.set_attribute("ai.tokens.output", response.usage.output_tokens)
             elapsed = (time.monotonic() - start) * 1000
             content = response.content[0].text if response.content else ""
             write_log(
@@ -588,26 +605,30 @@ class AnthropicEvaluator(BaseEvaluator):
 
         start = time.monotonic()
         try:
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=1000,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": media_type,
-                                    "data": b64_image,
+            with provider_span("anthropic", "evaluate_single", self.model) as span:
+                response = await self.client.messages.create(
+                    model=self.model,
+                    max_tokens=1000,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": media_type,
+                                        "data": b64_image,
+                                    },
                                 },
-                            },
-                        ],
-                    }
-                ],
-            )
+                            ],
+                        }
+                    ],
+                )
+                if span and hasattr(response, 'usage') and response.usage:
+                    span.set_attribute("ai.tokens.input", response.usage.input_tokens)
+                    span.set_attribute("ai.tokens.output", response.usage.output_tokens)
             elapsed = (time.monotonic() - start) * 1000
             content = response.content[0].text if response.content else ""
             write_log(
@@ -670,11 +691,15 @@ class AnthropicEvaluator(BaseEvaluator):
 
         start = time.monotonic()
         try:
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=1000,
-                messages=[{"role": "user", "content": prompt}],
-            )
+            with provider_span("anthropic", "summarize_assessments", self.model) as span:
+                response = await self.client.messages.create(
+                    model=self.model,
+                    max_tokens=1000,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                if span and hasattr(response, 'usage') and response.usage:
+                    span.set_attribute("ai.tokens.input", response.usage.input_tokens)
+                    span.set_attribute("ai.tokens.output", response.usage.output_tokens)
             elapsed = (time.monotonic() - start) * 1000
             content = response.content[0].text if response.content else ""
             write_log(
@@ -719,11 +744,15 @@ class AnthropicEvaluator(BaseEvaluator):
 
         start = time.monotonic()
         try:
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=2000,
-                messages=[{"role": "user", "content": prompt}],
-            )
+            with provider_span("anthropic", "generate_creative_prompts", self.model) as span:
+                response = await self.client.messages.create(
+                    model=self.model,
+                    max_tokens=2000,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                if span and hasattr(response, 'usage') and response.usage:
+                    span.set_attribute("ai.tokens.input", response.usage.input_tokens)
+                    span.set_attribute("ai.tokens.output", response.usage.output_tokens)
             elapsed = (time.monotonic() - start) * 1000
             content = response.content[0].text if response.content else ""
             write_log(

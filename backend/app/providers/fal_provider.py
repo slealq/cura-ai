@@ -11,6 +11,7 @@ from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wai
 from app.core.config import get_settings
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers.base import BaseEditor, BaseGenerator, BaseTrainer, EditResult, GenerationResult, TrainingResult
+from app.providers.tracing import provider_span
 from app.services.log_service import write_log
 
 
@@ -292,27 +293,28 @@ class FalGenerator(BaseGenerator):
 
         request_id = None
         try:
-            # Submit (non-blocking) instead of subscribe (blocking)
-            handle = fal_client.submit(endpoint, arguments=arguments)
-            request_id = handle.request_id
+            with provider_span("fal", "generate", endpoint) as _span:  # noqa: F841
+                # Submit (non-blocking) instead of subscribe (blocking)
+                handle = fal_client.submit(endpoint, arguments=arguments)
+                request_id = handle.request_id
 
-            # Poll for completion with cancellation checks
-            from fal_client.client import Completed
-            while True:
-                if cancel_check and cancel_check():
-                    logger.info(f"Generation cancelled during polling (request_id={request_id})")
-                    try:
-                        fal_client.cancel(endpoint, request_id)
-                    except Exception:
-                        pass  # best-effort remote cancel
-                    raise GenerationCancelledError(f"Generation cancelled (request_id={request_id})")
+                # Poll for completion with cancellation checks
+                from fal_client.client import Completed
+                while True:
+                    if cancel_check and cancel_check():
+                        logger.info(f"Generation cancelled during polling (request_id={request_id})")
+                        try:
+                            fal_client.cancel(endpoint, request_id)
+                        except Exception:
+                            pass  # best-effort remote cancel
+                        raise GenerationCancelledError(f"Generation cancelled (request_id={request_id})")
 
-                status = handle.status(with_logs=False)
-                if isinstance(status, Completed):
-                    break
-                time.sleep(poll_interval)
+                    status = handle.status(with_logs=False)
+                    if isinstance(status, Completed):
+                        break
+                    time.sleep(poll_interval)
 
-            result = handle.get()
+                result = handle.get()
             fal_cost = result.get("cost")
 
             # Extract image URL and download
@@ -518,25 +520,26 @@ class FalEditor(BaseEditor):
 
         request_id = None
         try:
-            handle = fal_client.submit(endpoint, arguments=arguments)
-            request_id = handle.request_id
+            with provider_span("fal", "edit", self.edit_model) as _span:  # noqa: F841
+                handle = fal_client.submit(endpoint, arguments=arguments)
+                request_id = handle.request_id
 
-            from fal_client.client import Completed
-            while True:
-                if cancel_check and cancel_check():
-                    logger.info(f"Edit cancelled during polling (request_id={request_id})")
-                    try:
-                        fal_client.cancel(endpoint, request_id)
-                    except Exception:
-                        pass
-                    raise GenerationCancelledError(f"Edit cancelled (request_id={request_id})")
+                from fal_client.client import Completed
+                while True:
+                    if cancel_check and cancel_check():
+                        logger.info(f"Edit cancelled during polling (request_id={request_id})")
+                        try:
+                            fal_client.cancel(endpoint, request_id)
+                        except Exception:
+                            pass
+                        raise GenerationCancelledError(f"Edit cancelled (request_id={request_id})")
 
-                status = handle.status(with_logs=False)
-                if isinstance(status, Completed):
-                    break
-                time.sleep(poll_interval)
+                    status = handle.status(with_logs=False)
+                    if isinstance(status, Completed):
+                        break
+                    time.sleep(poll_interval)
 
-            result = handle.get()
+                result = handle.get()
             fal_cost = result.get("cost")
 
             # Face swap returns singular "image", others return "images" array

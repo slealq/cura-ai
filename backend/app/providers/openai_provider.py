@@ -22,6 +22,7 @@ from app.providers.base import (
     TaggingResult,
     VisionEvalResult,
 )
+from app.providers.tracing import provider_span
 from app.services.log_service import write_log
 
 logger = logging.getLogger(__name__)
@@ -101,27 +102,31 @@ class OpenAITagger(BaseTagger):
 
         start = time.monotonic()
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": tag_prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:{mime_type};base64,{base64_image}",
-                                    "detail": "high",
+            with provider_span("openai", "tag", self.model) as span:
+                response = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": tag_prompt},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:{mime_type};base64,{base64_image}",
+                                        "detail": "high",
+                                    },
                                 },
-                            },
-                        ],
-                    }
-                ],
-                **_token_limit_param(self.model, self.token_limit),
-                **({"temperature": self.temperature} if self.temperature is not None else {}),
-                response_format={"type": "json_object"},
-            )
+                            ],
+                        }
+                    ],
+                    **_token_limit_param(self.model, self.token_limit),
+                    **({"temperature": self.temperature} if self.temperature is not None else {}),
+                    response_format={"type": "json_object"},
+                )
+                if span and hasattr(response, 'usage') and response.usage:
+                    span.set_attribute("ai.tokens.input", response.usage.prompt_tokens)
+                    span.set_attribute("ai.tokens.output", response.usage.completion_tokens)
             elapsed = (time.monotonic() - start) * 1000
             usage = response.usage
             content = response.choices[0].message.content
@@ -223,27 +228,31 @@ class OpenAIDescriber(BaseDescriber):
 
         start = time.monotonic()
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": description_prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:{mime_type};base64,{base64_image}",
-                                    "detail": "high",
+            with provider_span("openai", "describe", self.model) as span:
+                response = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": description_prompt},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:{mime_type};base64,{base64_image}",
+                                        "detail": "high",
+                                    },
                                 },
-                            },
-                        ],
-                    }
-                ],
-                **_token_limit_param(self.model, self.token_limit),
-                **({"temperature": self.temperature} if self.temperature is not None else {}),
-                response_format={"type": "json_object"},
-            )
+                            ],
+                        }
+                    ],
+                    **_token_limit_param(self.model, self.token_limit),
+                    **({"temperature": self.temperature} if self.temperature is not None else {}),
+                    response_format={"type": "json_object"},
+                )
+                if span and hasattr(response, 'usage') and response.usage:
+                    span.set_attribute("ai.tokens.input", response.usage.prompt_tokens)
+                    span.set_attribute("ai.tokens.output", response.usage.completion_tokens)
             elapsed = (time.monotonic() - start) * 1000
             usage = response.usage
             content = response.choices[0].message.content
@@ -323,10 +332,14 @@ class OpenAIEmbedder(BaseEmbedder):
         """Generate embedding for text."""
         start = time.monotonic()
         try:
-            response = await self.client.embeddings.create(
-                model=self.model,
-                input=text,
-            )
+            with provider_span("openai", "embed", self.model) as span:
+                response = await self.client.embeddings.create(
+                    model=self.model,
+                    input=text,
+                )
+                if span and hasattr(response, 'usage') and response.usage:
+                    span.set_attribute("ai.tokens.input", response.usage.prompt_tokens)
+                    span.set_attribute("ai.tokens.total", response.usage.total_tokens)
             elapsed = (time.monotonic() - start) * 1000
             usage = response.usage
             logger.warning(
@@ -369,10 +382,14 @@ class OpenAIEmbedder(BaseEmbedder):
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def embed_batch(self, texts: list[str]) -> list[EmbeddingResult]:
         """Generate embeddings for multiple texts."""
-        response = await self.client.embeddings.create(
-            model=self.model,
-            input=texts,
-        )
+        with provider_span("openai", "embed_batch", self.model) as span:
+            response = await self.client.embeddings.create(
+                model=self.model,
+                input=texts,
+            )
+            if span and hasattr(response, 'usage') and response.usage:
+                span.set_attribute("ai.tokens.input", response.usage.prompt_tokens)
+                span.set_attribute("ai.tokens.total", response.usage.total_tokens)
 
         return [
             EmbeddingResult(
@@ -420,12 +437,16 @@ class OpenAIClusterSummarizer(BaseClusterSummarizer):
 
         start = time.monotonic()
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                **_token_limit_param(self.model, self.token_limit),
-                response_format={"type": "json_object"},
-            )
+            with provider_span("openai", "summarize_cluster", self.model) as span:
+                response = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    **_token_limit_param(self.model, self.token_limit),
+                    response_format={"type": "json_object"},
+                )
+                if span and hasattr(response, 'usage') and response.usage:
+                    span.set_attribute("ai.tokens.input", response.usage.prompt_tokens)
+                    span.set_attribute("ai.tokens.output", response.usage.completion_tokens)
             elapsed = (time.monotonic() - start) * 1000
             usage = response.usage
             write_log(
@@ -633,33 +654,37 @@ class OpenAIEvaluator(BaseEvaluator):
 
         start = time.monotonic()
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:{original_mime};base64,{b64_original}",
-                                    "detail": "high",
+            with provider_span("openai", "evaluate_pair", self.model) as span:
+                response = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:{original_mime};base64,{b64_original}",
+                                        "detail": "high",
+                                    },
                                 },
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:{generated_mime};base64,{b64_generated}",
-                                    "detail": "high",
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:{generated_mime};base64,{b64_generated}",
+                                        "detail": "high",
+                                    },
                                 },
-                            },
-                        ],
-                    }
-                ],
-                **_token_limit_param(self.model, 1000),
-                response_format={"type": "json_object"},
-            )
+                            ],
+                        }
+                    ],
+                    **_token_limit_param(self.model, 1000),
+                    response_format={"type": "json_object"},
+                )
+                if span and hasattr(response, 'usage') and response.usage:
+                    span.set_attribute("ai.tokens.input", response.usage.prompt_tokens)
+                    span.set_attribute("ai.tokens.output", response.usage.completion_tokens)
             elapsed = (time.monotonic() - start) * 1000
             usage = response.usage
             content = response.choices[0].message.content
@@ -708,26 +733,30 @@ class OpenAIEvaluator(BaseEvaluator):
 
         start = time.monotonic()
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:{mime_type};base64,{b64_image}",
-                                    "detail": "high",
+            with provider_span("openai", "evaluate_single", self.model) as span:
+                response = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:{mime_type};base64,{b64_image}",
+                                        "detail": "high",
+                                    },
                                 },
-                            },
-                        ],
-                    }
-                ],
-                **_token_limit_param(self.model, 1000),
-                response_format={"type": "json_object"},
-            )
+                            ],
+                        }
+                    ],
+                    **_token_limit_param(self.model, 1000),
+                    response_format={"type": "json_object"},
+                )
+                if span and hasattr(response, 'usage') and response.usage:
+                    span.set_attribute("ai.tokens.input", response.usage.prompt_tokens)
+                    span.set_attribute("ai.tokens.output", response.usage.completion_tokens)
             elapsed = (time.monotonic() - start) * 1000
             usage = response.usage
             content = response.choices[0].message.content
@@ -791,12 +820,16 @@ class OpenAIEvaluator(BaseEvaluator):
 
         start = time.monotonic()
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                **_token_limit_param(self.model, 1000),
-                response_format={"type": "json_object"},
-            )
+            with provider_span("openai", "summarize_assessments", self.model) as span:
+                response = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    **_token_limit_param(self.model, 1000),
+                    response_format={"type": "json_object"},
+                )
+                if span and hasattr(response, 'usage') and response.usage:
+                    span.set_attribute("ai.tokens.input", response.usage.prompt_tokens)
+                    span.set_attribute("ai.tokens.output", response.usage.completion_tokens)
             elapsed = (time.monotonic() - start) * 1000
             usage = response.usage
             content = response.choices[0].message.content
@@ -842,12 +875,16 @@ class OpenAIEvaluator(BaseEvaluator):
 
         start = time.monotonic()
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                **_token_limit_param(self.model, 2000),
-                response_format={"type": "json_object"},
-            )
+            with provider_span("openai", "generate_creative_prompts", self.model) as span:
+                response = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    **_token_limit_param(self.model, 2000),
+                    response_format={"type": "json_object"},
+                )
+                if span and hasattr(response, 'usage') and response.usage:
+                    span.set_attribute("ai.tokens.input", response.usage.prompt_tokens)
+                    span.set_attribute("ai.tokens.output", response.usage.completion_tokens)
             elapsed = (time.monotonic() - start) * 1000
             usage = response.usage
             content = response.choices[0].message.content

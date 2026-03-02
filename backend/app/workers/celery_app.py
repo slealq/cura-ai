@@ -12,23 +12,9 @@ logger = logging.getLogger(__name__)
 
 @setup_logging.connect
 def configure_worker_logging(**kwargs):
-    """Configure Celery worker logging with trace_id in every log record."""
-    from app.services.billing_context import get_trace_id
-
-    _original_factory = logging.getLogRecordFactory()
-
-    def _trace_record_factory(*args, **kw):
-        record = _original_factory(*args, **kw)
-        if not hasattr(record, "trace_id"):
-            record.trace_id = get_trace_id() or "-"
-        return record
-
-    logging.setLogRecordFactory(_trace_record_factory)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - [trace=%(trace_id)s] %(message)s",
-        force=True,
-    )
+    """Configure Celery worker logging with trace_id + session_id."""
+    from app.core.logging_config import configure_logging
+    configure_logging("cura-worker")
 
 settings = get_settings()
 
@@ -114,8 +100,48 @@ celery_app.conf.update(
             "task": "app.workers.tasks.cleanup_stale_reservations",
             "schedule": 3600.0,  # once per hour
         },
+        "monitor-queue-health": {
+            "task": "app.workers.tasks.monitor_queue_health",
+            "schedule": 60.0,  # once per minute
+        },
     },
 )
+
+
+@worker_ready.connect
+def init_sentry_on_worker(sender, **kwargs):
+    """Initialize Sentry SDK in each Celery worker from DB-stored DSN."""
+    try:
+        from app.db.base import SessionLocal
+        from app.models.api_key import APIKey
+        from app.services.encryption import decrypt_api_key
+
+        db = SessionLocal()
+        try:
+            key = db.query(APIKey).filter(APIKey.provider == "sentry", APIKey.status == "active").first()
+            if not key:
+                logger.info("Sentry DSN not configured — skipping Sentry init in worker")
+                return
+            dsn = decrypt_api_key(key.encrypted_key)
+        finally:
+            db.close()
+
+        import sentry_sdk
+
+        from app.core.config import get_settings as _get_settings
+        sentry_sdk.init(
+            dsn=dsn,
+            environment=_get_settings().environment,
+            traces_sample_rate=0.2,
+            send_default_pii=False,
+        )
+        logger.info("Sentry SDK initialized in Celery worker")
+
+        # Initialize OpenTelemetry (must be after Sentry so spans export to Sentry)
+        from app.core.otel import configure_otel
+        configure_otel("cura-worker")
+    except Exception as e:
+        logger.warning(f"Failed to initialize Sentry/OTel in worker: {e}")
 
 
 @worker_ready.connect

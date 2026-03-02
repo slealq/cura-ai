@@ -297,6 +297,7 @@ npm run lint         # ESLint
 - **Generation cancellation**: `generate_image` task passes a `cancel_check` callback to the fal.ai provider. The provider uses `fal_client.submit()` + manual 2s polling (not `subscribe()` which blocks with 100ms polling). On cancel, the remote fal.ai request is also cancelled. Job cancellation sets DB status → cancel_check detects it → task exits cleanly.
 - **pgvector**: 1536-dim embeddings for similarity search via cosine distance
 - **Hybrid search**: Combines semantic (embedding) and text (tsvector) search with adaptive weighting
+- **Request context** (`backend/app/middleware/request_context.py`): Pure ASGI middleware sets `trace_id` (from `X-Trace-Id` header or auto-generated) and `request_id` (always fresh) on every request via `billing_context` contextvars. Both echoed as response headers.
 
 **Processing flow:**
 1. Upload → `ImageService.fast_ingest()` saves raw file + SHA-256 hash, creates PENDING record (no thumbnails yet). Returns immediately.
@@ -314,7 +315,7 @@ npm run lint         # ESLint
 - `clusters.py` — Cluster listing, detail, rename, pin, archive, merge, exclude image, summarize, recluster, export, cover composite generation/serving
 - `search.py` — Hybrid semantic+text search, tag filtering, tag listing
 - `jobs.py` — Job listing/detail/cancel/delete/retry, pipeline triggers (full, tag-all, describe-all, embed-all, reprocess-all, reprocess-failed, reprocess-selected), batch job image listing
-- `settings.py` — Prompt presets CRUD, activate preset, prompt get/update/reset/suggest, clustering config get/update/reset, API key management (store/validate/delete, env var keys visible to admin only), provider config, generation config (per-base-model), training config (per-base-model), base model selection
+- `settings.py` — Prompt presets CRUD, activate preset, prompt get/update/reset/suggest, clustering config get/update/reset, API key management (store/validate/delete for openai/anthropic/fal/sentry, env var keys visible to admin only), Sentry DSN endpoint (public, no auth), provider config, generation config (per-base-model), training config (per-base-model), base model selection
 - `generation.py` — LoRA training (from folders or clusters, with optional per-image captions, multi-base-model: flux-dev/qwen-2.5), external LoRA upload (.safetensors → fal CDN + storage), image generation (supports up to 2 LoRAs per request via `loras` array, base models: flux-dev/qwen-2.5/nano-banana-pro), model/image CRUD, model recover/retry, LoRA weights download/management, LoRA evaluation (reference + creative pairs with embedding similarity/vision scoring), file serving (token via query param)
 - `billing.py` — User balance, transaction history, usage summary, generation/vision cost estimates. Admin endpoints: user balance management, add credits, platform summary, billing logs (paginated with filters), cost catalog CRUD
 - `vision.py` — Vision analysis (tag/describe/custom modes) with source from existing images, generated images, or uploaded files. Persisted results with history listing. Providers: OpenAI, Anthropic, fal.ai (Grok-4-fast)
@@ -346,10 +347,22 @@ npm run lint         # ESLint
 - Upload: `contexts/UploadContext.tsx` provides global `startUpload(files, folderId?, newFolderName?)` and `state` (isUploading, progress). Lives in layout — persists across navigation. Manages chunked upload lifecycle with real-time progress toast.
 - Theme: `contexts/ThemeContext.tsx` provides light/dark/auto theme switching with timezone-aware auto mode (dark 19:00-07:00). Persisted in localStorage.
 - Components: Header (search+stats), Sidebar (navigation + user menu with logout), ImageCard, ImageDrawer (detail slide-over), ImageGrid (paginated with filters+batch actions), ClusterCard, FolderCard, GeneratedImageCard, AddToFolderDialog, PipelineProgress
-- API client: `lib/api.ts` — Typed Axios functions for all endpoints. `authUrl()` helper appends `?token=` to image/thumbnail URLs for authenticated file serving via `<img src>`. Supports cross-origin API calls via `NEXT_PUBLIC_API_URL` env var (used when frontend runs locally against cloud backend).
+- API client: `lib/api.ts` — Typed Axios functions for all endpoints. `authUrl()` helper appends `?token=` to image/thumbnail URLs for authenticated file serving via `<img src>`. Request interceptor attaches `X-Session-Id`, `X-Trace-Id` correlation headers. Supports cross-origin API calls via `NEXT_PUBLIC_API_URL` env var (used when frontend runs locally against cloud backend).
+- Observability: `lib/sentry.ts` (lazy Sentry init from backend DSN), `app/error.tsx` (route-level error boundary), `app/global-error.tsx` (root error boundary)
 - State: TanStack Query with polling (5s jobs, 3s logs, 10s stats)
 
 **Alembic migrations:** 33 versions (001-033) covering initial schema through billing, vision, and editing features. Key migrations: 017 creates users table + multi-user backfill. 018 adds sync_enabled. 021 fixes enum casing. 022 adds FOLDER_DELETE job type. 023-024 add cover image composites. 025 makes trigger_word nullable. 026 adds EDIT_IMAGE/BATCH_EDIT job types. 027 creates vision_results table. 028 adds metadata prompt/timing columns. 029 creates billing tables (cost_catalog, usage_records, user_balance, balance_transactions) with initial pricing seed. 030 fixes nano-banana-pro pricing + adds jobs.charged_cost. 031-032 add expand_prompt and GPT-5 pricing. 033 adds usage_records.detail JSON column for cost breakdowns.
+
+## Observability
+
+**Correlation IDs:** Every HTTP request gets a `trace_id` and `request_id` injected by `RequestContextMiddleware` (`backend/app/middleware/request_context.py`). The frontend generates `trace_id` per request and `session_id` per browser session (persisted in localStorage). Headers flow: frontend sends `X-Trace-Id` + `X-Session-Id` → backend adopts trace_id (or generates one if absent) + generates `request_id` → both echoed in response headers `X-Trace-Id` and `X-Request-Id`. All backend logs include `[trace=<id>]` via a custom log record factory.
+
+**Health check:** `GET /health` verifies DB (SELECT 1), Redis (PING), and storage (directory exists / container accessible). Returns `{"status": "healthy"|"degraded", "checks": {"database": "ok", "redis": "ok"|"error: ...", "storage": "ok"}}`. Always returns HTTP 200 (Azure Container Apps would restart on 503).
+
+**Sentry error tracking:** Sentry DSN is stored in the database via the `APIKey` model (provider=`sentry`), configured through the admin panel under Platform API Keys. Not an env var — managed entirely via the UI.
+- **Backend:** `sentry-sdk[fastapi,celery]` initialized on startup in `main.py` (`_init_sentry()`) and in each Celery worker via `worker_ready` signal. Reads DSN from DB once at startup — restart required after DSN change.
+- **Frontend:** `@sentry/react` initialized lazily on mount (`lib/sentry.ts`). Fetches DSN from public endpoint `GET /api/settings/sentry-dsn` (no auth required). Error boundaries (`app/error.tsx`, `app/global-error.tsx`) report caught errors to Sentry.
+- **Dashboard:** [sentry.io](https://sentry.io) — Issues, Performance, and Alerts dashboards. Events are tagged with `environment` (local/dev/prod) and frontend events include `session_id`.
 
 ## Authentication
 

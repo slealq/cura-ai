@@ -11,6 +11,7 @@ from app.db.base import get_db
 from app.models import Job, JobStatus, JobType
 from app.models.user import User
 from app.services.generation_service import get_generation_service
+from app.workers.dispatch import dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -207,10 +208,10 @@ async def edit_images(
     from app.workers.generation_tasks import edit_image as edit_task
 
     if request.num_images == 1:
-        task = edit_task.delay(gen_ids[0], job.id, current_user.id)
+        task = dispatch(edit_task, gen_ids[0], job.id, current_user.id)
         job.celery_task_id = task.id
     else:
-        task = batch_edit.delay(gen_ids, job.id, current_user.id)
+        task = dispatch(batch_edit, gen_ids, job.id, current_user.id)
         job.celery_task_id = task.id
 
     db.commit()
