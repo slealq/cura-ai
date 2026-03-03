@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models.billing import UsageRecord
 from app.models.cost_decision import CostDecision, DecisionStatus
-from app.services.billing_service import BillingService, InsufficientBalanceError
+from app.services.billing_service import BillingService, InsufficientBalanceError, ZeroCostEstimateError
 from app.services.cost_calculator import USD_TO_SPARKS, calculate_cost, get_catalog_entry
 
 logger = logging.getLogger(__name__)
@@ -124,6 +124,22 @@ class BillingOrchestrator:
         self.db.add(decision)
         self.db.flush()
 
+        # Pre-guard: abort if estimated cost is zero (broken billing config)
+        if estimated_sparks is None or estimated_sparks <= 0:
+            no_catalog = entry is None
+            if no_catalog:
+                err = f"No catalog entry for {provider}/{model}/{operation}"
+            else:
+                err = f"Catalog entry exists but computed 0 sparks for {provider}/{model}/{operation}"
+            decision.status = DecisionStatus.FAILED.value
+            decision.error_message = f"Zero-cost estimate: {err}"
+            self.db.commit()
+            logger.error(
+                "ORCH zero-estimate | id=%s op=%s %s/%s — %s",
+                decision.id, operation, provider, model, err,
+            )
+            raise ZeroCostEstimateError(err)
+
         # Reserve estimated sparks to prevent concurrent overspend
         reserved = 0
         if estimated_sparks and estimated_sparks > 0:
@@ -180,6 +196,21 @@ class BillingOrchestrator:
         )
 
         sparks = int(charged_cost * USD_TO_SPARKS)
+
+        # Post-guard: log ERROR if actual cost resolved to zero (provider already called)
+        if sparks <= 0:
+            logger.error(
+                "ORCH zero-actual | decision=%s op=%s %s/%s "
+                "in_tok=%s out_tok=%s provider_cost=%s raw=%s charged=%s — "
+                "billing config may be broken",
+                decision_id, decision.operation, decision.provider, decision.model,
+                actual_input_tokens, actual_output_tokens, provider_cost,
+                raw_cost, charged_cost,
+            )
+            decision.error_message = (
+                f"Zero actual sparks: in_tok={actual_input_tokens} out_tok={actual_output_tokens} "
+                f"provider_cost={provider_cost} raw={raw_cost} charged={charged_cost}"
+            )
 
         from app.services.billing_context import get_trace_id
 

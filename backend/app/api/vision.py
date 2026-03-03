@@ -21,7 +21,7 @@ from app.services.billing_context import (
     set_billing_user,
 )
 from app.services.billing_orchestrator import ORCHESTRATOR_ENABLED_OPS, BillingOrchestrator
-from app.services.billing_service import InsufficientBalanceError
+from app.services.billing_service import InsufficientBalanceError, ZeroCostEstimateError
 from app.services.vision_service import get_vision_service
 
 logger = logging.getLogger(__name__)
@@ -393,6 +393,8 @@ async def analyze_image(
 
     except InsufficientBalanceError:
         raise HTTPException(status_code=402, detail="Insufficient credits")
+    except ZeroCostEstimateError:
+        raise HTTPException(status_code=422, detail="Billing configuration error — cannot price this operation")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

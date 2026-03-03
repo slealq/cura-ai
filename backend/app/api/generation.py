@@ -375,7 +375,7 @@ async def expand_prompt(
         set_trace_id,
     )
     from app.services.billing_orchestrator import ORCHESTRATOR_ENABLED_OPS, BillingOrchestrator
-    from app.services.billing_service import BillingService, InsufficientBalanceError
+    from app.services.billing_service import BillingService, InsufficientBalanceError, ZeroCostEstimateError
 
     try:
         BillingService(db, current_user.id).check_balance_or_raise()
@@ -400,15 +400,18 @@ async def expand_prompt(
     orch = BillingOrchestrator(db, current_user.id) if "expand_prompt" in ORCHESTRATOR_ENABLED_OPS else None
     decision = None
     if orch:
-        idem_key = make_idempotency_key(current_user.id, get_trace_id(), "expand_prompt", None)
-        decision, is_new = orch.create_decision(
-            operation="expand_prompt",
-            provider="openai",
-            model=expansion_model,
-            trace_id=get_trace_id(),
-            idempotency_key=idem_key,
-        )
-        # No idempotency skip for expand_prompt — each call is intentionally unique
+        try:
+            idem_key = make_idempotency_key(current_user.id, get_trace_id(), "expand_prompt", None)
+            decision, is_new = orch.create_decision(
+                operation="expand_prompt",
+                provider="openai",
+                model=expansion_model,
+                trace_id=get_trace_id(),
+                idempotency_key=idem_key,
+            )
+            # No idempotency skip for expand_prompt — each call is intentionally unique
+        except ZeroCostEstimateError:
+            raise HTTPException(status_code=422, detail="Billing configuration error — cannot price this operation")
 
     try:
         response = await client.chat.completions.create(

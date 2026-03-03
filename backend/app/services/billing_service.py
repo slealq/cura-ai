@@ -36,6 +36,11 @@ class CatalogMissError(Exception):
     pass
 
 
+class ZeroCostEstimateError(Exception):
+    """Raised when an operation estimates to 0 sparks — billing config is broken."""
+    pass
+
+
 class BillingService:
     """Billing service for a specific user. Follows existing service pattern."""
 

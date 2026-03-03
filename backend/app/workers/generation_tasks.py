@@ -31,7 +31,7 @@ from app.services.billing_context import (
     set_trace_id,
 )
 from app.services.billing_orchestrator import ORCHESTRATOR_ENABLED_OPS, BillingOrchestrator
-from app.services.billing_service import InsufficientBalanceError, finalize_job_billing
+from app.services.billing_service import InsufficientBalanceError, ZeroCostEstimateError, finalize_job_billing
 from app.services.evaluation_service import get_evaluation_service
 from app.services.generation_service import get_generation_service
 from app.services.image_service import get_image_service
@@ -556,6 +556,11 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
         gen_service = get_generation_service(db, user_id)
         gen_service.update_lora_status(lora_model_id, LoraModelStatus.FAILED, "Insufficient credits")
         return {"status": "error", "message": "Insufficient credits"}
+    except ZeroCostEstimateError as e:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
+        gen_service = get_generation_service(db, user_id)
+        gen_service.update_lora_status(lora_model_id, LoraModelStatus.FAILED, f"Billing config error: {e}")
+        return {"status": "error", "message": f"Billing config error: {e}"}
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
@@ -728,6 +733,14 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
             gen.error_message = "Insufficient credits"
             db.commit()
         return {"status": "error", "message": "Insufficient credits"}
+    except ZeroCostEstimateError as e:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
+        gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
+        if gen:
+            gen.status = GenerationStatus.FAILED
+            gen.error_message = f"Billing config error: {e}"
+            db.commit()
+        return {"status": "error", "message": f"Billing config error: {e}"}
     except GenerationCancelledError:
         elapsed = (time.monotonic() - task_start) * 1000
         logger.info(f"Generation cancelled for generated_image {generated_image_id}")
@@ -1105,6 +1118,14 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
             gen.error_message = "Insufficient credits"
             db.commit()
         return {"status": "error", "message": "Insufficient credits"}
+    except ZeroCostEstimateError as e:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
+        gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
+        if gen:
+            gen.status = GenerationStatus.FAILED
+            gen.error_message = f"Billing config error: {e}"
+            db.commit()
+        return {"status": "error", "message": f"Billing config error: {e}"}
     except GenerationCancelledError:
         elapsed = (time.monotonic() - task_start) * 1000
         logger.info(f"Edit cancelled for generated_image {generated_image_id}")
@@ -1867,6 +1888,11 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
         eval_service = get_evaluation_service(db, user_id)
         eval_service.update_evaluation_status(evaluation_id, EvaluationStatus.FAILED, error_message="Insufficient credits")
         return {"status": "error", "message": "Insufficient credits"}
+    except ZeroCostEstimateError as e:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
+        eval_service = get_evaluation_service(db, user_id)
+        eval_service.update_evaluation_status(evaluation_id, EvaluationStatus.FAILED, error_message=f"Billing config error: {e}")
+        return {"status": "error", "message": f"Billing config error: {e}"}
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)

@@ -27,7 +27,7 @@ from app.services.billing_context import (
     set_trace_id,
 )
 from app.services.billing_orchestrator import ORCHESTRATOR_ENABLED_OPS, BillingOrchestrator
-from app.services.billing_service import InsufficientBalanceError, finalize_job_billing
+from app.services.billing_service import InsufficientBalanceError, ZeroCostEstimateError, finalize_job_billing
 from app.services.cluster_service import get_cluster_service
 from app.services.clustering import get_clustering_service
 from app.services.image_service import get_image_service
@@ -567,6 +567,9 @@ def tag_image(
     except InsufficientBalanceError:
         _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
         return {"status": "error", "message": "Insufficient credits"}
+    except ZeroCostEstimateError as e:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
+        return {"status": "error", "message": f"Billing config error: {e}"}
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
@@ -655,6 +658,9 @@ def describe_image(
     except InsufficientBalanceError:
         _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
         return {"status": "error", "message": "Insufficient credits"}
+    except ZeroCostEstimateError as e:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
+        return {"status": "error", "message": f"Billing config error: {e}"}
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
@@ -734,6 +740,9 @@ def embed_image(self, image_id: int, user_id: int, job_id: int | None = None, tr
     except InsufficientBalanceError:
         _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
         return {"status": "error", "message": "Insufficient credits"}
+    except ZeroCostEstimateError as e:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
+        return {"status": "error", "message": f"Billing config error: {e}"}
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         logger.error(f"Failed to embed image {image_id}: {e}")
@@ -1313,6 +1322,9 @@ def process_image_pipeline(
     except InsufficientBalanceError:
         _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
         return {"status": "error", "message": "Insufficient credits"}
+    except ZeroCostEstimateError as e:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
+        return {"status": "error", "message": f"Billing config error: {e}"}
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
