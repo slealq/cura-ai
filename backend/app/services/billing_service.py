@@ -464,27 +464,6 @@ class BillingService:
 
     # --- Cost estimation ---
 
-    # Maps frontend base_model → (provider, fal_model_id, operation) for catalog lookup
-    GENERATION_MODEL_MAP: dict[str, dict[str, tuple[str, str, str]]] = {
-        "flux-dev": {
-            "without_lora": ("fal", "fal-ai/flux/dev", "generate"),
-            "with_lora": ("fal", "fal-ai/flux-lora", "generate"),
-        },
-        "qwen-2.5": {
-            "without_lora": ("fal", "fal-ai/qwen-image-2512", "generate"),
-            "with_lora": ("fal", "fal-ai/qwen-image-2512/lora", "generate"),
-        },
-        "nano-banana-pro": {
-            "without_lora": ("fal", "fal-ai/nano-banana-pro", "generate"),
-        },
-        "nano-banana-2": {
-            "without_lora": ("fal", "fal-ai/nano-banana-2", "generate"),
-        },
-        "flux-2-pro": {
-            "without_lora": ("fal", "fal-ai/flux-2-pro", "generate"),
-        },
-    }
-
     @staticmethod
     def get_generation_costs(
         db: Session,
@@ -495,36 +474,19 @@ class BillingService:
         For models with variable pricing, the returned value uses
         default parameters (1K resolution, 1024×1024).
         """
-        result: dict[str, dict[str, int]] = {}
+        from app.services.model_registry import generation_model_variants
 
-        for base_model, variants in BillingService.GENERATION_MODEL_MAP.items():
+        result: dict[str, dict[str, int]] = {}
+        for base_model, variants in generation_model_variants().items():
             costs: dict[str, int] = {}
             for variant_key, (provider, model, operation) in variants.items():
-                # Pass default params so pricing engine uses base cost
                 sparks, _ = _estimate_sparks(
                     db, provider, model, operation,
                     generation_params={"resolution": "1K"},
                 )
                 costs[variant_key] = sparks
             result[base_model] = costs
-
         return result
-
-    # Maps frontend edit model key → (provider, catalog model ID, operation)
-    EDIT_MODEL_MAP: dict[str, tuple[str, str, str]] = {
-        "qwen-image-max-edit": ("fal", "fal-ai/qwen-image-max/edit", "edit"),
-        "kling-image": ("fal", "fal-ai/kling-image/o3/image-to-image", "edit"),
-        "wan-25": ("fal", "fal-ai/wan-25-preview/image-to-image", "edit"),
-        "grok-imagine": ("fal", "xai/grok-imagine-image/edit", "edit"),
-        "face-swap": ("fal", "half-moon-ai/ai-face-swap/faceswapimage", "edit"),
-        "nano-banana-pro-edit": ("fal", "fal-ai/nano-banana-pro/edit", "edit"),
-    }
-
-    # Maps frontend base model key → (provider, catalog model ID, operation)
-    TRAINING_MODEL_MAP: dict[str, tuple[str, str, str]] = {
-        "flux-dev": ("fal", "fal-ai/flux-lora-fast-training", "train"),
-        "qwen-2.5": ("fal", "fal-ai/qwen-image-2512-trainer-v2", "train"),
-    }
 
     @staticmethod
     def get_edit_costs(db: Session) -> dict[str, int]:
@@ -534,8 +496,10 @@ class BillingService:
         Post-run billing uses fal.ai's actual reported cost which accounts for
         resolution and output count variation.
         """
+        from app.services.model_registry import flat_model_map
+
         result: dict[str, int] = {}
-        for edit_model, (provider, model, operation) in BillingService.EDIT_MODEL_MAP.items():
+        for edit_model, (provider, model, operation) in flat_model_map("edit").items():
             sparks, _ = _estimate_sparks(db, provider, model, operation)
             result[edit_model] = sparks
         return result
@@ -543,8 +507,10 @@ class BillingService:
     @staticmethod
     def get_training_costs(db: Session) -> dict[str, int]:
         """Get per-job training costs in sparks for each base model."""
+        from app.services.model_registry import flat_model_map
+
         result: dict[str, int] = {}
-        for base_model, (provider, model, operation) in BillingService.TRAINING_MODEL_MAP.items():
+        for base_model, (provider, model, operation) in flat_model_map("train").items():
             sparks, _ = _estimate_sparks(db, provider, model, operation)
             result[base_model] = sparks
         return result
@@ -788,11 +754,10 @@ class BillingService:
         provider_config = settings.get_provider_config()
 
         # Resolve generation model for this base_model (with_lora variant)
-        gen_map = BillingService.GENERATION_MODEL_MAP.get(base_model, {})
-        gen_variant = gen_map.get("with_lora", gen_map.get("without_lora"))
-        if gen_variant:
-            gen_provider, gen_model, gen_op = gen_variant
-        else:
+        from app.services.model_registry import resolve
+        try:
+            gen_provider, gen_model, gen_op = resolve(base_model, "generate", with_lora=True)
+        except KeyError:
             gen_provider, gen_model, gen_op = "fal", "fal-ai/flux-lora", "generate"
 
         generate_sparks, _ = _estimate_sparks(db, gen_provider, gen_model, gen_op)

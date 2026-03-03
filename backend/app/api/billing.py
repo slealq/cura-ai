@@ -381,13 +381,14 @@ def get_generation_costs(
         estimated_input_tokens=input_tokens,
         estimated_output_tokens=output_tokens,
     )
+    from app.services.model_registry import generation_model_variants
     from app.services.pricing_engine import has_variable_pricing
 
     costs = BillingService.get_generation_costs(db)
 
     # Compute which base models have variable pricing
     variable_models: list[str] = []
-    for base_model, variants in BillingService.GENERATION_MODEL_MAP.items():
+    for base_model, variants in generation_model_variants().items():
         for _variant_key, (prov, mod, op) in variants.items():
             if has_variable_pricing(prov, mod, op):
                 variable_models.append(base_model)

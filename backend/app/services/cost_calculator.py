@@ -231,36 +231,20 @@ def resolve_catalog_model(
 ) -> tuple[str, str, str]:
     """Map short fal model names to full catalog names.
 
-    Uses the existing BillingService MODEL_MAP dicts.  No-op if *model*
-    already contains "/" (callers passing full names are unaffected).
+    Delegates to the unified model registry.  No-op if *model* already
+    contains "/" (callers passing full names are unaffected).
 
     Returns (provider, model, operation) — possibly rewritten.
     """
     if "/" in model:
         return provider, model, operation
 
-    # Import inside function body to avoid circular import
-    from app.services.billing_service import BillingService
+    from app.services.model_registry import resolve
 
-    if operation == "generate":
-        variants = BillingService.GENERATION_MODEL_MAP.get(model)
-        if variants:
-            key = "with_lora" if (with_lora and "with_lora" in variants) else "without_lora"
-            entry = variants.get(key) or variants.get("without_lora")
-            if entry:
-                return entry  # (provider, catalog_model, operation)
-
-    elif operation == "train":
-        entry = BillingService.TRAINING_MODEL_MAP.get(model)
-        if entry:
-            return entry
-
-    elif operation == "edit":
-        entry = BillingService.EDIT_MODEL_MAP.get(model)
-        if entry:
-            return entry
-
-    return provider, model, operation
+    try:
+        return resolve(model, operation, with_lora=with_lora)
+    except KeyError:
+        return provider, model, operation
 
 
 def estimate_operation_tokens(

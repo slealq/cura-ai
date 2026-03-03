@@ -225,6 +225,30 @@ def init_sentry_on_worker(sender, **kwargs):
 
 
 @worker_ready.connect
+def validate_model_registry_on_worker(sender, **kwargs):
+    """Cross-check model registry against CostCatalog on worker startup."""
+    try:
+        from app.db.base import SessionLocal
+        from app.services.model_registry import all_entries, validate_against_catalog
+
+        db = SessionLocal()
+        try:
+            errors = validate_against_catalog(db)
+            count = len(all_entries())
+            if errors:
+                for err in errors:
+                    logger.warning(f"Model registry: {err}")
+            logger.info(
+                "Model registry validated: %d models, %d issue(s)",
+                count, len(errors),
+            )
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"Model registry validation failed: {e}")
+
+
+@worker_ready.connect
 def log_stuck_training_jobs(sender, **kwargs):
     """On worker startup, log any LoRA models stuck in TRAINING status.
 

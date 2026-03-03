@@ -89,16 +89,20 @@ def _nano_banana_2_generate(params: dict) -> Decimal:
 
 
 # ---------------------------------------------------------------------------
-# Registry
+# Strategy functions keyed by strategy name (set in model_registry)
 # ---------------------------------------------------------------------------
 
-# Key: (provider, model, operation) → pricing function
-_PRICING_REGISTRY: dict[tuple[str, str, str], callable] = {
-    ("fal", "fal-ai/flux-2-pro", "generate"): _flux_2_pro_generate,
-    ("fal", "fal-ai/nano-banana-pro", "generate"): _nano_banana_pro_generate,
-    ("fal", "fal-ai/nano-banana-pro/edit", "edit"): _nano_banana_pro_generate,
-    ("fal", "fal-ai/nano-banana-2", "generate"): _nano_banana_2_generate,
+_STRATEGY_FUNCTIONS: dict[str, callable] = {
+    "flux_2_pro_mp": _flux_2_pro_generate,
+    "nano_banana_pro": _nano_banana_pro_generate,
+    "nano_banana_pro_edit": _nano_banana_pro_generate,  # same formula
+    "nano_banana_2": _nano_banana_2_generate,
 }
+
+
+def get_strategy_functions() -> dict[str, callable]:
+    """Return the strategy function dict — used by model_registry validation."""
+    return _STRATEGY_FUNCTIONS
 
 
 # ---------------------------------------------------------------------------
@@ -113,10 +117,17 @@ def compute_raw_cost(
 ) -> Decimal | None:
     """Compute raw USD cost using a registered pricing function.
 
-    Returns ``None`` when no function is registered — callers should
-    fall back to the flat catalog rate.
+    Looks up the pricing strategy key via the model registry, then
+    dispatches to the matching function.  Returns ``None`` when no
+    function is registered — callers should fall back to the flat
+    catalog rate.
     """
-    fn = _PRICING_REGISTRY.get((provider, model, operation))
+    from app.services.model_registry import get_pricing_strategy_key
+
+    key = get_pricing_strategy_key(provider, model, operation)
+    if key is None:
+        return None
+    fn = _STRATEGY_FUNCTIONS.get(key)
     if fn is None:
         return None
     return fn(params)
@@ -127,4 +138,7 @@ def has_variable_pricing(provider: str, model: str, operation: str) -> bool:
 
     Used by the frontend to decide which models need dynamic estimates.
     """
-    return (provider, model, operation) in _PRICING_REGISTRY
+    from app.services.model_registry import get_pricing_strategy_key
+
+    key = get_pricing_strategy_key(provider, model, operation)
+    return key is not None and key in _STRATEGY_FUNCTIONS

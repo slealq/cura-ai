@@ -145,7 +145,41 @@ async def startup():
     from app.core.otel import configure_otel
     configure_otel("cura-api", app=app)
 
+    # Validate model registry against cost catalog
+    _validate_model_registry()
+
     logger.info("Application started successfully")
+
+
+def _validate_model_registry():
+    """Cross-check model registry entries against CostCatalog rows."""
+    try:
+        from app.db.base import SessionLocal
+        from app.services.model_registry import all_entries, validate_against_catalog
+
+        db = SessionLocal()
+        try:
+            errors = validate_against_catalog(db)
+            count = len(all_entries())
+            if errors:
+                for err in errors:
+                    logger.warning(f"Model registry: {err}")
+                try:
+                    import sentry_sdk as _sentry
+                    _sentry.capture_message(
+                        f"Model registry validation: {len(errors)} issue(s)",
+                        level="warning",
+                    )
+                except Exception:
+                    pass
+            logger.info(
+                "Model registry validated: %d models, %d issue(s)",
+                count, len(errors),
+            )
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"Model registry validation failed: {e}")
 
 
 @app.on_event("shutdown")
