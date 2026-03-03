@@ -23,6 +23,7 @@ from app.services.billing_context import (
     clear_last_api_call_tokens,
     get_last_api_call_tokens,
     get_trace_id,
+    init_token_container,
     init_trace,
     make_idempotency_key,
     set_billing_job,
@@ -92,6 +93,9 @@ def _init_task_context(user_id, job_id=None, trace_id=None, session_id=None):
         init_trace()
     if session_id:
         set_session_id(session_id)
+    # Pre-allocate the mutable token container so that asyncio Tasks
+    # (created by run_async/run_until_complete) share the same dict.
+    init_token_container()
 
     # Sentry trace continuation is handled by _start_worker_trace in
     # celery_app.py (task_prerun signal). Here we just set Sentry tags.
@@ -483,6 +487,8 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
                 job = db.query(Job).filter(Job.id == job_id).first()
                 if job and job.status == JobStatus.CANCELLED:
                     logger.info(f"LoRA training job {job_id} cancelled")
+                    if orch and decision:
+                        orch.cancel_decision(decision.id)
                     gen_service.update_lora_status(lora_model_id, LoraModelStatus.FAILED, "Cancelled by user")
                     return {"status": "cancelled"}
 
@@ -749,6 +755,8 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
     except GenerationCancelledError:
         elapsed = (time.monotonic() - task_start) * 1000
         logger.info(f"Generation cancelled for generated_image {generated_image_id}")
+        if orch and decision:
+            orch.cancel_decision(decision.id)
         write_log(
             category=LogCategory.TASK,
             message=f"Task generate_image cancelled for generated_image {generated_image_id}",
@@ -1135,6 +1143,8 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
     except GenerationCancelledError:
         elapsed = (time.monotonic() - task_start) * 1000
         logger.info(f"Edit cancelled for generated_image {generated_image_id}")
+        if orch and decision:
+            orch.cancel_decision(decision.id)
         write_log(
             category=LogCategory.TASK,
             message=f"Task edit_image cancelled for generated_image {generated_image_id}",

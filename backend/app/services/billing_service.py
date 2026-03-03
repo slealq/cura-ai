@@ -25,6 +25,11 @@ from app.services.cost_calculator import get_catalog_entry as _get_catalog
 
 logger = logging.getLogger(__name__)
 
+try:
+    import sentry_sdk
+except ImportError:
+    sentry_sdk = None  # type: ignore[assignment]
+
 
 class InsufficientBalanceError(Exception):
     """Raised when a user has insufficient credits for an operation."""
@@ -135,6 +140,11 @@ class BillingService:
             "RESERVE | user=%s amount=%d decision=%s",
             self.user_id, amount, decision_id,
         )
+        if sentry_sdk:
+            sentry_sdk.add_breadcrumb(
+                category="billing", message="reserved",
+                data={"user_id": self.user_id, "amount": amount, "decision_id": decision_id},
+            )
         return True
 
     def release_reservation(self, amount: int) -> None:
@@ -156,6 +166,11 @@ class BillingService:
         logger.info(
             "RELEASE_RESERVATION | user=%s amount=%d", self.user_id, amount,
         )
+        if sentry_sdk:
+            sentry_sdk.add_breadcrumb(
+                category="billing", message="reservation_released",
+                data={"user_id": self.user_id, "amount": amount},
+            )
 
     def release_and_debit(
         self, reserved_amount: int, actual_amount: Decimal, description: str,
@@ -168,6 +183,12 @@ class BillingService:
                 amount=actual_amount,
                 description=description,
                 usage_record_id=usage_record_id,
+            )
+        if sentry_sdk:
+            sentry_sdk.add_breadcrumb(
+                category="billing", message="release_and_debit",
+                data={"user_id": self.user_id, "reserved": reserved_amount,
+                      "actual": float(actual_amount)},
             )
 
     def add_credits(
@@ -264,6 +285,12 @@ class BillingService:
                 return existing
             # Shouldn't happen, but re-raise if we can't find it
             raise
+        if sentry_sdk:
+            sentry_sdk.add_breadcrumb(
+                category="billing", message="charged",
+                data={"user_id": self.user_id, "amount": int_amount,
+                      "usage_record_id": usage_record_id},
+            )
         return txn
 
     # --- Usage recording ---
@@ -337,24 +364,10 @@ class BillingService:
 
         # Handle catalog miss: record anomaly + strict mode check
         if detail and detail.get("catalog_match_tier") == "none" and provider_cost is None:
-            try:
-                from app.models.billing import BillingAnomaly
-                anomaly = BillingAnomaly(
-                    user_id=self.user_id if self.user_id else None,
-                    anomaly_type="catalog_miss",
-                    provider=provider,
-                    model=model,
-                    operation=operation,
-                    detail={
-                        "input_tokens": input_tokens,
-                        "output_tokens": output_tokens,
-                    },
-                )
-                self.db.add(anomaly)
-                self.db.commit()
-            except Exception:
-                logger.warning("Failed to record billing anomaly", exc_info=True)
-                self.db.rollback()
+            self.create_anomaly(
+                "catalog_miss", provider, model, operation,
+                {"input_tokens": input_tokens, "output_tokens": output_tokens},
+            )
 
             from app.core.config import get_settings
             if get_settings().billing_strict_mode:
@@ -369,6 +382,34 @@ class BillingService:
     ) -> tuple[CostCatalog | None, str]:
         """Catalog lookup. Delegates to cost_calculator."""
         return _get_catalog(self.db, provider, model, operation)
+
+    def create_anomaly(
+        self,
+        anomaly_type: str,
+        provider: str,
+        model: str,
+        operation: str,
+        detail: dict | None = None,
+    ) -> None:
+        """Best-effort anomaly creation. Never raises."""
+        try:
+            from app.models.billing import BillingAnomaly
+
+            anomaly = BillingAnomaly(
+                user_id=self.user_id if self.user_id else None,
+                anomaly_type=anomaly_type,
+                provider=provider,
+                model=model,
+                operation=operation,
+                detail=detail or {},
+            )
+            self.db.add(anomaly)
+            self.db.commit()
+        except Exception as e:
+            logger.warning("Failed to record billing anomaly %s", anomaly_type, exc_info=True)
+            if sentry_sdk:
+                sentry_sdk.capture_exception(e)
+            self.db.rollback()
 
     # --- User-facing reporting ---
 
@@ -1117,7 +1158,9 @@ def record_usage_standalone(
         # can deterministically look up the cost without race conditions.
         set_last_usage_record_id(record.id)
     except Exception as e:
-        logger.warning(f"Failed to record usage for user {user_id}: {e}")
+        logger.error(f"Failed to record usage for user {user_id}: {e}", exc_info=True)
+        if sentry_sdk:
+            sentry_sdk.capture_exception(e)
         db.rollback()
     finally:
         db.close()
@@ -1168,8 +1211,10 @@ def finalize_job_billing(
             .order_by(UsageRecord.created_at)
             .all()
         )
-    except Exception:
-        pass  # Table may not exist yet during migration transition
+    except Exception as e:
+        logger.warning("Failed to query orchestrator usage records: %s", e)
+        if sentry_sdk:
+            sentry_sdk.capture_exception(e)
 
     # Deduplicate by ID and combine
     seen_ids: set[int] = set()

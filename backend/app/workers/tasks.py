@@ -16,6 +16,7 @@ from app.services.billing_context import (
     clear_last_api_call_tokens,
     get_last_api_call_tokens,
     get_trace_id,
+    init_token_container,
     init_trace,
     is_billing_deferred,
     make_idempotency_key,
@@ -206,6 +207,9 @@ def _init_task_context(user_id, job_id=None, image_id=None, trace_id=None, sessi
         init_trace()
     if session_id:
         set_session_id(session_id)
+    # Pre-allocate the mutable token container so that asyncio Tasks
+    # (created by run_async/run_until_complete) share the same dict.
+    init_token_container()
 
     # Sentry trace continuation is handled by _start_worker_trace in
     # celery_app.py (task_prerun signal). Here we just set Sentry tags.

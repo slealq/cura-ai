@@ -21,6 +21,16 @@ from app.services.cost_calculator import (
 
 logger = logging.getLogger(__name__)
 
+try:
+    import sentry_sdk
+except ImportError:
+    sentry_sdk = None  # type: ignore[assignment]
+
+
+class ZeroCostActualError(Exception):
+    """Raised when a completed provider call resolves to 0 sparks."""
+    pass
+
 # Operations managed by the orchestrator. When an operation is in this set,
 # write_log() skips record_usage_standalone() and the task code uses the
 # orchestrator instead.
@@ -80,6 +90,11 @@ class BillingOrchestrator:
                     "ORCH duplicate | key=%s status=%s — skipping",
                     idempotency_key, existing.status,
                 )
+                if sentry_sdk:
+                    sentry_sdk.add_breadcrumb(
+                        category="billing", message="decision_duplicate",
+                        data={"idempotency_key": idempotency_key, "status": existing.status},
+                    )
                 return existing, False
 
         # Resolve short model names → full catalog names
@@ -168,7 +183,10 @@ class BillingOrchestrator:
                 "ORCH zero-estimate | id=%s op=%s %s/%s — %s",
                 decision.id, operation, provider, model, err,
             )
-            raise ZeroCostEstimateError(err)
+            exc = ZeroCostEstimateError(err)
+            if sentry_sdk:
+                sentry_sdk.capture_exception(exc)
+            raise exc
 
         # Reserve estimated sparks to prevent concurrent overspend
         reserved = 0
@@ -178,6 +196,12 @@ class BillingOrchestrator:
                 decision.status = DecisionStatus.FAILED.value
                 decision.error_message = "Insufficient balance for reservation"
                 self.db.commit()
+                if sentry_sdk:
+                    sentry_sdk.add_breadcrumb(
+                        category="billing", message="reservation_failed_insufficient",
+                        level="warning",
+                        data={"decision_id": decision.id, "estimated_sparks": estimated_sparks},
+                    )
                 raise InsufficientBalanceError(
                     f"User {self.user_id} has insufficient credits "
                     f"(need ~{estimated_sparks} sparks)"
@@ -191,6 +215,15 @@ class BillingOrchestrator:
             "ORCH decision | id=%s op=%s %s/%s trace=%s est_sparks=%s reserved=%s",
             decision.id, operation, provider, model, trace_id, estimated_sparks, reserved,
         )
+        if sentry_sdk:
+            sentry_sdk.add_breadcrumb(
+                category="billing", message="decision_created",
+                data={
+                    "decision_id": decision.id, "operation": operation,
+                    "provider": provider, "model": model,
+                    "estimated_sparks": estimated_sparks, "trace_id": trace_id,
+                },
+            )
 
         return decision, True
 
@@ -213,6 +246,32 @@ class BillingOrchestrator:
         decision = self.db.query(CostDecision).filter(CostDecision.id == decision_id).first()
         if not decision:
             raise ValueError(f"CostDecision {decision_id} not found")
+
+        # --- Idempotency: return existing UsageRecord if already recorded ---
+        existing_record = (
+            self.db.query(UsageRecord)
+            .filter(UsageRecord.cost_decision_id == decision_id)
+            .first()
+        )
+        if existing_record:
+            logger.warning(
+                "ORCH idempotent | decision=%s already has UsageRecord=%s — returning existing",
+                decision_id, existing_record.id,
+            )
+            if sentry_sdk:
+                sentry_sdk.add_breadcrumb(
+                    category="billing", message="record_actual_idempotent",
+                    level="warning",
+                    data={"decision_id": decision_id, "existing_record_id": existing_record.id},
+                )
+            return existing_record
+
+        # --- Validate actuals ---
+        validation_error = self._validate_actual(
+            decision, actual_input_tokens, actual_output_tokens, provider_cost,
+        )
+        if validation_error:
+            return validation_error
 
         # Calculate actual cost
         raw_cost, charged_cost, detail = calculate_cost(
@@ -241,6 +300,18 @@ class BillingOrchestrator:
                 f"Zero actual sparks: in_tok={actual_input_tokens} out_tok={actual_output_tokens} "
                 f"provider_cost={provider_cost} raw={raw_cost} charged={charged_cost}"
             )
+            # Create anomaly + capture for Sentry visibility
+            self._create_anomaly(
+                "zero_cost_actual", decision.provider, decision.model, decision.operation,
+                {"decision_id": decision_id, "raw_cost": str(raw_cost),
+                 "charged_cost": str(charged_cost), "sparks": sparks},
+            )
+            exc = ZeroCostActualError(
+                f"Zero sparks for decision {decision_id}: "
+                f"{decision.provider}/{decision.model}/{decision.operation}"
+            )
+            if sentry_sdk:
+                sentry_sdk.capture_exception(exc)
 
         from app.services.billing_context import get_trace_id
 
@@ -294,6 +365,14 @@ class BillingOrchestrator:
             "ORCH actual | decision=%s op=%s sparks=%s debit=%s",
             decision_id, decision.operation, sparks, not defer_debit,
         )
+        if sentry_sdk:
+            sentry_sdk.add_breadcrumb(
+                category="billing", message="actual_recorded",
+                data={
+                    "decision_id": decision_id, "operation": decision.operation,
+                    "sparks": sparks, "status": decision.status,
+                },
+            )
 
         return record
 
@@ -310,6 +389,12 @@ class BillingOrchestrator:
             decision.error_message = error_message
             decision.updated_at = datetime.utcnow()
             self.db.commit()
+            if sentry_sdk:
+                sentry_sdk.add_breadcrumb(
+                    category="billing", message="decision_failed",
+                    level="warning",
+                    data={"decision_id": decision_id, "error": error_message},
+                )
 
     def cancel_decision(self, decision_id: int) -> None:
         """Mark a decision as cancelled and release any reservation."""
@@ -323,3 +408,122 @@ class BillingOrchestrator:
             decision.status = DecisionStatus.CANCELLED.value
             decision.updated_at = datetime.utcnow()
             self.db.commit()
+            if sentry_sdk:
+                sentry_sdk.add_breadcrumb(
+                    category="billing", message="decision_cancelled",
+                    data={"decision_id": decision_id},
+                )
+
+    # --- Internal helpers ---
+
+    def _validate_actual(
+        self,
+        decision: CostDecision,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        provider_cost: float | None,
+    ) -> UsageRecord | None:
+        """Validate actuals before cost calculation.
+
+        Returns a zero-cost UsageRecord on validation failure (caller should
+        return it immediately), or None if validation passes.
+        """
+        billing_model = decision.billing_model or ""
+        anomaly_type: str | None = None
+        detail_msg: str | None = None
+
+        # All actuals missing
+        if input_tokens is None and output_tokens is None and provider_cost is None:
+            anomaly_type = "missing_actual_usage"
+            detail_msg = "All actuals are None"
+
+        # Per-call model must have provider_cost
+        elif billing_model == "per_call" and provider_cost is None:
+            anomaly_type = "missing_provider_cost"
+            detail_msg = f"Per-call model {decision.model} missing provider_cost"
+
+        # Negative tokens
+        elif (input_tokens is not None and input_tokens < 0) or \
+             (output_tokens is not None and output_tokens < 0):
+            anomaly_type = "invalid_actual_usage"
+            detail_msg = f"Negative tokens: in={input_tokens} out={output_tokens}"
+
+        # Hard failure: create anomaly, fail decision, return zero-cost record
+        if anomaly_type:
+            logger.error(
+                "ORCH validation failed | decision=%s type=%s — %s",
+                decision.id, anomaly_type, detail_msg,
+            )
+            self._create_anomaly(
+                anomaly_type, decision.provider, decision.model, decision.operation,
+                {"decision_id": decision.id, "detail": detail_msg,
+                 "input_tokens": input_tokens, "output_tokens": output_tokens,
+                 "provider_cost": provider_cost},
+            )
+            if sentry_sdk:
+                sentry_sdk.capture_exception(
+                    ValueError(f"Billing validation failed ({anomaly_type}): {detail_msg}")
+                )
+            self.fail_decision(decision.id, f"Validation failed: {anomaly_type}")
+
+            from decimal import Decimal
+
+            from app.services.billing_context import get_trace_id
+
+            record = UsageRecord(
+                user_id=self.user_id,
+                operation=decision.operation,
+                provider=decision.provider,
+                model=decision.model,
+                input_tokens=0,
+                output_tokens=0,
+                raw_cost=Decimal("0"),
+                charged_cost=Decimal("0"),
+                trace_id=get_trace_id(),
+                cost_decision_id=decision.id,
+                delta_sparks=0,
+                delta_reason="validation_failed",
+            )
+            self.db.add(record)
+            self.db.commit()
+            return record
+
+        # Soft warning: absurd tokens (still charge)
+        if (input_tokens is not None and input_tokens > 10_000_000) or \
+           (output_tokens is not None and output_tokens > 1_000_000):
+            logger.warning(
+                "ORCH absurd tokens | decision=%s in=%s out=%s",
+                decision.id, input_tokens, output_tokens,
+            )
+            self._create_anomaly(
+                "absurd_actual_usage", decision.provider, decision.model, decision.operation,
+                {"decision_id": decision.id, "input_tokens": input_tokens,
+                 "output_tokens": output_tokens},
+            )
+
+        return None
+
+    def _create_anomaly(
+        self,
+        anomaly_type: str,
+        provider: str,
+        model: str,
+        operation: str,
+        detail: dict | None = None,
+    ) -> None:
+        """Best-effort anomaly creation. Never raises."""
+        try:
+            from app.models.billing import BillingAnomaly
+
+            anomaly = BillingAnomaly(
+                user_id=self.user_id,
+                anomaly_type=anomaly_type,
+                provider=provider,
+                model=model,
+                operation=operation,
+                detail=detail or {},
+            )
+            self.db.add(anomaly)
+            self.db.flush()
+        except Exception:
+            logger.warning("Failed to create billing anomaly %s", anomaly_type, exc_info=True)
