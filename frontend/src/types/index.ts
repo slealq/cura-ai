@@ -533,6 +533,7 @@ export interface CostCatalogEntry {
   cost_per_output_token: number | null;
   cost_per_call: number | null;
   platform_markup: number;
+  pricing_rules?: Record<string, unknown> | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -550,6 +551,12 @@ export interface ModelBulkUpdateRequest {
 export interface GenerationCosts {
   costs: Record<string, Record<string, number>>;
   expand_prompt_cost: number;
+  variable_pricing_models?: string[];
+}
+
+export interface GenerationEstimateResponse {
+  estimated_sparks: number;
+  base_model: string;
 }
 
 export interface VisionCostsEstimationBasis {

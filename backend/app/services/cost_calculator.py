@@ -1,5 +1,8 @@
 """Pure cost calculation functions extracted from BillingService."""
+from __future__ import annotations
+
 import logging
+import math
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
@@ -77,14 +80,27 @@ def estimate_sparks(
     operation: str,
     estimated_input_tokens: int | None = None,
     estimated_output_tokens: int | None = None,
+    generation_params: dict | None = None,
 ) -> tuple[int, CostCatalog | None]:
     """Estimate cost in integer sparks. Used by all estimate endpoints.
+
+    When the catalog entry has ``pricing_rules`` and ``generation_params``
+    is provided, delegates to the pricing rule engine for variable pricing.
 
     Returns (sparks, catalog_entry).
     """
     entry, _ = get_catalog_entry(db, provider, model, operation)
     if not entry:
         return 0, None
+
+    # Variable pricing via Python pricing engine
+    if generation_params is not None:
+        from app.services.pricing_engine import compute_raw_cost
+
+        raw_cost = compute_raw_cost(provider, model, operation, generation_params)
+        if raw_cost is not None:
+            sparks = math.ceil(raw_cost * entry.platform_markup * USD_TO_SPARKS)
+            return sparks, entry
 
     raw = Decimal("0")
     if entry.cost_per_call and entry.cost_per_call > 0:
@@ -95,7 +111,7 @@ def estimate_sparks(
         raw += entry.cost_per_output_token * estimated_output_tokens
 
     charged = raw * entry.platform_markup
-    sparks = int(charged * USD_TO_SPARKS)
+    sparks = math.ceil(charged * USD_TO_SPARKS)
     return sparks, entry
 
 
@@ -205,3 +221,97 @@ def calculate_cost(
     }
 
     return raw_cost, charged_cost, detail
+
+
+def resolve_catalog_model(
+    provider: str,
+    model: str,
+    operation: str,
+    with_lora: bool = False,
+) -> tuple[str, str, str]:
+    """Map short fal model names to full catalog names.
+
+    Uses the existing BillingService MODEL_MAP dicts.  No-op if *model*
+    already contains "/" (callers passing full names are unaffected).
+
+    Returns (provider, model, operation) — possibly rewritten.
+    """
+    if "/" in model:
+        return provider, model, operation
+
+    # Import inside function body to avoid circular import
+    from app.services.billing_service import BillingService
+
+    if operation == "generate":
+        variants = BillingService.GENERATION_MODEL_MAP.get(model)
+        if variants:
+            key = "with_lora" if (with_lora and "with_lora" in variants) else "without_lora"
+            entry = variants.get(key) or variants.get("without_lora")
+            if entry:
+                return entry  # (provider, catalog_model, operation)
+
+    elif operation == "train":
+        entry = BillingService.TRAINING_MODEL_MAP.get(model)
+        if entry:
+            return entry
+
+    elif operation == "edit":
+        entry = BillingService.EDIT_MODEL_MAP.get(model)
+        if entry:
+            return entry
+
+    return provider, model, operation
+
+
+def estimate_operation_tokens(
+    provider: str,
+    model: str,
+    operation: str,
+    image_width: int | None = None,
+    image_height: int | None = None,
+    prompt_text: str | None = None,
+    tags: list[str] | None = None,
+    description: str | None = None,
+) -> tuple[int | None, int | None]:
+    """Estimate input/output tokens for an operation.
+
+    Routes to :mod:`token_estimator` functions based on operation type.
+    Returns ``(estimated_input, estimated_output)``.  Per-call ops
+    (generate/train/edit) return ``(None, None)`` — they use cost_per_call.
+    """
+    from app.services.token_estimator import (
+        estimate_embed_tokens,
+        estimate_output_tokens,
+        estimate_prompt_tokens,
+        estimate_vision_input_tokens,
+    )
+
+    w = image_width or 1024
+    h = image_height or 1024
+
+    if operation in ("tag", "describe"):
+        mode = operation
+        inp = estimate_vision_input_tokens(provider, model, w, h, prompt_text or "")
+        out = estimate_output_tokens(model, mode)
+        return inp, out
+
+    if operation == "evaluate":
+        # Vision evaluation — similar to describe
+        inp = estimate_vision_input_tokens(provider, model, w, h, prompt_text or "")
+        out = estimate_output_tokens(model, "custom")
+        return inp, out
+
+    if operation == "embed":
+        inp = estimate_embed_tokens(tags, description)
+        return inp, None
+
+    if operation == "summarize":
+        inp = estimate_prompt_tokens(prompt_text or "")
+        return inp, 500
+
+    if operation == "expand_prompt":
+        inp = estimate_prompt_tokens(prompt_text or "")
+        return inp, 500
+
+    # Per-call ops: generate, train, edit — use cost_per_call
+    return None, None

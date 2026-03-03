@@ -23,12 +23,15 @@ const SIZE_PRESETS = [
 ];
 
 const BASE_MODELS = [
-  { value: 'nano-banana-pro', label: 'Nano Banana Pro', defaultGuidance: 0, hasLora: false, hasStepsGuidance: false, hasWidthHeight: false, usesResolutionAspect: true, hasSafetyTolerance: true, hasWebSearch: true, maxImages: 4 },
-  { value: 'flux-dev', label: 'Flux', defaultGuidance: 3.5, hasLora: true, hasStepsGuidance: true, hasWidthHeight: true, usesResolutionAspect: false, hasSafetyTolerance: false, hasWebSearch: false, maxImages: 8 },
-  { value: 'qwen-2.5', label: 'Qwen Image 2512', defaultGuidance: 4.0, hasLora: true, hasStepsGuidance: true, hasWidthHeight: true, usesResolutionAspect: false, hasSafetyTolerance: false, hasWebSearch: false, maxImages: 8 },
+  { value: 'nano-banana-pro', label: 'Nano Banana Pro', defaultGuidance: 0, hasLora: false, hasStepsGuidance: false, hasWidthHeight: false, usesResolutionAspect: true, hasSafetyTolerance: true, hasWebSearch: true, hasImageSizePreset: false, hasNegativePrompt: false, maxSafetyLevel: 6, maxImages: 4 },
+  { value: 'nano-banana-2', label: 'Nano Banana 2', defaultGuidance: 0, hasLora: false, hasStepsGuidance: false, hasWidthHeight: false, usesResolutionAspect: true, hasSafetyTolerance: true, hasWebSearch: true, hasImageSizePreset: false, hasNegativePrompt: false, maxSafetyLevel: 6, maxImages: 4 },
+  { value: 'flux-2-pro', label: 'Flux 2 Pro', defaultGuidance: 0, hasLora: false, hasStepsGuidance: false, hasWidthHeight: false, usesResolutionAspect: false, hasSafetyTolerance: true, hasWebSearch: false, hasImageSizePreset: true, hasNegativePrompt: false, maxSafetyLevel: 5, maxImages: 8 },
+  { value: 'flux-dev', label: 'Flux', defaultGuidance: 3.5, hasLora: true, hasStepsGuidance: true, hasWidthHeight: true, usesResolutionAspect: false, hasSafetyTolerance: false, hasWebSearch: false, hasImageSizePreset: false, hasNegativePrompt: true, maxSafetyLevel: 6, maxImages: 8 },
+  { value: 'qwen-2.5', label: 'Qwen Image 2512', defaultGuidance: 4.0, hasLora: true, hasStepsGuidance: true, hasWidthHeight: true, usesResolutionAspect: false, hasSafetyTolerance: false, hasWebSearch: false, hasImageSizePreset: false, hasNegativePrompt: true, maxSafetyLevel: 6, maxImages: 8 },
 ];
 
 const RESOLUTIONS = [
+  { value: '0.5K', label: '0.5K' },
   { value: '1K', label: '1K' },
   { value: '2K', label: '2K' },
   { value: '4K', label: '4K' },
@@ -49,13 +52,45 @@ const ASPECT_RATIOS = [
 ];
 
 const SAFETY_LEVELS = [
-  { value: '1', label: '1 (Strictest)' },
-  { value: '2', label: '2' },
-  { value: '3', label: '3' },
-  { value: '4', label: '4 (Default)' },
-  { value: '5', label: '5' },
-  { value: '6', label: '6 (Most Permissive)' },
+  { value: '1', label: '1 (Strictest)', level: 1 },
+  { value: '2', label: '2', level: 2 },
+  { value: '3', label: '3', level: 3 },
+  { value: '4', label: '4', level: 4 },
+  { value: '5', label: '5', level: 5 },
+  { value: '6', label: '6 (Most Permissive)', level: 6 },
 ];
+
+const IMAGE_SIZE_PRESETS = [
+  { value: 'square_hd', label: 'Square HD', ratio: '1:1' },
+  { value: 'square', label: 'Square', ratio: '1:1' },
+  { value: 'landscape_4_3', label: 'Landscape 4:3', ratio: '4:3' },
+  { value: 'landscape_16_9', label: 'Landscape 16:9', ratio: '16:9' },
+  { value: 'portrait_4_3', label: 'Portrait 3:4', ratio: '3:4' },
+  { value: 'portrait_16_9', label: 'Portrait 9:16', ratio: '9:16' },
+  { value: 'custom', label: 'Custom', ratio: '1:1' },
+] as const;
+
+// Default safety tolerance per model (matches backend FAL_MODEL_CONFIG.default_safety_tolerance)
+const DEFAULT_SAFETY_TOLERANCE: Record<string, string> = {
+  'nano-banana-pro': '4',
+  'nano-banana-2': '4',
+  'flux-2-pro': '2',
+};
+
+function AspectIcon({ ratio, className }: { ratio: string; className?: string }) {
+  const dims: Record<string, [number, number]> = {
+    '1:1': [10, 10], '16:9': [14, 8], '9:16': [8, 14],
+    '4:3': [12, 9], '3:4': [9, 12],
+  };
+  const [w, h] = dims[ratio] || [10, 10];
+  const x = (16 - w) / 2, y = (16 - h) / 2;
+  return (
+    <svg viewBox="0 0 16 16" className={cn('w-4 h-4', className)}>
+      <rect x={x} y={y} width={w} height={h} rx={1}
+        className="fill-current" />
+    </svg>
+  );
+}
 
 export default function GeneratePage() {
   return (
@@ -85,6 +120,7 @@ function GeneratePageInner() {
   const [aspectRatio, setAspectRatio] = useState('1:1');
   const [safetyTolerance, setSafetyTolerance] = useState('4');
   const [enableWebSearch, setEnableWebSearch] = useState(false);
+  const [imageSizePreset, setImageSizePreset] = useState('landscape_4_3');
   const [autoExpand, setAutoExpand] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
 
@@ -190,8 +226,32 @@ function GeneratePageInner() {
     staleTime: 5 * 60 * 1000, // costs don't change often
   });
 
+  // Check if this model has variable pricing (resolution multipliers, megapixel, etc.)
+  const hasVariablePricing = generationCosts?.variable_pricing_models?.includes(baseModel) ?? false;
+
+  // Dynamic cost query — only fires for models with variable pricing
+  const { data: dynamicEstimate } = useQuery({
+    queryKey: ['generation-estimate', baseModel, resolution, enableWebSearch, width, height, imageSizePreset, loraSelections.length > 0],
+    queryFn: () => billingApi.estimateGenerationCost({
+      base_model: baseModel,
+      resolution: modelCaps.usesResolutionAspect ? resolution : undefined,
+      enable_web_search: modelCaps.hasWebSearch ? enableWebSearch : undefined,
+      width: (modelCaps.hasWidthHeight || (modelCaps.hasImageSizePreset && imageSizePreset === 'custom')) ? width : undefined,
+      height: (modelCaps.hasWidthHeight || (modelCaps.hasImageSizePreset && imageSizePreset === 'custom')) ? height : undefined,
+      image_size: (modelCaps.hasImageSizePreset && imageSizePreset !== 'custom') ? imageSizePreset : undefined,
+      with_lora: modelCaps.hasLora && loraSelections.length > 0,
+    }),
+    enabled: hasVariablePricing,
+    staleTime: 60_000,
+  });
+
   // Compute estimated cost in sparks
   const estimatedCostPerImage = (() => {
+    // Use dynamic estimate for models with variable pricing
+    if (hasVariablePricing && dynamicEstimate?.estimated_sparks != null) {
+      return dynamicEstimate.estimated_sparks;
+    }
+    // Fall back to static costs
     if (!generationCosts?.costs) return null;
     const modelCosts = generationCosts.costs[baseModel];
     if (!modelCosts) return null;
@@ -248,7 +308,7 @@ function GeneratePageInner() {
       num_images: numImages,
     };
 
-    if (negativePrompt.trim()) params.negative_prompt = negativePrompt.trim();
+    if (modelCaps.hasNegativePrompt && negativePrompt.trim()) params.negative_prompt = negativePrompt.trim();
     if (seed) params.seed = parseInt(seed);
 
     if (modelCaps.hasLora && loraSelections.length > 0) {
@@ -266,6 +326,14 @@ function GeneratePageInner() {
     if (modelCaps.usesResolutionAspect) {
       params.resolution = resolution;
       params.aspect_ratio = aspectRatio;
+    }
+    if (modelCaps.hasImageSizePreset) {
+      if (imageSizePreset === 'custom') {
+        params.width = width;
+        params.height = height;
+      } else {
+        params.image_size = imageSizePreset;
+      }
     }
     if (modelCaps.hasSafetyTolerance) {
       params.safety_tolerance = safetyTolerance;
@@ -388,6 +456,9 @@ function GeneratePageInner() {
               setLoraSelections([]);
               setGuidance(caps?.defaultGuidance ?? 0);
               if (numImages > (caps?.maxImages ?? 8)) setNumImages(caps?.maxImages ?? 8);
+              // Reset safety tolerance to model default
+              const defaultSafety = DEFAULT_SAFETY_TOLERANCE[v];
+              if (defaultSafety) setSafetyTolerance(defaultSafety);
             }}
             size="sm"
           />
@@ -498,17 +569,73 @@ function GeneratePageInner() {
         {/* Advanced params */}
         {showAdvanced && (
           <div className="border border-border rounded-lg p-4 space-y-4">
-            {/* Negative prompt */}
-            <div>
-              <label className="block text-xs text-muted-foreground mb-1">Negative Prompt</label>
-              <input
-                type="text"
-                value={negativePrompt}
-                onChange={(e) => setNegativePrompt(e.target.value)}
-                placeholder="Things to avoid..."
-                className="w-full px-3 py-2 border border-border rounded-lg text-sm"
-              />
-            </div>
+            {/* Negative prompt (only for models that support it) */}
+            {modelCaps.hasNegativePrompt && (
+              <div>
+                <label className="block text-xs text-muted-foreground mb-1">Negative Prompt</label>
+                <input
+                  type="text"
+                  value={negativePrompt}
+                  onChange={(e) => setNegativePrompt(e.target.value)}
+                  placeholder="Things to avoid..."
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm"
+                />
+              </div>
+            )}
+
+            {/* Image size presets + custom (flux-2-pro) */}
+            {modelCaps.hasImageSizePreset && (
+              <div className="space-y-2">
+                <label className="block text-xs text-muted-foreground mb-1">Image Size</label>
+                <div className="flex flex-wrap gap-2">
+                  {IMAGE_SIZE_PRESETS.map((preset) => (
+                    <button
+                      key={preset.value}
+                      onClick={() => setImageSizePreset(preset.value)}
+                      className={cn(
+                        'flex items-center gap-1.5 px-3 py-1.5 text-xs border rounded-lg transition-colors',
+                        imageSizePreset === preset.value
+                          ? 'border-primary bg-primary/5 text-primary'
+                          : 'border-border hover:bg-muted'
+                      )}
+                    >
+                      {preset.value !== 'custom' && <AspectIcon ratio={preset.ratio} />}
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+                {imageSizePreset === 'custom' && (
+                  <div className="flex items-center gap-2">
+                    <div className="w-28">
+                      <label className="block text-xs text-muted-foreground mb-1">Width</label>
+                      <input
+                        type="number"
+                        value={width}
+                        onChange={(e) => setWidth(Math.max(256, Math.min(2048, parseInt(e.target.value) || 256)))}
+                        min={256}
+                        max={2048}
+                        step={8}
+                        className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
+                      />
+                    </div>
+                    <span className="text-muted-foreground mt-5">&times;</span>
+                    <div className="w-28">
+                      <label className="block text-xs text-muted-foreground mb-1">Height</label>
+                      <input
+                        type="number"
+                        value={height}
+                        onChange={(e) => setHeight(Math.max(256, Math.min(2048, parseInt(e.target.value) || 256)))}
+                        min={256}
+                        max={2048}
+                        step={8}
+                        className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
+                      />
+                    </div>
+                    <span className="text-xs text-muted-foreground mt-5">{width} &times; {height} px</span>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Size presets (width/height models) */}
             {modelCaps.hasWidthHeight && (
@@ -581,7 +708,7 @@ function GeneratePageInner() {
                       onChange={(e) => setSafetyTolerance(e.target.value)}
                       className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
                     >
-                      {SAFETY_LEVELS.map((s) => (
+                      {SAFETY_LEVELS.filter((s) => s.level <= (modelCaps.maxSafetyLevel ?? 6)).map((s) => (
                         <option key={s.value} value={s.value}>{s.label}</option>
                       ))}
                     </select>
@@ -773,6 +900,9 @@ function GeneratePageInner() {
                           )}
                           {gp.aspect_ratio != null && (
                             <span><span className="font-medium">Aspect Ratio:</span> {String(gp.aspect_ratio)}</span>
+                          )}
+                          {gp.image_size != null && (
+                            <span><span className="font-medium">Image Size:</span> {String(gp.image_size)}</span>
                           )}
                           {gp.safety_tolerance != null && (
                             <span><span className="font-medium">Safety:</span> {String(gp.safety_tolerance)}</span>

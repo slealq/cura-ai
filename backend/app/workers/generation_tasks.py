@@ -468,7 +468,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
                 idempotency_key=idem_key,
                 resource_id=lora_model_id,
                 job_id=job_id,
-            )
+            )  # resolver handles short name → full catalog name
             if not is_new:
                 logger.info("Duplicate train detected for %s, skipping", lora_model_id)
                 _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
@@ -662,6 +662,9 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
                 model=gen.base_model or "flux-dev",
                 trace_id=trace_id, idempotency_key=idem_key,
                 resource_id=generated_image_id, job_id=job_id,
+                with_lora=bool(loras_for_provider),
+                generation_params=params,
+                request_snapshot={"generation_params": params, "prompt": gen.prompt[:200] if gen.prompt else None},
             )
             if not is_new:
                 logger.info("Duplicate generate detected for %s, skipping", generated_image_id)
@@ -684,6 +687,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
                     aspect_ratio=params.get("aspect_ratio"),
                     safety_tolerance=params.get("safety_tolerance"),
                     enable_web_search=params.get("enable_web_search"),
+                    image_size=params.get("image_size"),
                 )
             )
         except Exception as e:
@@ -698,6 +702,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
                 decision.id, actual_input_tokens=in_tok,
                 actual_output_tokens=out_tok, provider_cost=prov_cost,
                 defer_debit=False,
+                response_snapshot=result.metadata,
             )
 
         # Save result
@@ -1060,7 +1065,8 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
                 operation="edit", provider="fal", model=edit_model,
                 trace_id=trace_id, idempotency_key=idem_key,
                 resource_id=generated_image_id, job_id=job_id,
-            )
+                generation_params=params,
+            )  # resolver handles short name → full catalog name
             if not is_new:
                 logger.info("Duplicate edit detected for %s, skipping", generated_image_id)
                 _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
@@ -1442,7 +1448,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
         _eval_provider = vision_eval_provider or "fal"
         _eval_model = evaluator.get_model_name() if evaluator else "unknown"
 
-        def _orch_call(sub_op, provider, model, resource_id, call_fn):
+        def _orch_call(sub_op, provider, model, resource_id, call_fn, **decision_kwargs):
             """Wrap a provider call with orchestrator decision tracking."""
             decision = None
             if orch:
@@ -1458,6 +1464,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                     resource_id=evaluation_id,
                     job_id=job_id,
                     request_snapshot={"sub_operation": sub_op},
+                    **decision_kwargs,
                 )
                 if not is_new:
                     return None  # skip duplicate
@@ -1513,6 +1520,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                             loras=[{"path": lora.lora_url, "scale": gen_params.get("lora_scale", 1.0)}],
                         )
                     ),
+                    with_lora=True,
                 )
                 if result is None:
                     continue  # skip duplicate
@@ -1691,6 +1699,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                                     loras=[{"path": lora.lora_url, "scale": gen_params.get("lora_scale", 1.0)}],
                                 )
                             ),
+                            with_lora=True,
                         )
                         if result is None:
                             continue  # skip duplicate

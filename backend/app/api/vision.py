@@ -234,6 +234,16 @@ async def analyze_image(
     set_billing_user(current_user.id)
     trace_id = init_trace()
 
+    # Query source image dimensions for token estimation (cheap PK-indexed lookup)
+    _img_w, _img_h = None, None
+    if request.source_image_id:
+        from app.models.image import Image
+        _src = db.query(Image.width, Image.height).filter(
+            Image.id == request.source_image_id, Image.user_id == current_user.id,
+        ).first()
+        if _src:
+            _img_w, _img_h = _src.width, _src.height
+
     try:
         if request.mode == "tag":
             if request.tag_prompt is not None:
@@ -256,6 +266,8 @@ async def analyze_image(
                     operation=operation, provider=request.provider, model=tagger.get_model_name(),
                     trace_id=trace_id, idempotency_key=idem_key,
                     image_id=request.source_image_id,
+                    image_width=_img_w, image_height=_img_h,
+                    prompt_text=prompt,
                 )
 
             t0 = time.perf_counter()
@@ -309,6 +321,8 @@ async def analyze_image(
                     operation=operation, provider=request.provider, model=describer.get_model_name(),
                     trace_id=trace_id, idempotency_key=idem_key,
                     image_id=request.source_image_id,
+                    image_width=_img_w, image_height=_img_h,
+                    prompt_text=prompt,
                 )
 
             t0 = time.perf_counter()
@@ -359,6 +373,8 @@ async def analyze_image(
                     operation=operation, provider=request.provider, model=describer.get_model_name(),
                     trace_id=trace_id, idempotency_key=idem_key,
                     image_id=request.source_image_id,
+                    image_width=_img_w, image_height=_img_h,
+                    prompt_text=prompt,
                 )
 
             t0 = time.perf_counter()

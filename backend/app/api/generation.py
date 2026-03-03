@@ -97,6 +97,7 @@ class GenerateRequest(BaseModel):
     aspect_ratio: str | None = None
     safety_tolerance: str | None = None
     enable_web_search: bool | None = None
+    image_size: str | None = None
 
     @model_validator(mode="after")
     def normalize_loras(self) -> "GenerateRequest":
@@ -408,6 +409,8 @@ async def expand_prompt(
                 model=expansion_model,
                 trace_id=get_trace_id(),
                 idempotency_key=idem_key,
+                prompt_text=request.prompt,
+                request_snapshot={"prompt": request.prompt[:500], "model": expansion_model},
             )
             # No idempotency skip for expand_prompt — each call is intentionally unique
         except ZeroCostEstimateError:
@@ -443,6 +446,11 @@ async def expand_prompt(
                 actual_input_tokens=usage.prompt_tokens,
                 actual_output_tokens=usage.completion_tokens,
                 defer_debit=False,
+                response_snapshot={
+                    "model": response.model,
+                    "usage": {"prompt_tokens": usage.prompt_tokens, "completion_tokens": usage.completion_tokens, "total_tokens": usage.total_tokens},
+                    "expanded_length": len(expanded),
+                },
             )
         elif usage:
             # Fallback if orchestrator not enabled
@@ -1036,14 +1044,30 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
     settings_service.get_generation_config()
     provider = settings.default_generation_provider
 
-    # Build generation_params
-    gen_params: dict = {
-        "width": request.width,
-        "height": request.height,
-        "num_inference_steps": request.num_inference_steps,
-        "guidance_scale": request.guidance_scale,
-        "seed": request.seed,
-    }
+    # Build generation_params — only include params the model actually supports
+    from app.providers.fal_provider import FAL_MODEL_CONFIG
+    model_config = FAL_MODEL_CONFIG.get(effective_base_model, {})
+
+    gen_params: dict = {}
+
+    # Width/height: included for models that use image_size dict (not resolution/aspect or preset models)
+    # For image_size_preset models: store width/height only when custom (no preset selected)
+    if model_config.get("uses_image_size_presets"):
+        if not request.image_size:
+            # Custom size mode — send width/height instead of preset
+            gen_params["width"] = request.width
+            gen_params["height"] = request.height
+    elif not model_config.get("uses_resolution_aspect"):
+        gen_params["width"] = request.width
+        gen_params["height"] = request.height
+
+    # Steps/guidance: only for models that support them
+    if model_config.get("supports_steps_guidance", True):
+        gen_params["num_inference_steps"] = request.num_inference_steps
+        gen_params["guidance_scale"] = request.guidance_scale
+
+    if request.seed is not None:
+        gen_params["seed"] = request.seed
     if request.resolution:
         gen_params["resolution"] = request.resolution
     if request.aspect_ratio:
@@ -1052,6 +1076,8 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
         gen_params["safety_tolerance"] = request.safety_tolerance
     if request.enable_web_search is not None:
         gen_params["enable_web_search"] = request.enable_web_search
+    if request.image_size:
+        gen_params["image_size"] = request.image_size
     if loras_for_params:
         gen_params["loras"] = loras_for_params
 

@@ -70,6 +70,7 @@ class CatalogEntryRequest(BaseModel):
     cost_per_output_token: float | None = 0
     cost_per_call: float | None = 0
     platform_markup: float = 2.0
+    pricing_rules: dict | None = None
 
 
 class OperationMarkup(BaseModel):
@@ -95,6 +96,7 @@ class CatalogEntryResponse(BaseModel):
     cost_per_output_token: float | None
     cost_per_call: float | None
     platform_markup: float
+    pricing_rules: dict | None = None
     is_active: bool
     created_at: str
     updated_at: str
@@ -122,6 +124,24 @@ class GenerationCostsResponse(BaseModel):
     """Per-image generation cost in sparks for each base model."""
     costs: dict[str, dict[str, int]]
     expand_prompt_cost: int
+    variable_pricing_models: list[str] = []
+
+
+class GenerationEstimateRequest(BaseModel):
+    """Request body for dynamic generation cost estimate."""
+    base_model: str
+    resolution: str | None = None
+    enable_web_search: bool = False
+    width: int | None = None
+    height: int | None = None
+    image_size: str | None = None
+    with_lora: bool = False
+
+
+class GenerationEstimateResponse(BaseModel):
+    """Response for dynamic generation cost estimate."""
+    estimated_sparks: int
+    base_model: str
 
 
 class BillingLogEntryResponse(BaseModel):
@@ -361,10 +381,57 @@ def get_generation_costs(
         estimated_input_tokens=input_tokens,
         estimated_output_tokens=output_tokens,
     )
+    from app.services.pricing_engine import has_variable_pricing
+
+    costs = BillingService.get_generation_costs(db)
+
+    # Compute which base models have variable pricing
+    variable_models: list[str] = []
+    for base_model, variants in BillingService.GENERATION_MODEL_MAP.items():
+        for _variant_key, (prov, mod, op) in variants.items():
+            if has_variable_pricing(prov, mod, op):
+                variable_models.append(base_model)
+                break
+
     return {
-        "costs": BillingService.get_generation_costs(db),
+        "costs": costs,
         "expand_prompt_cost": expand_sparks,
+        "variable_pricing_models": variable_models,
     }
+
+
+@router.post("/generation-estimate", response_model=GenerationEstimateResponse)
+def estimate_generation_cost(
+    body: GenerationEstimateRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Dynamic cost estimate for generation with specific parameters."""
+    from app.services.cost_calculator import resolve_catalog_model
+
+    # Resolve short model name to catalog triple
+    provider, model, operation = resolve_catalog_model(
+        "fal", body.base_model, "generate", with_lora=body.with_lora,
+    )
+
+    # Build params dict for pricing engine
+    gen_params: dict = {}
+    if body.resolution:
+        gen_params["resolution"] = body.resolution
+    if body.enable_web_search:
+        gen_params["enable_web_search"] = True
+    if body.width:
+        gen_params["width"] = body.width
+    if body.height:
+        gen_params["height"] = body.height
+    if body.image_size:
+        gen_params["image_size"] = body.image_size
+
+    sparks, _ = _estimate_sparks(
+        db, provider, model, operation,
+        generation_params=gen_params,
+    )
+    return {"estimated_sparks": sparks, "base_model": body.base_model}
 
 
 class EditCostsResponse(BaseModel):
@@ -691,28 +758,31 @@ def admin_get_logs(
     return {"items": items, "total": total, "skip": skip, "limit": limit}
 
 
+def _serialize_catalog_entry(e: CostCatalog) -> dict:
+    """Serialize a CostCatalog entry for API responses."""
+    return {
+        "id": e.id,
+        "provider": e.provider,
+        "model": e.model,
+        "operation": e.operation,
+        "cost_per_input_token": float(e.cost_per_input_token) if e.cost_per_input_token else None,
+        "cost_per_output_token": float(e.cost_per_output_token) if e.cost_per_output_token else None,
+        "cost_per_call": float(e.cost_per_call) if e.cost_per_call else None,
+        "platform_markup": float(e.platform_markup),
+        "pricing_rules": e.pricing_rules,
+        "is_active": e.is_active,
+        "created_at": e.created_at.isoformat(),
+        "updated_at": e.updated_at.isoformat(),
+    }
+
+
 @router.get("/admin/catalog", response_model=list[CatalogEntryResponse])
 def admin_get_catalog(
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     entries = BillingService.get_cost_catalog(db)
-    return [
-        {
-            "id": e.id,
-            "provider": e.provider,
-            "model": e.model,
-            "operation": e.operation,
-            "cost_per_input_token": float(e.cost_per_input_token) if e.cost_per_input_token else None,
-            "cost_per_output_token": float(e.cost_per_output_token) if e.cost_per_output_token else None,
-            "cost_per_call": float(e.cost_per_call) if e.cost_per_call else None,
-            "platform_markup": float(e.platform_markup),
-            "is_active": e.is_active,
-            "created_at": e.created_at.isoformat(),
-            "updated_at": e.updated_at.isoformat(),
-        }
-        for e in entries
-    ]
+    return [_serialize_catalog_entry(e) for e in entries]
 
 
 @router.put("/admin/catalog/model-bulk", response_model=list[CatalogEntryResponse])
@@ -743,19 +813,7 @@ def admin_bulk_update_model(
             platform_markup=Decimal(str(op_markup.platform_markup)),
             entry_id=entry_id,
         )
-        results.append({
-            "id": entry.id,
-            "provider": entry.provider,
-            "model": entry.model,
-            "operation": entry.operation,
-            "cost_per_input_token": float(entry.cost_per_input_token) if entry.cost_per_input_token else None,
-            "cost_per_output_token": float(entry.cost_per_output_token) if entry.cost_per_output_token else None,
-            "cost_per_call": float(entry.cost_per_call) if entry.cost_per_call else None,
-            "platform_markup": float(entry.platform_markup),
-            "is_active": entry.is_active,
-            "created_at": entry.created_at.isoformat(),
-            "updated_at": entry.updated_at.isoformat(),
-        })
+        results.append(_serialize_catalog_entry(entry))
     return results
 
 
@@ -774,20 +832,9 @@ def admin_create_catalog_entry(
         cost_per_output_token=Decimal(str(body.cost_per_output_token)) if body.cost_per_output_token else None,
         cost_per_call=Decimal(str(body.cost_per_call)) if body.cost_per_call else None,
         platform_markup=Decimal(str(body.platform_markup)),
+        pricing_rules=body.pricing_rules,
     )
-    return {
-        "id": entry.id,
-        "provider": entry.provider,
-        "model": entry.model,
-        "operation": entry.operation,
-        "cost_per_input_token": float(entry.cost_per_input_token) if entry.cost_per_input_token else None,
-        "cost_per_output_token": float(entry.cost_per_output_token) if entry.cost_per_output_token else None,
-        "cost_per_call": float(entry.cost_per_call) if entry.cost_per_call else None,
-        "platform_markup": float(entry.platform_markup),
-        "is_active": entry.is_active,
-        "created_at": entry.created_at.isoformat(),
-        "updated_at": entry.updated_at.isoformat(),
-    }
+    return _serialize_catalog_entry(entry)
 
 
 @router.put("/admin/catalog/{entry_id}", response_model=CatalogEntryResponse)
@@ -807,20 +854,9 @@ def admin_update_catalog_entry(
         cost_per_call=Decimal(str(body.cost_per_call)) if body.cost_per_call else None,
         platform_markup=Decimal(str(body.platform_markup)),
         entry_id=entry_id,
+        pricing_rules=body.pricing_rules,
     )
-    return {
-        "id": entry.id,
-        "provider": entry.provider,
-        "model": entry.model,
-        "operation": entry.operation,
-        "cost_per_input_token": float(entry.cost_per_input_token) if entry.cost_per_input_token else None,
-        "cost_per_output_token": float(entry.cost_per_output_token) if entry.cost_per_output_token else None,
-        "cost_per_call": float(entry.cost_per_call) if entry.cost_per_call else None,
-        "platform_markup": float(entry.platform_markup),
-        "is_active": entry.is_active,
-        "created_at": entry.created_at.isoformat(),
-        "updated_at": entry.updated_at.isoformat(),
-    }
+    return _serialize_catalog_entry(entry)
 
 
 @router.delete("/admin/catalog/{entry_id}")

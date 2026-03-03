@@ -53,6 +53,20 @@ FAL_MODEL_CONFIG = {
         "supports_steps_guidance": False,
         "default_safety_tolerance": "4",
     },
+    "nano-banana-2": {
+        "generation_base_endpoint": "fal-ai/nano-banana-2",
+        "uses_resolution_aspect": True,
+        "supports_lora": False,
+        "supports_steps_guidance": False,
+        "default_safety_tolerance": "4",
+    },
+    "flux-2-pro": {
+        "generation_base_endpoint": "fal-ai/flux-2-pro",
+        "supports_lora": False,
+        "supports_steps_guidance": False,
+        "uses_image_size_presets": True,
+        "default_safety_tolerance": "2",
+    },
 }
 
 
@@ -237,6 +251,7 @@ class FalGenerator(BaseGenerator):
         aspect_ratio: str | None = None,
         safety_tolerance: str | None = None,
         enable_web_search: bool | None = None,
+        image_size: str | None = None,
     ) -> GenerationResult:
         """Generate an image via fal.ai.
 
@@ -265,6 +280,23 @@ class FalGenerator(BaseGenerator):
                 arguments["enable_web_search"] = enable_web_search
             if seed is not None:
                 arguments["seed"] = seed
+        elif self.config.get("uses_image_size_presets"):
+            # Image-size-preset model (e.g. flux-2-pro) — no LoRA, no steps/guidance
+            endpoint = self.config["generation_base_endpoint"]
+            arguments = {
+                "prompt": prompt,
+                "output_format": "png",
+            }
+            if image_size:
+                # Named preset (e.g. "square_hd", "landscape_4_3")
+                arguments["image_size"] = image_size
+            else:
+                # Custom size — send width/height object
+                arguments["image_size"] = {"width": width, "height": height}
+            if safety_tolerance is not None:
+                arguments["safety_tolerance"] = safety_tolerance
+            if seed is not None:
+                arguments["seed"] = seed
         elif loras:
             endpoint = self.config["generation_lora_endpoint"]
             arguments = {
@@ -283,11 +315,14 @@ class FalGenerator(BaseGenerator):
             arguments = {
                 "prompt": prompt,
                 "image_size": {"width": width, "height": height},
-                "num_inference_steps": num_inference_steps,
-                "guidance_scale": guidance_scale,
                 "output_format": "png",
-                "enable_safety_checker": False,
             }
+            if self.config.get("supports_steps_guidance", True):
+                arguments["num_inference_steps"] = num_inference_steps
+                arguments["guidance_scale"] = guidance_scale
+                arguments["enable_safety_checker"] = False
+            if safety_tolerance is not None:
+                arguments["safety_tolerance"] = safety_tolerance
             if seed is not None:
                 arguments["seed"] = seed
 
@@ -347,6 +382,19 @@ class FalGenerator(BaseGenerator):
                 extra={"seed": result_seed, "lora_count": len(loras) if loras else 0, "base_model": self.base_model, "request_id": request_id},
             )
 
+            # Build response snapshot (exclude binary image data)
+            fal_response = {k: v for k, v in result.items() if k != "images"}
+            fal_response["image_count"] = len(images)
+            fal_response["image_dimensions"] = [
+                {"width": img.get("width"), "height": img.get("height")}
+                for img in images
+            ]
+
+            # Build request snapshot (redact prompt to first 200 chars for size)
+            request_args = {**arguments}
+            if "prompt" in request_args and len(request_args["prompt"]) > 200:
+                request_args["prompt"] = request_args["prompt"][:200] + "..."
+
             return GenerationResult(
                 image_data=image_data,
                 width=result_width,
@@ -357,6 +405,8 @@ class FalGenerator(BaseGenerator):
                     "endpoint": endpoint,
                     "request_id": request_id,
                     "has_nsfw_concepts": result.get("has_nsfw_concepts", []),
+                    "request_arguments": request_args,
+                    "fal_response": fal_response,
                 },
             )
 

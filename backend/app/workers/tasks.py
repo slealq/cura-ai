@@ -1001,6 +1001,8 @@ def summarize_cluster(self, cluster_id: int, user_id: int, job_id: int | None = 
         decision = None
         if orch:
             idem_key = make_idempotency_key(user_id, get_trace_id(), "summarize", cluster_id)
+            # Build a sample of descriptions for token estimation
+            _sample_desc = "\n".join(descriptions[:5]) if descriptions else ""
             decision, is_new = orch.create_decision(
                 operation="summarize",
                 provider=_summ_provider,
@@ -1009,6 +1011,7 @@ def summarize_cluster(self, cluster_id: int, user_id: int, job_id: int | None = 
                 idempotency_key=idem_key,
                 resource_id=cluster_id,
                 job_id=job_id,
+                prompt_text=_sample_desc,
             )
             if not is_new:
                 return {"status": "skipped", "cluster_id": cluster_id}
@@ -1181,6 +1184,8 @@ def process_image_pipeline(
                 operation="tag", provider=provider or "openai", model=tagger.get_model_name(),
                 trace_id=trace_id, idempotency_key=idem_key,
                 image_id=image_id, job_id=job_id,
+                image_width=image.width, image_height=image.height,
+                prompt_text=tag_prompt,
             )
             if not is_new:
                 logger.info("Duplicate tag detected for image %s, skipping", image_id)
@@ -1217,6 +1222,8 @@ def process_image_pipeline(
                 operation="describe", provider=provider or "openai", model=describer.get_model_name(),
                 trace_id=trace_id, idempotency_key=idem_key,
                 image_id=image_id, job_id=job_id,
+                image_width=image.width, image_height=image.height,
+                prompt_text=description_prompt,
             )
             if not is_new:
                 logger.info("Duplicate describe detected for image %s, skipping", image_id)
@@ -1259,6 +1266,8 @@ def process_image_pipeline(
                 operation="embed", provider="openai", model=embedder.get_model_name(),
                 trace_id=trace_id, idempotency_key=idem_key,
                 image_id=image_id, job_id=job_id,
+                tags=tag_result.tags,
+                description=description_result.description,
             )
             if not is_new:
                 logger.info("Duplicate embed detected for image %s, skipping", image_id)

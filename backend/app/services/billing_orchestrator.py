@@ -5,14 +5,19 @@ with full request/response snapshots for end-to-end traceability.
 """
 import logging
 from datetime import datetime
-from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
 from app.models.billing import UsageRecord
 from app.models.cost_decision import CostDecision, DecisionStatus
 from app.services.billing_service import BillingService, InsufficientBalanceError, ZeroCostEstimateError
-from app.services.cost_calculator import USD_TO_SPARKS, calculate_cost, get_catalog_entry
+from app.services.cost_calculator import (
+    USD_TO_SPARKS,
+    calculate_cost,
+    estimate_operation_tokens,
+    get_catalog_entry,
+    resolve_catalog_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +51,14 @@ class BillingOrchestrator:
         request_snapshot: dict | None = None,
         estimated_input_tokens: int | None = None,
         estimated_output_tokens: int | None = None,
+        # Context for auto-resolution and token estimation
+        image_width: int | None = None,
+        image_height: int | None = None,
+        prompt_text: str | None = None,
+        tags: list[str] | None = None,
+        description: str | None = None,
+        with_lora: bool = False,
+        generation_params: dict | None = None,
     ) -> tuple[CostDecision, bool]:
         """Create a billing decision before a provider call.
 
@@ -69,11 +82,30 @@ class BillingOrchestrator:
                 )
                 return existing, False
 
+        # Resolve short model names → full catalog names
+        provider, model, operation = resolve_catalog_model(
+            provider, model, operation, with_lora=with_lora,
+        )
+
+        # Auto-estimate tokens when caller didn't provide them
+        if estimated_input_tokens is None and estimated_output_tokens is None:
+            est_in, est_out = estimate_operation_tokens(
+                provider, model, operation,
+                image_width=image_width,
+                image_height=image_height,
+                prompt_text=prompt_text,
+                tags=tags,
+                description=description,
+            )
+            if est_in is not None:
+                estimated_input_tokens = est_in
+            if est_out is not None:
+                estimated_output_tokens = est_out
+
         # Snapshot catalog pricing at decision time
         entry, match_tier = get_catalog_entry(self.db, provider, model, operation)
 
-        # Estimate cost
-        estimated_sparks = None
+        # Estimate cost via the shared estimate_sparks() function
         cost_per_input = None
         cost_per_output = None
         cost_per_call_val = None
@@ -87,16 +119,14 @@ class BillingOrchestrator:
             markup = entry.platform_markup
             billing_model = "per_call" if (entry.cost_per_call and entry.cost_per_call > 0) else "per_token"
 
-            # Rough estimate
-            est_raw = Decimal("0")
-            if cost_per_call_val and cost_per_call_val > 0:
-                est_raw += cost_per_call_val
-            if estimated_input_tokens and cost_per_input:
-                est_raw += cost_per_input * estimated_input_tokens
-            if estimated_output_tokens and cost_per_output:
-                est_raw += cost_per_output * estimated_output_tokens
-            est_charged = est_raw * (markup or Decimal("2.0"))
-            estimated_sparks = int(est_charged * USD_TO_SPARKS)
+        from app.services.cost_calculator import estimate_sparks as _est
+
+        estimated_sparks, _ = _est(
+            self.db, provider, model, operation,
+            estimated_input_tokens=estimated_input_tokens,
+            estimated_output_tokens=estimated_output_tokens,
+            generation_params=generation_params,
+        )
 
         decision = CostDecision(
             trace_id=trace_id,

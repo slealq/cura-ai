@@ -44,6 +44,7 @@ class CostCatalog(Base):
     cost_per_call: Mapped[Decimal | None] = mapped_column(
         Numeric(12, 6), nullable=True, default=0
     )
+    pricing_rules: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     platform_markup: Mapped[Decimal] = mapped_column(
         Numeric(5, 4), nullable=False, default=Decimal("2.0")
     )

@@ -25,6 +25,7 @@ import type {
   GeneratedImageListResponse,
   GenerationConfig,
   GenerationCosts,
+  GenerationEstimateResponse,
   Image,
   ImageListResponse,
   Job,
@@ -1037,6 +1038,7 @@ export const generationApi = {
     aspect_ratio?: string;
     safety_tolerance?: string;
     enable_web_search?: boolean;
+    image_size?: string;
   }): Promise<{ status: string; job_id: number; generated_image_ids: number[] }> => {
     const { data } = await api.post('/generation/generate', params);
     return data;
@@ -1290,6 +1292,19 @@ export const billingApi = {
 
   getGenerationCosts: async (): Promise<GenerationCosts> => {
     const { data } = await api.get('/billing/generation-costs');
+    return data;
+  },
+
+  estimateGenerationCost: async (params: {
+    base_model: string;
+    resolution?: string;
+    enable_web_search?: boolean;
+    width?: number;
+    height?: number;
+    image_size?: string;
+    with_lora?: boolean;
+  }): Promise<GenerationEstimateResponse> => {
+    const { data } = await api.post('/billing/generation-estimate', params);
     return data;
   },
 

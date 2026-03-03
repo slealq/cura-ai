@@ -436,17 +436,34 @@ class BillingService:
         "nano-banana-pro": {
             "without_lora": ("fal", "fal-ai/nano-banana-pro", "generate"),
         },
+        "nano-banana-2": {
+            "without_lora": ("fal", "fal-ai/nano-banana-2", "generate"),
+        },
+        "flux-2-pro": {
+            "without_lora": ("fal", "fal-ai/flux-2-pro", "generate"),
+        },
     }
 
     @staticmethod
-    def get_generation_costs(db: Session) -> dict[str, dict[str, int]]:
-        """Get per-image generation costs in sparks for each base model."""
+    def get_generation_costs(
+        db: Session,
+    ) -> dict[str, dict[str, int]]:
+        """Get per-image generation costs in sparks for each base model.
+
+        Returns a dict mapping base_model → variant → sparks.
+        For models with variable pricing, the returned value uses
+        default parameters (1K resolution, 1024×1024).
+        """
         result: dict[str, dict[str, int]] = {}
 
         for base_model, variants in BillingService.GENERATION_MODEL_MAP.items():
             costs: dict[str, int] = {}
             for variant_key, (provider, model, operation) in variants.items():
-                sparks, _ = _estimate_sparks(db, provider, model, operation)
+                # Pass default params so pricing engine uses base cost
+                sparks, _ = _estimate_sparks(
+                    db, provider, model, operation,
+                    generation_params={"resolution": "1K"},
+                )
                 costs[variant_key] = sparks
             result[base_model] = costs
 
@@ -946,6 +963,7 @@ class BillingService:
         cost_per_call: Decimal | None = None,
         platform_markup: Decimal = Decimal("2.0"),
         entry_id: int | None = None,
+        pricing_rules: dict | None = None,
     ) -> CostCatalog:
         """Create or update a cost catalog entry."""
         if entry_id:
@@ -958,6 +976,7 @@ class BillingService:
                 entry.cost_per_output_token = cost_per_output_token
                 entry.cost_per_call = cost_per_call
                 entry.platform_markup = platform_markup
+                entry.pricing_rules = pricing_rules
                 db.commit()
                 return entry
 
@@ -969,6 +988,7 @@ class BillingService:
             cost_per_output_token=cost_per_output_token,
             cost_per_call=cost_per_call,
             platform_markup=platform_markup,
+            pricing_rules=pricing_rules,
         )
         db.add(entry)
         db.commit()

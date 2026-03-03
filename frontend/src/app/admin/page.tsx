@@ -38,6 +38,7 @@ export default function AdminPage() {
     cost_per_output_token: 0,
     cost_per_call: 0,
     platform_markup: 1.0,
+    pricing_rules: '' as string,
   });
   const [activeTab, setActiveTab] = useState<'usage' | 'catalog' | 'logs' | 'operations' | 'system'>('usage');
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
@@ -156,19 +157,29 @@ export default function AdminPage() {
 
   const saveCatalogMutation = useMutation({
     mutationFn: (entry: { id?: number } & typeof catalogForm) => {
-      if (entry.id) {
-        return billingApi.adminUpdateCatalogEntry(entry.id, entry);
+      // Parse pricing_rules JSON string if provided
+      let parsedRules: Record<string, unknown> | null = null;
+      if (entry.pricing_rules && entry.pricing_rules.trim()) {
+        try {
+          parsedRules = JSON.parse(entry.pricing_rules);
+        } catch {
+          throw new Error('Invalid JSON in pricing rules');
+        }
       }
-      return billingApi.adminCreateCatalogEntry(entry);
+      const payload = { ...entry, pricing_rules: parsedRules };
+      if (entry.id) {
+        return billingApi.adminUpdateCatalogEntry(entry.id, payload);
+      }
+      return billingApi.adminCreateCatalogEntry(payload);
     },
     onSuccess: () => {
       toast.success('Catalog entry saved');
       queryClient.invalidateQueries({ queryKey: ['billing', 'admin', 'catalog'] });
       setShowCatalogForm(false);
       setEditingEntry(null);
-      setCatalogForm({ provider: '', model: '', operation: '', cost_per_input_token: 0, cost_per_output_token: 0, cost_per_call: 0, platform_markup: 1.0 });
+      setCatalogForm({ provider: '', model: '', operation: '', cost_per_input_token: 0, cost_per_output_token: 0, cost_per_call: 0, platform_markup: 1.0, pricing_rules: '' });
     },
-    onError: () => toast.error('Failed to save catalog entry'),
+    onError: (e) => toast.error(e instanceof Error ? e.message : 'Failed to save catalog entry'),
   });
 
   const deleteCatalogMutation = useMutation({
@@ -891,7 +902,7 @@ export default function AdminPage() {
           <button
             onClick={() => {
               setEditingEntry(null);
-              setCatalogForm({ provider: '', model: '', operation: '', cost_per_input_token: 0, cost_per_output_token: 0, cost_per_call: 0, platform_markup: 1.0 });
+              setCatalogForm({ provider: '', model: '', operation: '', cost_per_input_token: 0, cost_per_output_token: 0, cost_per_call: 0, platform_markup: 1.0, pricing_rules: '' });
               setShowCatalogForm(true);
             }}
             className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
@@ -1015,6 +1026,7 @@ export default function AdminPage() {
                             </td>
                             <td className="text-right px-4 py-2.5 font-mono text-xs">
                               ${entry.cost_per_call?.toFixed(4) ?? '0'}/call
+                              {entry.pricing_rules && <span className="ml-1 text-[10px] text-amber-600 dark:text-amber-400" title={JSON.stringify(entry.pricing_rules)}>VAR</span>}
                             </td>
                             <td className="text-right px-4 py-2.5 text-xs">{entry.platform_markup}x</td>
                             <td className="text-right px-4 py-2.5">
@@ -1030,6 +1042,7 @@ export default function AdminPage() {
                                       cost_per_output_token: entry.cost_per_output_token || 0,
                                       cost_per_call: entry.cost_per_call || 0,
                                       platform_markup: entry.platform_markup,
+                                      pricing_rules: entry.pricing_rules ? JSON.stringify(entry.pricing_rules, null, 2) : '',
                                     });
                                     setShowCatalogForm(true);
                                   }}
@@ -1135,6 +1148,17 @@ export default function AdminPage() {
                     className="w-full mt-1 px-2 py-1.5 bg-background border rounded-md text-sm"
                   />
                 </div>
+              </div>
+              <div>
+                <label className="text-xs font-medium">Pricing Rules (JSON, optional)</label>
+                <textarea
+                  value={catalogForm.pricing_rules}
+                  onChange={(e) => setCatalogForm({ ...catalogForm, pricing_rules: e.target.value })}
+                  placeholder='{"pricing_type":"flat_with_modifiers","base_cost":0.15,...}'
+                  rows={4}
+                  className="w-full mt-1 px-2 py-1.5 bg-background border rounded-md text-sm font-mono"
+                />
+                {catalogForm.pricing_rules && (() => { try { JSON.parse(catalogForm.pricing_rules); return null; } catch { return <p className="text-xs text-red-500 mt-1">Invalid JSON</p>; } })()}
               </div>
               <div className="flex gap-2 justify-end">
                 <button onClick={() => setShowCatalogForm(false)} className="px-4 py-2 text-sm border rounded-md">
