@@ -12,6 +12,7 @@ def get_sentry_init_kwargs():
     Caller is responsible for providing dsn, environment, and
     traces_sample_rate — this returns the logging-related config.
     """
+    from sentry_sdk.integrations.celery import CeleryIntegration
     from sentry_sdk.integrations.logging import LoggingIntegration
 
     return {
@@ -23,6 +24,15 @@ def get_sentry_init_kwargs():
                 level=logging.INFO,
                 event_level=logging.ERROR,
                 sentry_logs_level=logging.INFO,
+            ),
+            # CeleryIntegration with propagate_traces injects sentry-trace
+            # headers into Celery messages for API → worker trace linking.
+            # OTel CeleryInstrumentor (otel.py) creates producer-side spans;
+            # worker-side trace continuation is handled manually in celery_app.py
+            # via task_prerun/task_postrun signals.
+            CeleryIntegration(
+                propagate_traces=True,
+                monitor_beat_tasks=True,
             ),
         ],
     }

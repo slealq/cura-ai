@@ -3,7 +3,7 @@ import logging
 import ssl
 
 from celery import Celery
-from celery.signals import setup_logging, worker_ready
+from celery.signals import setup_logging, worker_process_init, worker_ready
 
 from app.core.config import get_settings
 
@@ -108,9 +108,61 @@ celery_app.conf.update(
 )
 
 
-@worker_ready.connect
-def init_sentry_on_worker(sender, **kwargs):
-    """Initialize Sentry SDK in each Celery worker from DB-stored DSN."""
+# CeleryIntegration (configured in sentry_config.py with propagate_traces=True)
+# automatically creates a consumer-side transaction via its _wrap_tracer function:
+#   1. Extracts sentry-trace/baggage headers from the Celery message
+#   2. Calls continue_trace() to link to the API request trace
+#   3. Wraps task execution in start_transaction(op="queue.task.celery")
+# Sentry-native integrations (sqlalchemy, redis, httpx) create child spans
+# for DB queries, cache ops, and HTTP calls automatically.
+
+
+def _rebuild_celery_tracer_cache():
+    """Rebuild Celery's task.__trace__ cache with the Sentry-patched build_tracer.
+
+    In prefork pool, Celery's process_initializer builds and caches tracer
+    functions for all tasks BEFORE firing worker_process_init. Since we defer
+    sentry_sdk.init() to that signal (DSN is stored in DB, not env vars),
+    CeleryIntegration's _patch_build_tracer replaces build_tracer too late —
+    the cache already has un-wrapped tracers. This function rebuilds the cache
+    so _wrap_tracer creates queue.task.celery transactions on the consumer side.
+    """
+    try:
+        import celery.app.trace as celery_trace
+        from celery import current_app
+
+        if "sentry" not in str(celery_trace.build_tracer):
+            logger.warning("build_tracer not patched by Sentry — skipping cache rebuild")
+            return
+
+        hostname = celery_trace._localized[2] if celery_trace._localized else None
+        rebuilt = 0
+        for name, task in current_app.tasks.items():
+            task.__trace__ = celery_trace.build_tracer(
+                name, task, current_app.loader, hostname, app=current_app,
+            )
+            rebuilt += 1
+
+        logger.info(f"Rebuilt Celery tracer cache for {rebuilt} tasks (Sentry-wrapped)")
+    except Exception as e:
+        logger.warning(f"Failed to rebuild Celery tracer cache: {e}")
+
+
+_sentry_initialized = False
+
+
+def _init_sentry_and_otel():
+    """Initialize Sentry SDK + OTel in the current process.
+
+    Must run in the process where tasks actually execute. For prefork pool
+    that's each child process (worker_process_init signal). For solo pool
+    it's the main process (worker_ready signal).
+    """
+    global _sentry_initialized
+    if _sentry_initialized:
+        return
+    _sentry_initialized = True
+
     try:
         from app.db.base import SessionLocal
         from app.models.api_key import APIKey
@@ -140,11 +192,36 @@ def init_sentry_on_worker(sender, **kwargs):
         )
         logger.info("Sentry SDK initialized in Celery worker (logs enabled)")
 
+        # Rebuild Celery's tracer cache so it uses the Sentry-patched build_tracer.
+        # In prefork pool, process_initializer builds task.__trace__ for ALL tasks
+        # BEFORE firing worker_process_init. By the time sentry_sdk.init() patches
+        # build_tracer, the cache already has un-wrapped tracers. Rebuilding here
+        # ensures _wrap_tracer creates queue.task.celery transactions.
+        _rebuild_celery_tracer_cache()
+
         # Initialize OpenTelemetry (must be after Sentry so spans export to Sentry)
         from app.core.otel import configure_otel
         configure_otel("cura-worker")
     except Exception as e:
         logger.warning(f"Failed to initialize Sentry/OTel in worker: {e}")
+
+
+@worker_process_init.connect
+def init_sentry_in_child_process(**kwargs):
+    """Initialize Sentry + OTel in each prefork child process.
+
+    worker_process_init fires in each child process of the prefork pool,
+    which is where tasks actually execute. Without this, sentry_sdk.init()
+    only runs in the main process (via worker_ready) AFTER forking, so
+    child processes have no CeleryIntegration and trace propagation breaks.
+    """
+    _init_sentry_and_otel()
+
+
+@worker_ready.connect
+def init_sentry_on_worker(sender, **kwargs):
+    """Fallback: initialize Sentry in the main process for solo/threads pool."""
+    _init_sentry_and_otel()
 
 
 @worker_ready.connect

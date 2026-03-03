@@ -39,6 +39,8 @@ dependencies = [
     "opentelemetry-instrumentation-sqlalchemy>=0.41b0",
     "opentelemetry-instrumentation-redis>=0.41b0",
     "opentelemetry-instrumentation-celery>=0.41b0",
+    "opentelemetry-instrumentation-httpx>=0.41b0",
+    "opentelemetry-instrumentation-requests>=0.41b0",
 ]
 
 [project.optional-dependencies]

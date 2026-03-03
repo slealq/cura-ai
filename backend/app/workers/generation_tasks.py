@@ -92,8 +92,9 @@ def _init_task_context(user_id, job_id=None, trace_id=None, session_id=None):
         init_trace()
     if session_id:
         set_session_id(session_id)
-    # Tag Sentry scope so the worker transaction is searchable by our custom
-    # trace_id (which differs from the OTel W3C trace ID).
+
+    # Sentry trace continuation is handled by _start_worker_trace in
+    # celery_app.py (task_prerun signal). Here we just set Sentry tags.
     try:
         import sentry_sdk
         sentry_sdk.set_tag("app.trace_id", get_trace_id())
