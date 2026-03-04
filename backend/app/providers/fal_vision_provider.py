@@ -33,17 +33,36 @@ DEFAULT_FAL_VISION_MODEL = "x-ai/grok-4-fast"
 _VISION_POLL_INTERVAL = 1.0
 
 
+def _sanitize_for_log(arguments: dict) -> dict:
+    """Return a copy of arguments with base64 data URIs replaced by size placeholders."""
+    sanitized = {}
+    for k, v in arguments.items():
+        if k == "image_urls" and isinstance(v, list):
+            sanitized[k] = [
+                f"<data_uri:{len(url)}chars>" if url.startswith("data:") else url
+                for url in v
+            ]
+        elif isinstance(v, str) and v.startswith("data:") and len(v) > 200:
+            sanitized[k] = f"<data_uri:{len(v)}chars>"
+        else:
+            sanitized[k] = v
+    return sanitized
+
+
 def _fal_submit_and_poll(endpoint: str, arguments: dict, poll_interval: float = _VISION_POLL_INTERVAL) -> dict:
     """Submit a fal.ai request and poll for completion at a sane interval."""
     from fal_client.client import Completed
 
+    logger.info("FAL REQUEST | endpoint=%s args=%s", endpoint, _sanitize_for_log(arguments))
     handle = fal_client.submit(endpoint, arguments=arguments)
     while True:
         status = handle.status(with_logs=False)
         if isinstance(status, Completed):
             break
         time.sleep(poll_interval)
-    return handle.get()
+    result = handle.get()
+    logger.info("FAL RESPONSE | endpoint=%s request_id=%s result=%s", endpoint, handle.request_id, result)
+    return result
 
 
 def _extract_json(text: str) -> dict:
