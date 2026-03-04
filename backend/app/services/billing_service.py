@@ -1,6 +1,5 @@
 """Service for credit balance management and usage tracking."""
 import logging
-import math
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -76,8 +75,8 @@ class BillingService:
             balance = UserBalance(
                 user_id=self.user_id,
                 balance=Decimal("0"),
-                balance_sparks=0,
-                reserved_sparks=0,
+                balance_sparks=Decimal("0"),
+                reserved_sparks=Decimal("0"),
                 currency="credits",
             )
             self.db.add(balance)
@@ -85,16 +84,16 @@ class BillingService:
             self.db.refresh(balance)
         return balance
 
-    def get_balance(self) -> int:
-        """Get current credit balance in integer sparks."""
+    def get_balance(self) -> Decimal:
+        """Get current credit balance in sparks."""
         return self._get_or_create_balance().balance_sparks
 
-    def get_available_balance(self) -> int:
-        """Get available balance (balance - reserved) in integer sparks."""
+    def get_available_balance(self) -> Decimal:
+        """Get available balance (balance - reserved) in sparks."""
         bal = self._get_or_create_balance()
         return bal.balance_sparks - bal.reserved_sparks
 
-    def get_reserved(self) -> int:
+    def get_reserved(self) -> Decimal:
         """Get total reserved sparks."""
         return self._get_or_create_balance().reserved_sparks
 
@@ -111,7 +110,7 @@ class BillingService:
 
     # --- Reservation methods ---
 
-    def reserve_sparks(self, amount: int, decision_id: int | None = None) -> bool:
+    def reserve_sparks(self, amount: int | Decimal, decision_id: int | None = None) -> bool:
         """Atomically reserve sparks for an upcoming operation.
 
         Uses UPDATE ... WHERE to ensure (balance_sparks - reserved_sparks) >= amount.
@@ -138,17 +137,17 @@ class BillingService:
 
         self.db.flush()
         logger.info(
-            "RESERVE | user=%s amount=%d decision=%s",
+            "RESERVE | user=%s amount=%s decision=%s",
             self.user_id, amount, decision_id,
         )
         if sentry_sdk:
             sentry_sdk.add_breadcrumb(
                 category="billing", message="reserved",
-                data={"user_id": self.user_id, "amount": amount, "decision_id": decision_id},
+                data={"user_id": self.user_id, "amount": float(amount), "decision_id": decision_id},
             )
         return True
 
-    def release_reservation(self, amount: int) -> None:
+    def release_reservation(self, amount: int | Decimal) -> None:
         """Release a reservation, clamping reserved_sparks to 0 floor."""
         if not amount or amount <= 0:
             return
@@ -165,16 +164,16 @@ class BillingService:
         )
         self.db.flush()
         logger.info(
-            "RELEASE_RESERVATION | user=%s amount=%d", self.user_id, amount,
+            "RELEASE_RESERVATION | user=%s amount=%s", self.user_id, amount,
         )
         if sentry_sdk:
             sentry_sdk.add_breadcrumb(
                 category="billing", message="reservation_released",
-                data={"user_id": self.user_id, "amount": amount},
+                data={"user_id": self.user_id, "amount": float(amount)},
             )
 
     def release_and_debit(
-        self, reserved_amount: int, actual_amount: Decimal, description: str,
+        self, reserved_amount: int | Decimal, actual_amount: Decimal, description: str,
         usage_record_id: int | None = None,
     ) -> None:
         """Release reservation then debit actual cost in one transaction."""
@@ -198,13 +197,13 @@ class BillingService:
         """Add credits to user balance. Returns the transaction."""
         balance = self._get_or_create_balance()
         balance.balance += amount
-        balance.balance_sparks += int(amount)
+        balance.balance_sparks += amount
         self.db.flush()
 
         txn = BalanceTransaction(
             user_id=self.user_id,
             amount=amount,
-            amount_sparks=int(amount),
+            amount_sparks=amount,
             transaction_type=TransactionType.CREDIT,
             description=description,
             created_by=created_by,
@@ -228,7 +227,6 @@ class BillingService:
         self._get_or_create_balance()
 
         # Atomic: only debit if balance >= amount (dual-write both columns)
-        int_amount = int(amount)
         rows_updated = (
             self.db.query(UserBalance)
             .filter(
@@ -238,7 +236,7 @@ class BillingService:
             .update(
                 {
                     UserBalance.balance: UserBalance.balance - amount,
-                    UserBalance.balance_sparks: UserBalance.balance_sparks - int_amount,
+                    UserBalance.balance_sparks: UserBalance.balance_sparks - amount,
                 },
                 synchronize_session="fetch",
             )
@@ -256,7 +254,7 @@ class BillingService:
         txn = BalanceTransaction(
             user_id=self.user_id,
             amount=-amount,
-            amount_sparks=-int_amount,
+            amount_sparks=-amount,
             transaction_type=TransactionType.DEBIT,
             description=description,
             reference_id=usage_record_id,
@@ -289,7 +287,7 @@ class BillingService:
         if sentry_sdk:
             sentry_sdk.add_breadcrumb(
                 category="billing", message="charged",
-                data={"user_id": self.user_id, "amount": int_amount,
+                data={"user_id": self.user_id, "amount": float(amount),
                       "usage_record_id": usage_record_id},
             )
         return txn
@@ -445,18 +443,18 @@ class BillingService:
 
         records = query.all()
 
-        total_cost = 0
-        by_operation: dict[str, int] = {}
-        by_provider: dict[str, int] = {}
+        total_cost = Decimal("0")
+        by_operation: dict[str, Decimal] = {}
+        by_provider: dict[str, Decimal] = {}
         op_counts: dict[str, int] = {}
 
         for r in records:
-            sparks = r.delta_sparks if r.delta_sparks is not None else math.ceil(r.charged_cost * USD_TO_SPARKS)
+            sparks = r.delta_sparks if r.delta_sparks is not None else (r.charged_cost * USD_TO_SPARKS).quantize(Decimal("0.01"))
             total_cost += sparks
             op_key = r.operation
-            by_operation[op_key] = by_operation.get(op_key, 0) + sparks
+            by_operation[op_key] = by_operation.get(op_key, Decimal("0")) + sparks
             op_counts[op_key] = op_counts.get(op_key, 0) + 1
-            by_provider[r.provider] = by_provider.get(r.provider, 0) + sparks
+            by_provider[r.provider] = by_provider.get(r.provider, Decimal("0")) + sparks
 
         by_operation_detail = [
             {
@@ -481,29 +479,29 @@ class BillingService:
     @staticmethod
     def get_generation_costs(
         db: Session,
-    ) -> dict[str, dict[str, int]]:
+    ) -> dict[str, dict[str, float]]:
         """Get per-image generation costs in sparks for each base model.
 
-        Returns a dict mapping base_model → variant → sparks.
+        Returns a dict mapping base_model → variant → sparks (fractional).
         For models with variable pricing, the returned value uses
         default parameters (1K resolution, 1024×1024).
         """
         from app.services.model_registry import generation_model_variants
 
-        result: dict[str, dict[str, int]] = {}
+        result: dict[str, dict[str, float]] = {}
         for base_model, variants in generation_model_variants().items():
-            costs: dict[str, int] = {}
+            costs: dict[str, float] = {}
             for variant_key, (provider, model, operation) in variants.items():
                 sparks, _ = _estimate_sparks(
                     db, provider, model, operation,
                     generation_params={"resolution": "1K"},
                 )
-                costs[variant_key] = sparks
+                costs[variant_key] = float(sparks)
             result[base_model] = costs
         return result
 
     @staticmethod
-    def get_edit_costs(db: Session) -> dict[str, int]:
+    def get_edit_costs(db: Session) -> dict[str, float]:
         """Get per-call edit costs in sparks for each edit model.
 
         Uses flat cost_per_call from catalog — approximate for typical resolutions.
@@ -512,21 +510,21 @@ class BillingService:
         """
         from app.services.model_registry import flat_model_map
 
-        result: dict[str, int] = {}
+        result: dict[str, float] = {}
         for edit_model, (provider, model, operation) in flat_model_map("edit").items():
             sparks, _ = _estimate_sparks(db, provider, model, operation)
-            result[edit_model] = sparks
+            result[edit_model] = float(sparks)
         return result
 
     @staticmethod
-    def get_training_costs(db: Session) -> dict[str, int]:
+    def get_training_costs(db: Session) -> dict[str, float]:
         """Get per-job training costs in sparks for each base model."""
         from app.services.model_registry import flat_model_map
 
-        result: dict[str, int] = {}
+        result: dict[str, float] = {}
         for base_model, (provider, model, operation) in flat_model_map("train").items():
             sparks, _ = _estimate_sparks(db, provider, model, operation)
-            result[base_model] = sparks
+            result[base_model] = float(sparks)
         return result
 
     # --- Reconciliation & Metrics ---
@@ -841,20 +839,20 @@ class BillingService:
 
         return {
             "breakdown": {
-                "generate_per_image": generate_sparks,
-                "describe_per_image": describe_sparks,
-                "embed_per_image": embed_sparks,
-                "vision_eval_per_image": vision_eval_sparks,
-                "creative_prompts": creative_prompts_sparks,
-                "assessment": assessment_sparks,
-                "per_reference_pair": per_ref,
-                "per_creative_pair": per_creative,
+                "generate_per_image": float(generate_sparks),
+                "describe_per_image": float(describe_sparks),
+                "embed_per_image": float(embed_sparks),
+                "vision_eval_per_image": float(vision_eval_sparks),
+                "creative_prompts": float(creative_prompts_sparks),
+                "assessment": float(assessment_sparks),
+                "per_reference_pair": float(per_ref),
+                "per_creative_pair": float(per_creative),
             },
             "totals": {
-                "reference": total_ref,
-                "creative": total_creative,
-                "overhead": creative_prompts_sparks + assessment_sparks,
-                "total": total,
+                "reference": float(total_ref),
+                "creative": float(total_creative),
+                "overhead": float(creative_prompts_sparks + assessment_sparks),
+                "total": float(total),
             },
             "params": {
                 "base_model": base_model,
@@ -906,9 +904,9 @@ class BillingService:
         total = per_cluster * cluster_count
 
         return {
-            "per_cluster": per_cluster,
+            "per_cluster": float(per_cluster),
             "cluster_count": cluster_count,
-            "total": total,
+            "total": float(total),
             "provider": f"{lang_provider}/{lang_model}",
             "estimated_input_tokens": input_tokens,
             "estimated_output_tokens": output_tokens,
@@ -1051,7 +1049,7 @@ class BillingService:
             .group_by(UsageRecord.user_id)
             .all()
         )
-        spent_map = {r.user_id: {"total_spent": math.ceil((r.total_spent or 0) * USD_TO_SPARKS), "last_activity": r.last_activity} for r in spent_query}
+        spent_map = {r.user_id: {"total_spent": int(round((r.total_spent or 0) * USD_TO_SPARKS)), "last_activity": r.last_activity} for r in spent_query}
 
         output = []
         for user, balance in results:
@@ -1094,7 +1092,7 @@ class BillingService:
 
         for r in records:
             total_raw += r.raw_cost
-            sparks = r.delta_sparks if r.delta_sparks is not None else math.ceil(r.charged_cost * USD_TO_SPARKS)
+            sparks = r.delta_sparks if r.delta_sparks is not None else (r.charged_cost * USD_TO_SPARKS).quantize(Decimal("0.01"))
             total_charged += sparks
             by_provider[r.provider] = by_provider.get(r.provider, 0) + sparks
             by_operation[r.operation] = by_operation.get(r.operation, 0) + sparks
@@ -1242,7 +1240,7 @@ def finalize_job_billing(
     job = db.query(Job).filter(Job.id == job_id).first()
     if job:
         job.charged_cost = total_sparks
-        job.charged_sparks = int(total_sparks)
+        job.charged_sparks = total_sparks
         db.commit()
 
     logger.info(

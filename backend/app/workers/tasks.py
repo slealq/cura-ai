@@ -1198,11 +1198,14 @@ def process_image_pipeline(
                 _emb_prov, _emb_model, _emb_op,
             )
 
+            import math as _math
+
             tag_sparks, _ = _estimate_sparks(db, _tag_prov, _tag_model, _tag_op, tag_in, tag_out)
             desc_sparks, _ = _estimate_sparks(db, _desc_prov, _desc_model, _desc_op, desc_in, desc_out)
             emb_sparks, _ = _estimate_sparks(db, _emb_prov, _emb_model, _emb_op, emb_in, emb_out)
 
-            total_est = (tag_sparks or 0) + (desc_sparks or 0) + (emb_sparks or 0)
+            total_est_dec = (tag_sparks or 0) + (desc_sparks or 0) + (emb_sparks or 0)
+            total_est = int(_math.ceil(total_est_dec))
             if total_est > 0:
                 svc = BillingService(db, user_id)
                 if not svc.reserve_sparks(total_est):

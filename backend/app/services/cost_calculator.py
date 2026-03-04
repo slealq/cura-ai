@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import math
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
@@ -81,17 +80,21 @@ def estimate_sparks(
     estimated_input_tokens: int | None = None,
     estimated_output_tokens: int | None = None,
     generation_params: dict | None = None,
-) -> tuple[int, CostCatalog | None]:
-    """Estimate cost in integer sparks. Used by all estimate endpoints.
+) -> tuple[Decimal, CostCatalog | None]:
+    """Estimate cost in fractional sparks. Used by all estimate endpoints.
 
     When the catalog entry has ``pricing_rules`` and ``generation_params``
     is provided, delegates to the pricing rule engine for variable pricing.
 
-    Returns (sparks, catalog_entry).
+    Returns (sparks_decimal, catalog_entry).  Sparks are fractional
+    (quantised to 2 dp).  Callers that need integer sparks (reservations,
+    balance debits) should apply ``int(math.ceil(...))`` themselves.
     """
+    _q2 = Decimal("0.01")
+
     entry, _ = get_catalog_entry(db, provider, model, operation)
     if not entry:
-        return 0, None
+        return Decimal("0"), None
 
     # Variable pricing via Python pricing engine
     if generation_params is not None:
@@ -99,7 +102,7 @@ def estimate_sparks(
 
         raw_cost = compute_raw_cost(provider, model, operation, generation_params)
         if raw_cost is not None:
-            sparks = math.ceil(raw_cost * entry.platform_markup * USD_TO_SPARKS)
+            sparks = (Decimal(str(raw_cost)) * entry.platform_markup * USD_TO_SPARKS).quantize(_q2)
             return sparks, entry
 
     raw = Decimal("0")
@@ -111,7 +114,7 @@ def estimate_sparks(
         raw += entry.cost_per_output_token * estimated_output_tokens
 
     charged = raw * entry.platform_markup
-    sparks = math.ceil(charged * USD_TO_SPARKS)
+    sparks = (charged * USD_TO_SPARKS).quantize(_q2)
     return sparks, entry
 
 

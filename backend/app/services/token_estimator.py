@@ -200,9 +200,11 @@ def _grok_image_tokens(width: int, height: int) -> int:
     """Grok (xAI) image token estimation.
 
     xAI documents 256–1792 tokens per image with no public formula.
-    Approximate using Anthropic-style pixels/750 clamped to the documented range.
+    Empirical data shows ~668-739 input tokens for typical images via OpenRouter,
+    suggesting aggressive resizing. Approximate as pixels/1600 clamped to
+    the documented range.
     """
-    tokens = max(1, (width * height) // 750)
+    tokens = max(1, (width * height) // 1600)
     return max(256, min(1792, tokens))
 
 

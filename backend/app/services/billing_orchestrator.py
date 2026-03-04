@@ -4,8 +4,8 @@ Every billable operation gets a CostDecision record BEFORE the provider call,
 with full request/response snapshots for end-to-end traceability.
 """
 import logging
-import math
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
@@ -198,10 +198,11 @@ class BillingOrchestrator:
         # Reserve estimated sparks to prevent concurrent overspend.
         # When skip_reservation is True (pipeline sub-operations), the caller
         # already holds a combined reservation — skip per-decision reserve.
-        reserved = 0
-        if not skip_reservation and estimated_sparks and estimated_sparks > 0:
+        reserved = Decimal("0")
+        reserve_amount = estimated_sparks if estimated_sparks else Decimal("0")
+        if not skip_reservation and reserve_amount > 0:
             svc = BillingService(self.db, self.user_id)
-            if not svc.reserve_sparks(estimated_sparks, decision.id):
+            if not svc.reserve_sparks(reserve_amount, decision.id):
                 decision.status = DecisionStatus.FAILED.value
                 decision.error_message = "Insufficient balance for reservation"
                 self.db.commit()
@@ -209,20 +210,20 @@ class BillingOrchestrator:
                     sentry_sdk.add_breadcrumb(
                         category="billing", message="reservation_failed_insufficient",
                         level="warning",
-                        data={"decision_id": decision.id, "estimated_sparks": estimated_sparks},
+                        data={"decision_id": decision.id, "estimated_sparks": float(estimated_sparks)},
                     )
                 raise InsufficientBalanceError(
                     f"User {self.user_id} has insufficient credits "
                     f"(need ~{estimated_sparks} sparks)"
                 )
-            reserved = estimated_sparks
+            reserved = reserve_amount
 
         decision.reserved_sparks = reserved
         self.db.commit()
 
         logger.info(
             "ORCH decision | id=%s op=%s %s/%s trace=%s est_sparks=%s reserved=%s",
-            decision.id, operation, provider, model, trace_id, estimated_sparks, reserved,
+            decision.id, operation, provider, model, trace_id, float(estimated_sparks), reserved,
         )
         if sentry_sdk:
             sentry_sdk.add_breadcrumb(
@@ -230,7 +231,7 @@ class BillingOrchestrator:
                 data={
                     "decision_id": decision.id, "operation": operation,
                     "provider": provider, "model": model,
-                    "estimated_sparks": estimated_sparks, "trace_id": trace_id,
+                    "estimated_sparks": float(estimated_sparks), "trace_id": trace_id,
                 },
             )
 
@@ -299,7 +300,7 @@ class BillingOrchestrator:
             provider_cost=provider_cost,
         )
 
-        sparks = math.ceil(charged_cost * USD_TO_SPARKS)
+        sparks = (charged_cost * USD_TO_SPARKS).quantize(Decimal("0.01"))
 
         # Post-guard: log ERROR if actual cost resolved to zero (provider already called)
         if sparks <= 0:
@@ -401,7 +402,7 @@ class BillingOrchestrator:
         # Estimate vs actual delta (percentage)
         est = decision.estimated_sparks
         if est and est > 0 and sparks > 0:
-            delta_pct = abs(sparks - est) / est * 100
+            delta_pct = float(abs(sparks - est) / est * 100)
             _bm.estimate_delta_pct.record(delta_pct, _attrs)
 
         return record

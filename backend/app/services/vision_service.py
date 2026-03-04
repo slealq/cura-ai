@@ -30,7 +30,7 @@ class VisionService:
         source_generated_id: int | None = None,
         source_object_key: str | None = None,
         charged_cost: Decimal | None = None,
-        charged_sparks: int | None = None,
+        charged_sparks: Decimal | None = None,
     ) -> VisionResult:
         """Persist a vision analysis result."""
         result = VisionResult(

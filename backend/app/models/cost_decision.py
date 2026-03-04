@@ -51,7 +51,7 @@ class CostDecision(Base):
 
     estimated_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     estimated_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    estimated_sparks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    estimated_sparks: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
 
     cost_per_input_token: Mapped[Decimal | None] = mapped_column(
         Numeric(20, 12), nullable=True
@@ -76,7 +76,7 @@ class CostDecision(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    reserved_sparks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reserved_sparks: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     idempotency_key: Mapped[str | None] = mapped_column(String(256), nullable=True, unique=True)
 
     created_at: Mapped[datetime] = mapped_column(

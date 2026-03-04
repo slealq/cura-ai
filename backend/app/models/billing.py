@@ -84,7 +84,7 @@ class UsageRecord(Base):
         Integer, ForeignKey("cost_decisions.id", ondelete="SET NULL"), nullable=True
     )
     provider_request_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    delta_sparks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    delta_sparks: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     delta_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
@@ -109,8 +109,8 @@ class UserBalance(Base):
     balance: Mapped[Decimal] = mapped_column(
         Numeric(12, 4), nullable=False, default=Decimal("0")
     )
-    balance_sparks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    reserved_sparks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    balance_sparks: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=Decimal("0"))
+    reserved_sparks: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=Decimal("0"))
     currency: Mapped[str] = mapped_column(String(16), nullable=False, default="credits")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
@@ -127,7 +127,7 @@ class BalanceTransaction(Base):
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
-    amount_sparks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    amount_sparks: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=Decimal("0"))
     transaction_type: Mapped[TransactionType] = mapped_column(
         Enum(TransactionType, values_callable=lambda x: [e.value for e in x]),
         nullable=False,

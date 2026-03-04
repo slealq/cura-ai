@@ -302,7 +302,7 @@ function TraceDetailDrawer({
                 <div key={r.id} className="border rounded p-3 space-y-1 text-xs">
                   <div className="flex justify-between">
                     <span className="font-medium">{r.operation}</span>
-                    <span className="font-mono">{r.delta_sparks ?? Math.round(r.charged_cost * 1000)} sparks</span>
+                    <span className="font-mono">{r.delta_sparks != null ? r.delta_sparks : (r.charged_cost * 1000).toFixed(2)} sparks</span>
                   </div>
                   <div className="text-muted-foreground">{r.provider}/{r.model}</div>
                   <div className="flex gap-4">

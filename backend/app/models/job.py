@@ -79,7 +79,7 @@ class Job(Base):
 
     # Cost tracking
     charged_cost: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
-    charged_sparks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    charged_sparks: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
 
     # Logs
     logs: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)

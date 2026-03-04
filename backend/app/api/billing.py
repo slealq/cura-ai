@@ -29,15 +29,15 @@ router = APIRouter(prefix="/billing", tags=["billing"])
 # --- Pydantic schemas ---
 
 class BalanceResponse(BaseModel):
-    balance: int
-    reserved: int
-    available: int
+    balance: float
+    reserved: float
+    available: float
     currency: str
 
 
 class TransactionResponse(BaseModel):
     id: int
-    amount: int
+    amount: float
     transaction_type: str
     description: str
     reference_id: int | None
@@ -53,7 +53,7 @@ class TransactionListResponse(BaseModel):
 class OperationUsageDetail(BaseModel):
     operation: str
     count: int
-    total_sparks: int
+    total_sparks: float
     avg_sparks: float
 
 
@@ -130,8 +130,8 @@ class PlatformSummaryResponse(BaseModel):
 
 class GenerationCostsResponse(BaseModel):
     """Per-image generation cost in sparks for each base model."""
-    costs: dict[str, dict[str, int]]
-    expand_prompt_cost: int
+    costs: dict[str, dict[str, float]]
+    expand_prompt_cost: float
     variable_pricing_models: list[str] = []
 
 
@@ -148,7 +148,7 @@ class GenerationEstimateRequest(BaseModel):
 
 class GenerationEstimateResponse(BaseModel):
     """Response for dynamic generation cost estimate."""
-    estimated_sparks: int
+    estimated_sparks: float
     base_model: str
 
 
@@ -268,7 +268,7 @@ class MetricsResponse(BaseModel):
 
 
 class ScatterPoint(BaseModel):
-    estimated_sparks: int
+    estimated_sparks: float
     actual_sparks: int
     operation: str
     provider: str
@@ -291,21 +291,21 @@ class TrendResponse(BaseModel):
 
 
 class EvaluationCostBreakdown(BaseModel):
-    generate_per_image: int
-    describe_per_image: int
-    embed_per_image: int
-    vision_eval_per_image: int
-    creative_prompts: int
-    assessment: int
-    per_reference_pair: int
-    per_creative_pair: int
+    generate_per_image: float
+    describe_per_image: float
+    embed_per_image: float
+    vision_eval_per_image: float
+    creative_prompts: float
+    assessment: float
+    per_reference_pair: float
+    per_creative_pair: float
 
 
 class EvaluationCostTotals(BaseModel):
-    reference: int
-    creative: int
-    overhead: int
-    total: int
+    reference: float
+    creative: float
+    overhead: float
+    total: float
 
 
 class EvaluationCostParams(BaseModel):
@@ -329,9 +329,9 @@ class EvaluationCostsResponse(BaseModel):
 
 
 class SummarizeCostsResponse(BaseModel):
-    per_cluster: int
+    per_cluster: float
     cluster_count: int
-    total: int
+    total: float
     provider: str
     estimated_input_tokens: int
     estimated_output_tokens: int
@@ -469,12 +469,12 @@ def estimate_generation_cost(
 
 class EditCostsResponse(BaseModel):
     """Per-call edit cost in sparks by edit model."""
-    costs: dict[str, int]
+    costs: dict[str, float]
 
 
 class TrainingCostsResponse(BaseModel):
     """Per-job training cost in sparks by base model."""
-    costs: dict[str, int]
+    costs: dict[str, float]
 
 
 @router.get("/edit-costs", response_model=EditCostsResponse)
@@ -549,11 +549,11 @@ def _compute_vision_costs(
 
     # Embed cost (always OpenAI text-embedding-3-small)
     embed_tokens = estimate_embed_tokens()
-    embed_cost_sparks_int, _ = _estimate_sparks(
+    embed_cost_sparks_dec, _ = _estimate_sparks(
         db, "openai", "text-embedding-3-small", "embed",
         estimated_input_tokens=embed_tokens,
     )
-    embed_cost_sparks = float(embed_cost_sparks_int)
+    embed_cost_sparks = float(embed_cost_sparks_dec)
 
     result: dict[str, dict[str, dict[str, float]]] = {}
 
@@ -585,10 +585,10 @@ def _compute_vision_costs(
                     logger.info(
                         "ESTIMATE | %s/%s %s %dx%d | "
                         "img_tok=%d + prompt_tok=%d(%dchars) = in=%d | "
-                        "out=%d | sparks=%d",
+                        "out=%d | sparks=%.2f",
                         cat_provider, model_id, mode, width, height,
                         img_tokens, prompt_tokens, len(prompt_text), input_tokens,
-                        output_tokens, sparks_est,
+                        output_tokens, float(sparks_est),
                     )
 
             costs["embed"] = embed_cost_sparks
