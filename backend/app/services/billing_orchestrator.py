@@ -8,6 +8,7 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from app.core.otel import billing_meters as _bm
 from app.models.billing import UsageRecord
 from app.models.cost_decision import CostDecision, DecisionStatus
 from app.services.billing_service import BillingService, InsufficientBalanceError, ZeroCostEstimateError
@@ -225,6 +226,12 @@ class BillingOrchestrator:
                 },
             )
 
+        # OTel metrics
+        _attrs = {"operation": operation, "provider": provider, "model": model}
+        _bm.decision_total.add(1, _attrs)
+        if reserved > 0:
+            _bm.reservation_sparks.record(reserved, _attrs)
+
         return decision, True
 
     def record_actual(
@@ -374,6 +381,21 @@ class BillingOrchestrator:
                 },
             )
 
+        # OTel metrics
+        _attrs = {
+            "operation": decision.operation,
+            "provider": decision.provider,
+            "model": decision.model,
+        }
+        if sparks > 0:
+            _bm.charge_sparks.record(sparks, _attrs)
+
+        # Estimate vs actual delta (percentage)
+        est = decision.estimated_sparks
+        if est and est > 0 and sparks > 0:
+            delta_pct = abs(sparks - est) / est * 100
+            _bm.estimate_delta_pct.record(delta_pct, _attrs)
+
         return record
 
     def fail_decision(self, decision_id: int, error_message: str) -> None:
@@ -389,6 +411,12 @@ class BillingOrchestrator:
             decision.error_message = error_message
             decision.updated_at = datetime.utcnow()
             self.db.commit()
+
+            _bm.decision_failed.add(1, {
+                "operation": decision.operation,
+                "provider": decision.provider,
+                "model": decision.model,
+            })
             if sentry_sdk:
                 sentry_sdk.add_breadcrumb(
                     category="billing", message="decision_failed",
@@ -408,6 +436,12 @@ class BillingOrchestrator:
             decision.status = DecisionStatus.CANCELLED.value
             decision.updated_at = datetime.utcnow()
             self.db.commit()
+
+            _bm.decision_cancelled.add(1, {
+                "operation": decision.operation,
+                "provider": decision.provider,
+                "model": decision.model,
+            })
             if sentry_sdk:
                 sentry_sdk.add_breadcrumb(
                     category="billing", message="decision_cancelled",
@@ -525,5 +559,12 @@ class BillingOrchestrator:
             )
             self.db.add(anomaly)
             self.db.flush()
+
+            _bm.anomaly_total.add(1, {
+                "anomaly_type": anomaly_type,
+                "operation": operation,
+                "provider": provider,
+                "model": model,
+            })
         except Exception:
             logger.warning("Failed to create billing anomaly %s", anomaly_type, exc_info=True)

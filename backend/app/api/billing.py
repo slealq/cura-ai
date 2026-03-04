@@ -253,6 +253,7 @@ class MetricsResponse(BaseModel):
     pending_decisions: int
     avg_delta_pct: float
     catalog_miss_count: int
+    anomalies_by_type: dict[str, int] = {}
     by_operation: list[OperationMetric]
     by_provider: list[ProviderMetric]
     alerts: list[MetricAlert]

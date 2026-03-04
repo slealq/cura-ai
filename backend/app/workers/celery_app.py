@@ -98,11 +98,15 @@ celery_app.conf.update(
         },
         "cleanup-stale-reservations": {
             "task": "app.workers.tasks.cleanup_stale_reservations",
-            "schedule": 3600.0,  # once per hour
+            "schedule": 1800.0,  # every 30 minutes
         },
         "monitor-queue-health": {
             "task": "app.workers.tasks.monitor_queue_health",
-            "schedule": 60.0,  # once per minute
+            "schedule": 300.0,  # every 5 minutes
+        },
+        "reconcile-billing": {
+            "task": "app.workers.tasks.reconcile_billing",
+            "schedule": 3600.0,  # once per hour
         },
     },
 )

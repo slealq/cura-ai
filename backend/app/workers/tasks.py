@@ -1856,3 +1856,193 @@ def monitor_queue_health():
         logger.warning("monitor_queue_health failed", exc_info=True)
     finally:
         db.close()
+
+
+@celery_app.task
+def reconcile_billing():
+    """Hourly reconciliation of billing decisions.
+
+    Scans recent CostDecisions and flags anomalies:
+      - stale_decision: PENDING > 30 min with no linked UsageRecord
+      - missing_actual: EXECUTED/CHARGED but no linked UsageRecord
+      - estimate_drift: large delta between estimated_sparks and actual sparks
+      - reservation_leak: reserved_sparks > 0 on non-PENDING decisions
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import func
+
+    from app.models.billing import UsageRecord
+    from app.models.cost_decision import CostDecision, DecisionStatus
+
+    db = SessionLocal()
+    anomalies_created = 0
+    try:
+        now = datetime.utcnow()
+        # Window: look at decisions from the last 2 hours
+        window_start = now - timedelta(hours=2)
+
+        # --- 1. Stale decisions: PENDING > 30 min ---
+        stale_cutoff = now - timedelta(minutes=30)
+        stale_decisions = (
+            db.query(CostDecision)
+            .filter(
+                CostDecision.status == DecisionStatus.PENDING.value,
+                CostDecision.created_at < stale_cutoff,
+                CostDecision.created_at >= window_start,
+            )
+            .all()
+        )
+        for d in stale_decisions:
+            age_min = (now - d.created_at).total_seconds() / 60
+            _create_reconciliation_anomaly(
+                db, d, "stale_decision",
+                {"age_minutes": round(age_min, 1),
+                 "reserved_sparks": d.reserved_sparks or 0},
+            )
+            anomalies_created += 1
+
+        # --- 2. Missing actual: EXECUTED/CHARGED but no UsageRecord ---
+        settled_cutoff = now - timedelta(minutes=10)
+        settled_no_record = (
+            db.query(CostDecision)
+            .outerjoin(UsageRecord, UsageRecord.cost_decision_id == CostDecision.id)
+            .filter(
+                CostDecision.status.in_([
+                    DecisionStatus.EXECUTED.value,
+                    DecisionStatus.CHARGED.value,
+                ]),
+                CostDecision.created_at >= window_start,
+                CostDecision.created_at < settled_cutoff,
+                UsageRecord.id.is_(None),
+            )
+            .all()
+        )
+        for d in settled_no_record:
+            _create_reconciliation_anomaly(
+                db, d, "missing_actual_reconcile",
+                {"status": d.status, "age_minutes": round(
+                    (now - d.created_at).total_seconds() / 60, 1)},
+            )
+            anomalies_created += 1
+
+        # --- 3. Estimate drift: compare estimated vs actual sparks ---
+        drift_threshold_pct = 50  # flag if > 50% drift
+        recent_with_actual = (
+            db.query(CostDecision, UsageRecord)
+            .join(UsageRecord, UsageRecord.cost_decision_id == CostDecision.id)
+            .filter(
+                CostDecision.created_at >= window_start,
+                CostDecision.estimated_sparks.isnot(None),
+                CostDecision.estimated_sparks > 0,
+                UsageRecord.delta_sparks.isnot(None),
+                UsageRecord.delta_sparks > 0,
+            )
+            .all()
+        )
+        drift_count = 0
+        for d, u in recent_with_actual:
+            est = d.estimated_sparks
+            actual = u.delta_sparks
+            delta_pct = abs(actual - est) / est * 100
+            if delta_pct > drift_threshold_pct:
+                _create_reconciliation_anomaly(
+                    db, d, "estimate_drift",
+                    {"estimated_sparks": est, "actual_sparks": actual,
+                     "delta_pct": round(delta_pct, 1)},
+                )
+                anomalies_created += 1
+                drift_count += 1
+
+        # --- 4. Reservation leak: reserved > 0 on non-PENDING decisions ---
+        leaked = (
+            db.query(CostDecision)
+            .filter(
+                CostDecision.status.notin_([DecisionStatus.PENDING.value]),
+                CostDecision.reserved_sparks > 0,
+                CostDecision.created_at >= window_start,
+            )
+            .all()
+        )
+        for d in leaked:
+            _create_reconciliation_anomaly(
+                db, d, "reservation_leak",
+                {"status": d.status, "reserved_sparks": d.reserved_sparks},
+            )
+            anomalies_created += 1
+
+        db.commit()
+
+        # Summary metrics
+        total_decisions_in_window = (
+            db.query(func.count(CostDecision.id))
+            .filter(CostDecision.created_at >= window_start)
+            .scalar()
+        ) or 0
+
+        logger.info(
+            "Billing reconciliation complete: %d decisions in window, "
+            "%d anomalies created (%d stale, %d missing_actual, "
+            "%d estimate_drift, %d reservation_leak)",
+            total_decisions_in_window, anomalies_created,
+            len(stale_decisions), len(settled_no_record),
+            drift_count, len(leaked),
+        )
+
+    except Exception:
+        logger.warning("reconcile_billing failed", exc_info=True)
+        db.rollback()
+    finally:
+        db.close()
+
+
+def _create_reconciliation_anomaly(
+    db,
+    decision,
+    anomaly_type: str,
+    detail: dict,
+) -> None:
+    """Create a BillingAnomaly from reconciliation. Deduplicates by decision_id + type."""
+    from sqlalchemy import Integer as SAInteger
+    from sqlalchemy import cast
+
+    from app.core.otel import billing_meters as _bm
+    from app.models.billing import BillingAnomaly
+
+    # Deduplicate: don't re-flag the same decision for the same anomaly type.
+    existing = (
+        db.query(BillingAnomaly)
+        .filter(
+            BillingAnomaly.anomaly_type == anomaly_type,
+            cast(BillingAnomaly.detail["decision_id"], SAInteger) == decision.id,
+            BillingAnomaly.resolved.is_(False),
+        )
+        .first()
+    )
+    if existing:
+        return
+
+    detail["decision_id"] = decision.id
+    anomaly = BillingAnomaly(
+        user_id=decision.user_id,
+        anomaly_type=anomaly_type,
+        provider=decision.provider,
+        model=decision.model,
+        operation=decision.operation,
+        detail=detail,
+    )
+    db.add(anomaly)
+    db.flush()
+
+    _bm.anomaly_total.add(1, {
+        "anomaly_type": anomaly_type,
+        "operation": decision.operation,
+        "provider": decision.provider,
+        "model": decision.model,
+    })
+
+    logger.info(
+        "RECONCILE anomaly | type=%s decision=%s op=%s %s/%s",
+        anomaly_type, decision.id, decision.operation,
+        decision.provider, decision.model,
+    )

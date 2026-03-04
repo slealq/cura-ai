@@ -643,15 +643,21 @@ class BillingService:
         )
         avg_delta_pct = round(float(avg_delta_pct_row), 1) if avg_delta_pct_row is not None else 0.0
 
-        # Catalog misses
-        catalog_miss_count = (
-            db.query(func.count(BillingAnomaly.id))
-            .filter(
-                BillingAnomaly.anomaly_type == "catalog_miss",
-                BillingAnomaly.created_at >= cutoff,
+        # Anomaly counts by type (unresolved, within window)
+        anomaly_type_rows = (
+            db.query(
+                BillingAnomaly.anomaly_type,
+                func.count(BillingAnomaly.id).label("cnt"),
             )
-            .scalar()
-        ) or 0
+            .filter(
+                BillingAnomaly.created_at >= cutoff,
+                BillingAnomaly.resolved.is_(False),
+            )
+            .group_by(BillingAnomaly.anomaly_type)
+            .all()
+        )
+        anomalies_by_type = {row.anomaly_type: row.cnt for row in anomaly_type_rows}
+        catalog_miss_count = anomalies_by_type.get("catalog_miss", 0)
 
         failure_rate = failed_count / total_ops if total_ops > 0 else 0.0
         cancel_rate = cancelled_count / total_ops if total_ops > 0 else 0.0
@@ -717,6 +723,7 @@ class BillingService:
             "pending_decisions": pending_decisions,
             "avg_delta_pct": avg_delta_pct,
             "catalog_miss_count": catalog_miss_count,
+            "anomalies_by_type": anomalies_by_type,
             "by_operation": [
                 {
                     "operation": row.operation,
@@ -1086,7 +1093,6 @@ class BillingService:
             "by_operation": by_operation,
             "record_count": len(records),
         }
-
 
 def record_usage_standalone(
     user_id: int,
