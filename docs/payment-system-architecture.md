@@ -8,13 +8,16 @@
 1. [Executive Summary](#1-executive-summary)
 2. [Payment Provider Comparison](#2-payment-provider-comparison)
 3. [Recommended Provider](#3-recommended-provider)
-4. [System Architecture](#4-system-architecture)
-5. [Database Schema](#5-database-schema)
-6. [Webhook Flow](#6-webhook-flow)
-7. [Failure Modes](#7-failure-modes)
-8. [Security Model](#8-security-model)
-9. [UX Design](#9-ux-design)
-10. [Implementation Roadmap](#10-implementation-roadmap)
+4. [Pricing Model](#4-pricing-model)
+5. [System Architecture](#5-system-architecture)
+6. [Database Schema](#6-database-schema)
+7. [Webhook Flow](#7-webhook-flow)
+8. [Failure Modes](#8-failure-modes)
+9. [Security Model](#9-security-model)
+10. [UX Design](#10-ux-design)
+11. [Implementation Roadmap](#11-implementation-roadmap)
+
+> **Key decision:** Sparks are an internal accounting unit, not a price. Users never see "1 spark = $0.001." Pack and subscription pricing sets the exchange rate. See [Section 4](#4-pricing-model).
 
 ---
 
@@ -152,7 +155,194 @@ If you set up a US LLC, use Stripe as primary and offer PayPal as an alternative
 
 ---
 
-## 4. System Architecture
+## 4. Pricing Model
+
+### The Problem: Sparks Are Doing Two Jobs
+
+Currently, `1 spark = $0.001 USD` is used for both:
+
+1. **Internal cost accounting** — what AI operations cost users (debits)
+2. **Implied purchase price** — what users would pay for sparks (credits)
+
+This creates a conflict. The 2x markup on AI provider costs is already baked into the spark debit amounts. If we sell sparks at $0.001/spark, our gross margin is exactly 50% on AI costs — but that's *before* payment processor fees, Azure infrastructure, and storage costs. After Lemon Squeezy's ~7-9% take-rate, actual margin drops below the 2x target.
+
+### Solution: Separate Cost-Sparks from Sell-Sparks
+
+**Keep `1 spark = $0.001 USD` as the internal accounting constant.** It's convenient, stable, and all existing billing logic depends on it. Don't change `USD_TO_SPARKS`, the cost catalog, or the debit flow.
+
+**Decouple the purchase price from the internal constant.** Packs define how many sparks you get per dollar. The exchange rate varies by pack and by purchase channel (one-time vs subscription).
+
+In practice:
+
+| Concept | Definition | Example |
+|---------|------------|---------|
+| **Cost-spark** | Internal unit. 1 spark = $0.001 USD. Used for debits, reservations, catalog pricing. | Generate costs 50 sparks (= $0.05 after 2x markup on $0.025 provider cost) |
+| **Sell-spark** | What users receive when purchasing. Exchange rate set by pack/subscription pricing. | $20 Creator pack gives 15,000 sparks (= $0.00133/spark effective) |
+
+Users see "sparks" everywhere — they never see the internal dollar equivalence. The frontend should **remove** the "1 spark = $0.001 USD" display.
+
+### Fully-Loaded Cost Per Spark
+
+To set prices, we need the true cost of fulfilling 1 spark of user activity:
+
+```
+Provider cost per spark:
+  1 spark = $0.001 (charged to user after 2x markup)
+  Provider actually costs $0.0005 (half, because of 2x markup)
+
+Infrastructure overhead (Azure compute, storage, Redis, networking):
+  Estimate ~20% on top of provider costs
+  Overhead per spark = $0.0005 × 0.20 = $0.0001
+
+Fully-loaded COGS per spark = $0.0005 + $0.0001 = $0.0006
+```
+
+| Cost component | Per spark | Notes |
+|----------------|-----------|-------|
+| AI provider (raw) | $0.0005 | Half of spark value (2x markup) |
+| Azure infrastructure | $0.0001 | ~20% overhead estimate |
+| **Total COGS** | **$0.0006** | Measure and refine over time |
+
+### Target Margins
+
+"2x profit" means: **profit = 2 x cost**, so **revenue = 3 x cost** (67% gross margin).
+
+"2x markup" means: **revenue = 2 x cost** (50% gross margin).
+
+We target **2x markup (50% margin)** as the floor, after payment processor fees:
+
+```
+Target: net_revenue_per_spark >= 2 × COGS_per_spark
+        net_revenue_per_spark >= 2 × $0.0006 = $0.0012
+
+Where: net_revenue = gross_price - payment_fees
+```
+
+### Payment Fee Impact by Provider
+
+| Provider | Fee formula | On $20 pack | Fee | Net | Effective rate |
+|----------|-------------|-------------|-----|-----|----------------|
+| Lemon Squeezy (domestic) | 5% + $0.50 | $20 | $1.50 | $18.50 | 7.5% |
+| Lemon Squeezy (intl) | 6.5% + $0.50 | $20 | $1.80 | $18.20 | 9.0% |
+| Stripe (domestic) | 2.9% + $0.30 | $20 | $0.88 | $19.12 | 4.4% |
+| Stripe (intl) | 4.4% + $0.30 | $20 | $1.18 | $18.82 | 5.9% |
+
+### Pack Pricing (Solving for Margin)
+
+To achieve net $0.0012/spark after fees:
+
+```
+gross_price_per_spark = $0.0012 / (1 - fee_rate)
+
+Lemon Squeezy domestic (7.5%): $0.0012 / 0.925 = $0.001297/spark
+Lemon Squeezy intl (9.0%):     $0.0012 / 0.91  = $0.001319/spark
+Stripe domestic (4.4%):        $0.0012 / 0.956 = $0.001255/spark
+```
+
+**Blended target: ~$0.00130/spark** (covers worst-case LS international).
+
+This means:
+- $20 should buy ~15,400 sparks (not 20,000)
+- $50 should buy ~38,500 sparks (not 50,000)
+
+### Recommended Pack Tiers
+
+Packs use **decreasing price-per-spark** to incentivize larger purchases:
+
+| Pack | Price | Sparks | Bonus | Total sparks | Effective $/spark | Net revenue (LS domestic) | COGS | Margin |
+|------|-------|--------|-------|-------------|-------------------|--------------------------|------|--------|
+| Starter | $10 | 7,000 | -- | 7,000 | $0.00143 | $9.00 | $4.20 | 2.14x |
+| Creator | $25 | 20,000 | 2,000 | 22,000 | $0.00114 | $23.25 | $13.20 | 1.76x |
+| Pro | $50 | 42,000 | 6,000 | 48,000 | $0.00104 | $47.00 | $28.80 | 1.63x |
+| Studio | $100 | 90,000 | 15,000 | 105,000 | $0.00095 | $94.50 | $63.00 | 1.50x |
+
+**Why the margins decrease with pack size:**
+- Larger packs have lower effective fee rates (fixed $0.50 is smaller %)
+- Volume discount drives users toward bigger purchases (higher LTV)
+- Even the Studio pack at 1.50x is profitable — the Starter pack at 2.14x subsidizes
+
+**Weighted average margin** (assuming 40% Creator / 30% Pro / 20% Starter / 10% Studio):
+~1.80x across all pack sizes.
+
+**No $5 pack.** Lemon Squeezy's $0.50 fixed fee makes a $5 pack cost 15% in fees alone. Minimum pack is $10.
+
+### Subscription Pricing (Better Value)
+
+Subscriptions are 15-25% cheaper per spark than packs, incentivizing predictable recurring revenue:
+
+| Plan | Monthly price | Sparks/month | Effective $/spark | vs Creator pack |
+|------|--------------|-------------|-------------------|-----------------|
+| Hobby | $15/mo | 15,000 | $0.00100 | 12% cheaper |
+| Pro | $40/mo | 45,000 | $0.00089 | 22% cheaper |
+| Studio | $80/mo | 100,000 | $0.00080 | 30% cheaper |
+
+Subscription sparks reset monthly (no rollover in base plan). Unused sparks expire at month end. This is standard for credit subscription models (Midjourney, Replicate).
+
+Optional: allow rollover for up to 1 month of unused sparks at higher-tier plans.
+
+LS adds +0.5% for subscription billing, which is negligible on these amounts.
+
+### What Users Can DO With Sparks
+
+For context when setting pack sizes — what a typical session costs:
+
+| Activity | Sparks | Notes |
+|----------|--------|-------|
+| Process 100 images (full pipeline: tag + describe + embed) | ~1,500 | ~15 sparks/image |
+| Generate 20 images (flux-dev) | ~1,000 | 50 sparks/image |
+| Generate 20 images (nano-banana-pro) | ~1,560 | 78 sparks/image |
+| Edit 10 images (qwen-image-max) | ~1,500 | 150 sparks/image |
+| Edit 10 images (kling-image) | ~560 | 56 sparks/image |
+| Train 1 LoRA model (flux-dev) | ~4,000 | One-time |
+| Evaluate 1 LoRA (5 ref + 5 creative pairs) | ~1,500 | Estimated |
+| **Typical full session** | **~6,500** | Upload + train + generate |
+
+So the **Creator pack ($25 = 22,000 sparks)** covers ~3 full sessions. That feels like the right anchor — enough to explore without running out immediately, priced to encourage the upgrade conversation.
+
+### Implementation Changes Required
+
+**Backend:**
+
+1. **Remove `1 spark = $0.001` from user-facing contexts.** Keep `USD_TO_SPARKS = 1000` in `cost_calculator.py` for internal cost accounting only.
+2. **Do NOT change the cost catalog, markup, or debit logic.** The internal billing system stays exactly the same.
+3. **Pack pricing is the only place USD-to-spark conversion happens for purchases.** The `spark_packs` table defines the exchange rate per pack.
+
+**Frontend:**
+
+1. **Remove** the "1 spark = $0.001 USD" text from `billing/page.tsx:66`.
+2. **Show spark costs in sparks only**, never in dollar equivalents on the user-facing billing page.
+3. **Pack cards show**: price, sparks received, bonus sparks. No $/spark calculation displayed.
+4. **Subscription page shows**: monthly price, sparks/month, "Best value" badge.
+
+**What stays the same:**
+
+- `USD_TO_SPARKS = 1000` constant (internal only)
+- `CostCatalog` pricing and markup (internal only)
+- `BillingService.debit_usage()` and `record_usage()` (no changes)
+- `UserBalance.balance_sparks` and `BalanceTransaction` (no changes)
+- Admin dashboard can still show dollar equivalents for cost analysis
+
+### Margin Monitoring
+
+Add a `purchase_margin_report` admin endpoint (or Celery beat task) that computes:
+
+```python
+# For each PaymentTransaction (COMPLETED):
+gross_paid = txn.amount_cents / 100
+processor_fee = txn.provider_fee_cents / 100  # From provider data
+net_received = gross_paid - processor_fee
+sparks_credited = balance_txn.amount_sparks  # From linked ledger entry
+cogs = sparks_credited * Decimal("0.0006")   # Fully-loaded cost
+margin_ratio = net_received / cogs
+
+# Aggregate across time periods for dashboard
+```
+
+Surface alerts if blended margin drops below 1.5x (warning) or 1.3x (critical).
+
+---
+
+## 5. System Architecture
 
 ### End-to-End Flow
 
@@ -345,7 +535,7 @@ def handle_payment_webhook(request):
 
 ---
 
-## 5. Database Schema
+## 6. Database Schema
 
 ### New Table: `payment_transactions`
 
@@ -517,7 +707,7 @@ Expiration is enforced at debit time: oldest non-expired credits are consumed fi
 
 ---
 
-## 6. Webhook Flow
+## 7. Webhook Flow
 
 ### Stripe Webhook Events to Handle
 
@@ -658,7 +848,7 @@ def handle_checkout_completed(db: Session, event, raw_event):
 
 ---
 
-## 7. Failure Modes
+## 8. Failure Modes
 
 | Failure | Impact | Mitigation |
 |---------|--------|------------|
@@ -702,7 +892,7 @@ A daily Celery beat task should:
 
 ---
 
-## 8. Security Model
+## 9. Security Model
 
 ### Webhook Verification
 
@@ -771,20 +961,22 @@ charge.dispute.closed (lost)
 
 ---
 
-## 9. UX Design
+## 10. UX Design
 
-### Spark Pack Tiers (Suggested)
+### Spark Pack Tiers
 
-| Pack | Sparks | Price | Bonus | Per-spark cost | Featured |
-|------|--------|-------|-------|----------------|----------|
-| Starter | 5,000 | $5 | -- | $0.001 | |
-| Creator | 25,000 | $20 | 2,500 bonus | $0.000727 | Recommended |
-| Pro | 60,000 | $40 | 10,000 bonus | $0.000571 | |
-| Studio | 150,000 | $80 | 30,000 bonus | $0.000444 | |
+See [Section 4: Pricing Model](#4-pricing-model) for the margin analysis behind these numbers.
 
-Volume discounts incentivize larger purchases (fewer transactions = lower payment processing overhead).
+| Pack | Price | Sparks | Bonus | Total | Featured |
+|------|-------|--------|-------|-------|----------|
+| Starter | $10 | 7,000 | -- | 7,000 | |
+| Creator | $25 | 20,000 | 2,000 | 22,000 | Recommended |
+| Pro | $50 | 42,000 | 6,000 | 48,000 | |
+| Studio | $100 | 90,000 | 15,000 | 105,000 | |
 
-**Highlight the "Creator" pack as recommended.** Most SaaS credit systems feature one pack to increase conversion. The mid-tier pack is typically the best choice — not too small (low value perception), not too large (commitment barrier).
+No $5 pack — Lemon Squeezy's $0.50 fixed fee makes small packs unprofitable.
+
+**Highlight the "Creator" pack as recommended.** It covers ~3 full sessions (upload + train + generate), priced to encourage exploration without immediate exhaustion.
 
 ### Buy Sparks Page
 
@@ -794,21 +986,24 @@ Volume discounts incentivize larger purchases (fewer transactions = lower paymen
 │                                                               │
 │  Current balance: 1,250 sparks                                │
 │                                                               │
-│  ┌────────┐  ┌─────────────┐  ┌────────┐  ┌────────┐        │
-│  │Starter │  │  Creator    │  │  Pro   │  │Studio  │        │
-│  │        │  │ RECOMMENDED │  │        │  │        │        │
-│  │ 5,000  │  │   25,000    │  │60,000  │  │150,000 │        │
-│  │sparks  │  │   sparks    │  │sparks  │  │sparks  │        │
-│  │        │  │  +2,500     │  │+10,000 │  │+30,000 │        │
-│  │ $5     │  │   $20       │  │ $40    │  │  $80   │        │
-│  │        │  │             │  │        │  │        │        │
-│  │ [Buy]  │  │   [Buy]     │  │ [Buy]  │  │ [Buy]  │        │
-│  └────────┘  └─────────────┘  └────────┘  └────────┘        │
+│  ┌────────┐  ┌─────────────┐  ┌────────┐  ┌─────────┐      │
+│  │Starter │  │  Creator    │  │  Pro   │  │ Studio  │      │
+│  │        │  │ RECOMMENDED │  │        │  │         │      │
+│  │ 7,000  │  │   22,000    │  │48,000  │  │105,000  │      │
+│  │sparks  │  │   sparks    │  │sparks  │  │ sparks  │      │
+│  │        │  │  +2,000     │  │+6,000  │  │+15,000  │      │
+│  │ $10    │  │   $25       │  │ $50    │  │  $100   │      │
+│  │        │  │             │  │        │  │         │      │
+│  │ [Buy]  │  │   [Buy]     │  │ [Buy]  │  │ [Buy]   │      │
+│  └────────┘  └─────────────┘  └────────┘  └─────────┘      │
+│                                                               │
+│  Or subscribe for the best value:                             │
+│  [View subscription plans ->]                                 │
 │                                                               │
 │  Purchase history                                             │
 │  ┌───────────────────────────────────────────────────────┐   │
-│  │ Mar 1  │ Creator Pack │ 27,500 sparks │ $20 │ Paid   │   │
-│  │ Feb 15 │ Starter Pack │ 5,000 sparks  │ $5  │ Paid   │   │
+│  │ Mar 1  │ Creator Pack │ 22,000 sparks │ $25 │ Paid   │   │
+│  │ Feb 15 │ Starter Pack │ 7,000 sparks  │ $10 │ Paid   │   │
 │  └───────────────────────────────────────────────────────┘   │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -843,7 +1038,7 @@ This appears in the sidebar or header, not as a blocking modal.
 
 ---
 
-## 10. Implementation Roadmap
+## 11. Implementation Roadmap
 
 ### Phase 1: Minimal Working Payment System (2-3 weeks)
 
