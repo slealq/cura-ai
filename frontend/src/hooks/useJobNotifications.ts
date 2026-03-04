@@ -34,6 +34,9 @@ function jobLabel(job: Job): string {
 // Job types that may create/modify folders — refresh folder list on completion
 const FOLDER_AFFECTING_JOBS = new Set(['ingest', 'folder_delete']);
 
+// Job types that replace/update clusters — refresh cluster list on completion
+const CLUSTER_AFFECTING_JOBS = new Set(['cluster', 'summarize_cluster']);
+
 export function useJobNotifications() {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -100,6 +103,11 @@ export function useJobNotifications() {
           queryClient.invalidateQueries({ queryKey: ['unfiled-images'] });
           queryClient.invalidateQueries({ queryKey: ['all-images'] });
           queryClient.invalidateQueries({ queryKey: ['stats'] });
+        }
+
+        // Refresh cluster list when clustering completes
+        if (CLUSTER_AFFECTING_JOBS.has(job.job_type)) {
+          queryClient.invalidateQueries({ queryKey: ['clusters'] });
         }
 
         // Clean up sessionStorage tracking for completed folder deletes
