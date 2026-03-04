@@ -898,6 +898,13 @@ def cluster_all_images(self, user_id: int, job_id: int | None = None, trace_id: 
             result, image_ids, embeddings_array
         )
 
+        # Generate cover composites for each cluster
+        for cluster in clusters:
+            try:
+                cluster_service.generate_cover_composite(cluster.id)
+            except Exception as cover_err:
+                logger.warning(f"Failed to generate cover for cluster {cluster.id}: {cover_err}")
+
         # Update image statuses
         for image_id in image_ids:
             image_service.update_status(image_id, ImageStatus.CLUSTERED)

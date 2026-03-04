@@ -365,6 +365,9 @@ class OpenAIEmbedder(BaseEmbedder):
                 duration_ms=round(elapsed, 1),
                 input_tokens=usage.total_tokens if usage else None,
                 success=True,
+                extra={
+                    "request_prompt": text[:2000],
+                },
             )
         except Exception as e:
             elapsed = (time.monotonic() - start) * 1000
@@ -373,7 +376,7 @@ class OpenAIEmbedder(BaseEmbedder):
                 message=f"OpenAI embed failed: {e}",
                 level=LogLevel.ERROR, provider="openai", model=self.model,
                 operation="embed", duration_ms=round(elapsed, 1), success=False,
-                extra={"error": str(e)},
+                extra={"error": str(e), "request_prompt": text[:2000]},
             )
             raise
 
@@ -451,6 +454,7 @@ class OpenAIClusterSummarizer(BaseClusterSummarizer):
                     span.set_attribute("ai.tokens.output", response.usage.completion_tokens)
             elapsed = (time.monotonic() - start) * 1000
             usage = response.usage
+            content = response.choices[0].message.content
             write_log(
                 category=LogCategory.API_CALL,
                 message=f"OpenAI summarize completed ({self.model})",
@@ -459,6 +463,10 @@ class OpenAIClusterSummarizer(BaseClusterSummarizer):
                 input_tokens=usage.prompt_tokens if usage else None,
                 output_tokens=usage.completion_tokens if usage else None,
                 success=True,
+                extra={
+                    "request_prompt": prompt,
+                    "response_content": content,
+                },
             )
         except Exception as e:
             elapsed = (time.monotonic() - start) * 1000
@@ -467,11 +475,10 @@ class OpenAIClusterSummarizer(BaseClusterSummarizer):
                 message=f"OpenAI summarize failed: {e}",
                 level=LogLevel.ERROR, provider="openai", model=self.model,
                 operation="summarize", duration_ms=round(elapsed, 1), success=False,
-                extra={"error": str(e)},
+                extra={"error": str(e), "request_prompt": prompt},
             )
             raise
 
-        content = response.choices[0].message.content
         result = json.loads(content) if content else {}
 
         return ClusterSummaryResult(
@@ -697,6 +704,10 @@ class OpenAIEvaluator(BaseEvaluator):
                 input_tokens=usage.prompt_tokens if usage else None,
                 output_tokens=usage.completion_tokens if usage else None,
                 success=True,
+                extra={
+                    "request_prompt": prompt,
+                    "response_content": content,
+                },
             )
         except Exception as e:
             elapsed = (time.monotonic() - start) * 1000
@@ -705,7 +716,7 @@ class OpenAIEvaluator(BaseEvaluator):
                 message=f"OpenAI evaluate failed: {e}",
                 level=LogLevel.ERROR, provider="openai", model=self.model,
                 operation="evaluate", duration_ms=round(elapsed, 1), success=False,
-                extra={"error": str(e)},
+                extra={"error": str(e), "request_prompt": prompt},
             )
             raise
 
@@ -768,6 +779,10 @@ class OpenAIEvaluator(BaseEvaluator):
                 input_tokens=usage.prompt_tokens if usage else None,
                 output_tokens=usage.completion_tokens if usage else None,
                 success=True,
+                extra={
+                    "request_prompt": prompt,
+                    "response_content": content,
+                },
             )
         except Exception as e:
             elapsed = (time.monotonic() - start) * 1000
@@ -776,7 +791,7 @@ class OpenAIEvaluator(BaseEvaluator):
                 message=f"OpenAI creative evaluate failed: {e}",
                 level=LogLevel.ERROR, provider="openai", model=self.model,
                 operation="evaluate_creative", duration_ms=round(elapsed, 1), success=False,
-                extra={"error": str(e)},
+                extra={"error": str(e), "request_prompt": prompt},
             )
             raise
 
@@ -840,6 +855,10 @@ class OpenAIEvaluator(BaseEvaluator):
                 input_tokens=usage.prompt_tokens if usage else None,
                 output_tokens=usage.completion_tokens if usage else None,
                 success=True,
+                extra={
+                    "request_prompt": prompt,
+                    "response_content": content,
+                },
             )
         except Exception as e:
             elapsed = (time.monotonic() - start) * 1000
@@ -848,7 +867,7 @@ class OpenAIEvaluator(BaseEvaluator):
                 message=f"OpenAI assessment summary failed: {e}",
                 level=LogLevel.ERROR, provider="openai", model=self.model,
                 operation="summarize_eval", duration_ms=round(elapsed, 1), success=False,
-                extra={"error": str(e)},
+                extra={"error": str(e), "request_prompt": prompt},
             )
             raise
 
@@ -894,6 +913,10 @@ class OpenAIEvaluator(BaseEvaluator):
                 input_tokens=usage.prompt_tokens if usage else None,
                 output_tokens=usage.completion_tokens if usage else None,
                 success=True,
+                extra={
+                    "request_prompt": prompt,
+                    "response_content": content,
+                },
             )
         except Exception as e:
             elapsed = (time.monotonic() - start) * 1000
@@ -902,7 +925,7 @@ class OpenAIEvaluator(BaseEvaluator):
                 message=f"OpenAI creative prompt generation failed: {e}",
                 level=LogLevel.ERROR, provider="openai", model=self.model,
                 operation="generate_prompts", duration_ms=round(elapsed, 1), success=False,
-                extra={"error": str(e)},
+                extra={"error": str(e), "request_prompt": prompt},
             )
             raise
 

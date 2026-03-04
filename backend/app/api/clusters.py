@@ -241,7 +241,7 @@ async def trigger_reclustering(
     db.refresh(job)
 
     # Queue clustering task
-    task = dispatch(cluster_all_images, job.id, current_user.id)
+    task = dispatch(cluster_all_images, current_user.id, job_id=job.id)
 
     # Update job with task ID
     job.celery_task_id = task.id

@@ -44,18 +44,11 @@ export default function DebugPage() {
     refetchInterval: 3000,
   });
 
-  const { data: stats } = useQuery({
-    queryKey: ['log-stats'],
-    queryFn: logsApi.stats,
-    refetchInterval: 5000,
-  });
-
   const cleanupMutation = useMutation({
     mutationFn: () => logsApi.cleanup(7),
     onSuccess: (data) => {
       toast.success(`Cleaned up ${data.deleted} old log entries`);
       queryClient.invalidateQueries({ queryKey: ['logs'] });
-      queryClient.invalidateQueries({ queryKey: ['log-stats'] });
     },
   });
 
@@ -94,31 +87,6 @@ export default function DebugPage() {
         </button>
       </div>
 
-      {/* Stats */}
-      {stats && (
-        <div className="grid grid-cols-4 gap-3">
-          <div className="rounded-lg px-4 py-3 text-center bg-muted">
-            <div className="text-2xl font-bold">{stats.total_logs}</div>
-            <div className="text-xs font-medium mt-0.5 text-muted-foreground">
-              Total Logs
-            </div>
-          </div>
-          <div className="rounded-lg px-4 py-3 text-center bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">
-            <div className="text-2xl font-bold">{stats.api_calls}</div>
-            <div className="text-xs font-medium mt-0.5">API Calls</div>
-          </div>
-          <div className="rounded-lg px-4 py-3 text-center bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300">
-            <div className="text-2xl font-bold">{stats.errors}</div>
-            <div className="text-xs font-medium mt-0.5">Errors</div>
-          </div>
-          <div className="rounded-lg px-4 py-3 text-center bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300">
-            <div className="text-2xl font-bold">
-              {stats.total_tokens.toLocaleString()}
-            </div>
-            <div className="text-xs font-medium mt-0.5">Total Tokens</div>
-          </div>
-        </div>
-      )}
 
       {/* Filters */}
       <div className="flex gap-3 items-center">
