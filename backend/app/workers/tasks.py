@@ -13,13 +13,9 @@ from app.models import Image, ImageStatus, Job, JobStatus
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers import get_cluster_summarizer, get_describer, get_embedder, get_tagger
 from app.services.billing_context import (
-    clear_last_api_call_tokens,
-    get_last_api_call_tokens,
     get_trace_id,
     init_token_container,
     init_trace,
-    is_billing_deferred,
-    make_idempotency_key,
     set_billing_deferred,
     set_billing_image,
     set_billing_job,
@@ -27,7 +23,7 @@ from app.services.billing_context import (
     set_session_id,
     set_trace_id,
 )
-from app.services.billing_orchestrator import ORCHESTRATOR_ENABLED_OPS, BillingOrchestrator
+from app.services.billing_decorator import billable
 from app.services.billing_service import InsufficientBalanceError, ZeroCostEstimateError, finalize_job_billing
 from app.services.cluster_service import get_cluster_service
 from app.services.clustering import get_clustering_service
@@ -1001,43 +997,19 @@ def summarize_cluster(self, cluster_id: int, user_id: int, job_id: int | None = 
             or "openai"
         )
 
-        orch = BillingOrchestrator(db, user_id) if "summarize" in ORCHESTRATOR_ENABLED_OPS else None
-        decision = None
-        if orch:
-            idem_key = make_idempotency_key(user_id, get_trace_id(), "summarize", cluster_id)
-            # Build a sample of descriptions for token estimation
-            _sample_desc = "\n".join(descriptions[:5]) if descriptions else ""
-            decision, is_new = orch.create_decision(
-                operation="summarize",
-                provider=_summ_provider,
-                model=summarizer.get_model_name(),
-                trace_id=get_trace_id(),
-                idempotency_key=idem_key,
-                resource_id=cluster_id,
-                job_id=job_id,
-                prompt_text=_sample_desc,
-            )
-            if not is_new:
+        _sample_desc = "\n".join(descriptions[:5]) if descriptions else ""
+
+        with billable(
+            db, user_id, operation="summarize",
+            provider=_summ_provider, model=summarizer.get_model_name(),
+            resource_id=cluster_id, job_id=job_id,
+            prompt_text=_sample_desc,
+        ) as b_summ:
+            if b_summ.skipped:
                 return {"status": "skipped", "cluster_id": cluster_id}
 
-        try:
-            result = run_async(
-                summarizer.summarize_cluster(common_tags, descriptions, cluster.size)
-            )
-        except Exception as e:
-            if orch and decision:
-                orch.fail_decision(decision.id, str(e))
-            raise
-
-        if orch and decision:
-            in_tok, out_tok, prov_cost = get_last_api_call_tokens()
-            clear_last_api_call_tokens()
-            orch.record_actual(
-                decision.id,
-                actual_input_tokens=in_tok,
-                actual_output_tokens=out_tok,
-                provider_cost=prov_cost,
-                defer_debit=is_billing_deferred(),
+            result = b_summ.call(
+                run_async, summarizer.summarize_cluster(common_tags, descriptions, cluster.size),
             )
 
         # Update cluster
@@ -1180,78 +1152,43 @@ def process_image_pipeline(
         # Tag
         tagger = get_tagger(provider=provider, model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_tag)
         trace_id = get_trace_id()
-        orch = BillingOrchestrator(db, user_id) if "tag" in ORCHESTRATOR_ENABLED_OPS else None
 
-        if orch:
-            idem_key = make_idempotency_key(user_id, trace_id, "tag", image_id)
-            decision, is_new = orch.create_decision(
-                operation="tag", provider=provider or "openai", model=tagger.get_model_name(),
-                trace_id=trace_id, idempotency_key=idem_key,
-                image_id=image_id, job_id=job_id,
-                image_width=image.width, image_height=image.height,
-                prompt_text=tag_prompt,
-            )
-            if not is_new:
+        with billable(
+            db, user_id, operation="tag",
+            provider=provider or "openai", model=tagger.get_model_name(),
+            trace_id=trace_id, resource_id=image_id,
+            image_id=image_id, job_id=job_id,
+            image_width=image.width, image_height=image.height,
+            prompt_text=tag_prompt,
+        ) as b_tag:
+            if b_tag.skipped:
                 logger.info("Duplicate tag detected for image %s, skipping", image_id)
-                # Still need tag_result for downstream — fetch from DB
                 tag_result = type('R', (), {'tags': image.image_metadata.tags if image.image_metadata else [], 'model': tagger.get_model_name(), 'prompt_version': 'cached'})()
                 tagging_duration_ms = 0
             else:
-                try:
-                    tag_start = time.monotonic()
-                    tag_result = run_async(tagger.tag_image(image_data, image.mime_type, tag_prompt))
-                    tagging_duration_ms = round((time.monotonic() - tag_start) * 1000)
-                    in_tok, out_tok, prov_cost = get_last_api_call_tokens()
-                    clear_last_api_call_tokens()
-                    orch.record_actual(
-                        decision.id, actual_input_tokens=in_tok,
-                        actual_output_tokens=out_tok, provider_cost=prov_cost,
-                        defer_debit=is_billing_deferred(),
-                    )
-                except Exception as e:
-                    orch.fail_decision(decision.id, str(e))
-                    raise
-        else:
-            tag_start = time.monotonic()
-            tag_result = run_async(tagger.tag_image(image_data, image.mime_type, tag_prompt))
-            tagging_duration_ms = round((time.monotonic() - tag_start) * 1000)
+                tag_start = time.monotonic()
+                tag_result = b_tag.call(run_async, tagger.tag_image(image_data, image.mime_type, tag_prompt))
+                tagging_duration_ms = round((time.monotonic() - tag_start) * 1000)
 
         # Describe
         describer = get_describer(provider=provider, model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_describe)
-        orch_desc = BillingOrchestrator(db, user_id) if "describe" in ORCHESTRATOR_ENABLED_OPS else None
 
-        if orch_desc:
-            idem_key = make_idempotency_key(user_id, trace_id, "describe", image_id)
-            decision, is_new = orch_desc.create_decision(
-                operation="describe", provider=provider or "openai", model=describer.get_model_name(),
-                trace_id=trace_id, idempotency_key=idem_key,
-                image_id=image_id, job_id=job_id,
-                image_width=image.width, image_height=image.height,
-                prompt_text=description_prompt,
-            )
-            if not is_new:
+        with billable(
+            db, user_id, operation="describe",
+            provider=provider or "openai", model=describer.get_model_name(),
+            trace_id=trace_id, resource_id=image_id,
+            image_id=image_id, job_id=job_id,
+            image_width=image.width, image_height=image.height,
+            prompt_text=description_prompt,
+        ) as b_desc:
+            if b_desc.skipped:
                 logger.info("Duplicate describe detected for image %s, skipping", image_id)
                 description_result = type('R', (), {'description': image.image_metadata.description_long if image.image_metadata else '', 'model': describer.get_model_name()})()
                 caption_duration_ms = 0
             else:
-                try:
-                    desc_start = time.monotonic()
-                    description_result = run_async(describer.describe_image(image_data, image.mime_type, description_prompt))
-                    caption_duration_ms = round((time.monotonic() - desc_start) * 1000)
-                    in_tok, out_tok, prov_cost = get_last_api_call_tokens()
-                    clear_last_api_call_tokens()
-                    orch_desc.record_actual(
-                        decision.id, actual_input_tokens=in_tok,
-                        actual_output_tokens=out_tok, provider_cost=prov_cost,
-                        defer_debit=is_billing_deferred(),
-                    )
-                except Exception as e:
-                    orch_desc.fail_decision(decision.id, str(e))
-                    raise
-        else:
-            desc_start = time.monotonic()
-            description_result = run_async(describer.describe_image(image_data, image.mime_type, description_prompt))
-            caption_duration_ms = round((time.monotonic() - desc_start) * 1000)
+                desc_start = time.monotonic()
+                description_result = b_desc.call(run_async, describer.describe_image(image_data, image.mime_type, description_prompt))
+                caption_duration_ms = round((time.monotonic() - desc_start) * 1000)
 
         # Build text for embedding
         text_parts = []
@@ -1262,40 +1199,23 @@ def process_image_pipeline(
 
         # Embed
         embedder = get_embedder(db=db, user_id=user_id)
-        orch_embed = BillingOrchestrator(db, user_id) if "embed" in ORCHESTRATOR_ENABLED_OPS else None
 
-        if orch_embed:
-            idem_key = make_idempotency_key(user_id, trace_id, "embed", image_id)
-            decision, is_new = orch_embed.create_decision(
-                operation="embed", provider="openai", model=embedder.get_model_name(),
-                trace_id=trace_id, idempotency_key=idem_key,
-                image_id=image_id, job_id=job_id,
-                tags=tag_result.tags,
-                description=description_result.description,
-            )
-            if not is_new:
+        with billable(
+            db, user_id, operation="embed",
+            provider="openai", model=embedder.get_model_name(),
+            trace_id=trace_id, resource_id=image_id,
+            image_id=image_id, job_id=job_id,
+            tags=tag_result.tags,
+            description=description_result.description,
+        ) as b_embed:
+            if b_embed.skipped:
                 logger.info("Duplicate embed detected for image %s, skipping", image_id)
                 embed_result = type('R', (), {'embedding': image.image_metadata.embedding if image.image_metadata else [], 'model': embedder.get_model_name(), 'dimensions': 1536})()
                 embedding_duration_ms = 0
             else:
-                try:
-                    embed_start_t = time.monotonic()
-                    embed_result = run_async(embedder.embed_text(text))
-                    embedding_duration_ms = round((time.monotonic() - embed_start_t) * 1000)
-                    in_tok, out_tok, prov_cost = get_last_api_call_tokens()
-                    clear_last_api_call_tokens()
-                    orch_embed.record_actual(
-                        decision.id, actual_input_tokens=in_tok,
-                        actual_output_tokens=out_tok, provider_cost=prov_cost,
-                        defer_debit=is_billing_deferred(),
-                    )
-                except Exception as e:
-                    orch_embed.fail_decision(decision.id, str(e))
-                    raise
-        else:
-            embed_start_t = time.monotonic()
-            embed_result = run_async(embedder.embed_text(text))
-            embedding_duration_ms = round((time.monotonic() - embed_start_t) * 1000)
+                embed_start_t = time.monotonic()
+                embed_result = b_embed.call(run_async, embedder.embed_text(text))
+                embedding_duration_ms = round((time.monotonic() - embed_start_t) * 1000)
 
         now = datetime.utcnow()
 

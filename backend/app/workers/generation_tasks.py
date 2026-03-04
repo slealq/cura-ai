@@ -20,8 +20,6 @@ from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers import get_describer, get_editor, get_embedder, get_evaluator, get_generator, get_trainer
 from app.providers.fal_provider import GenerationCancelledError
 from app.services.billing_context import (
-    clear_last_api_call_tokens,
-    get_last_api_call_tokens,
     get_trace_id,
     init_token_container,
     init_trace,
@@ -31,7 +29,7 @@ from app.services.billing_context import (
     set_session_id,
     set_trace_id,
 )
-from app.services.billing_orchestrator import ORCHESTRATOR_ENABLED_OPS, BillingOrchestrator
+from app.services.billing_decorator import billable
 from app.services.billing_service import InsufficientBalanceError, ZeroCostEstimateError, finalize_job_billing
 from app.services.evaluation_service import get_evaluation_service
 from app.services.generation_service import get_generation_service
@@ -459,64 +457,49 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
                 provider_metadata={"request_id": request_id, "base_model": lora.base_model},
             )
 
-        # --- Orchestrator decision for training ---
-        orch = BillingOrchestrator(db, user_id) if "train" in ORCHESTRATOR_ENABLED_OPS else None
-        decision = None
-        if orch:
-            idem_key = make_idempotency_key(user_id, get_trace_id(), "train", lora_model_id)
-            decision, is_new = orch.create_decision(
-                operation="train",
-                provider=lora.training_provider or "fal",
-                model=lora.base_model or "flux-dev",
-                trace_id=get_trace_id(),
-                idempotency_key=idem_key,
-                resource_id=lora_model_id,
-                job_id=job_id,
-            )  # resolver handles short name → full catalog name
-            if not is_new:
+        # --- Billing decision for training ---
+        _train_billing_ctx = None
+
+        with billable(
+            db, user_id, operation="train",
+            provider=lora.training_provider or "fal",
+            model=lora.base_model or "flux-dev",
+            resource_id=lora_model_id, job_id=job_id,
+            defer_debit=False,
+        ) as b_train:
+            if b_train.skipped:
                 logger.info("Duplicate train detected for %s, skipping", lora_model_id)
                 _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
                 return {"status": "skipped", "lora_model_id": lora_model_id}
 
-        # Poll for completion
-        poll_interval = 15  # seconds
-        while True:
-            # Check for cancellation
-            db.expire_all()
-            if job_id:
-                job = db.query(Job).filter(Job.id == job_id).first()
-                if job and job.status == JobStatus.CANCELLED:
-                    logger.info(f"LoRA training job {job_id} cancelled")
-                    if orch and decision:
-                        orch.cancel_decision(decision.id)
-                    gen_service.update_lora_status(lora_model_id, LoraModelStatus.FAILED, "Cancelled by user")
-                    return {"status": "cancelled"}
+            _train_billing_ctx = b_train
 
-            status_info = _run_async(trainer.check_training_status(request_id))
-            status_type = status_info.get("status", "")
+            # Poll for completion
+            poll_interval = 15  # seconds
+            while True:
+                # Check for cancellation
+                db.expire_all()
+                if job_id:
+                    job = db.query(Job).filter(Job.id == job_id).first()
+                    if job and job.status == JobStatus.CANCELLED:
+                        logger.info(f"LoRA training job {job_id} cancelled")
+                        b_train.cancel()
+                        gen_service.update_lora_status(lora_model_id, LoraModelStatus.FAILED, "Cancelled by user")
+                        return {"status": "cancelled"}
 
-            if status_type == "Completed":
-                break
-            elif "error" in status_type.lower() or status_info.get("error"):
-                error_msg = status_info.get("error", "Training failed")
-                raise Exception(error_msg)
+                status_info = _run_async(trainer.check_training_status(request_id))
+                status_type = status_info.get("status", "")
 
-            time.sleep(poll_interval)
+                if status_type == "Completed":
+                    break
+                elif "error" in status_type.lower() or status_info.get("error"):
+                    error_msg = status_info.get("error", "Training failed")
+                    raise Exception(error_msg)
 
-        # Get result
-        result = _run_async(trainer.get_training_result(request_id))
+                time.sleep(poll_interval)
 
-        # Record actual billing
-        if orch and decision:
-            in_tok, out_tok, prov_cost = get_last_api_call_tokens()
-            clear_last_api_call_tokens()
-            orch.record_actual(
-                decision.id,
-                actual_input_tokens=in_tok,
-                actual_output_tokens=out_tok,
-                provider_cost=prov_cost,
-                defer_debit=False,
-            )
+            # Get result and record billing
+            result = b_train.call(_run_async, trainer.get_training_result(request_id))
 
         # Update LoRA model
         gen_service.update_lora_status(
@@ -556,8 +539,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
         return {"status": "success", "lora_model_id": lora_model_id, "lora_url": result.lora_url}
 
     except InsufficientBalanceError:
-        if orch and decision:
-            orch.fail_decision(decision.id, "Insufficient credits")
+        # billable context manager handles fail_decision automatically
         _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
         gen_service = get_generation_service(db, user_id)
         gen_service.update_lora_status(lora_model_id, LoraModelStatus.FAILED, "Insufficient credits")
@@ -570,8 +552,8 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
-        if orch and decision:
-            orch.fail_decision(decision.id, err_msg)
+        if _train_billing_ctx is not None:
+            _train_billing_ctx.fail(err_msg)
         logger.error(f"Failed to train LoRA {lora_model_id}: {err_msg}")
         write_log(
             category=LogCategory.TASK,
@@ -658,27 +640,28 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
         # Generate
         generator = get_generator(gen.generation_provider, db=db, base_model=gen.base_model, user_id=user_id)
         trace_id = get_trace_id()
-        orch = BillingOrchestrator(db, user_id) if "generate" in ORCHESTRATOR_ENABLED_OPS else None
-        decision = None
+        _billing_ctx = None
 
-        if orch:
-            idem_key = make_idempotency_key(user_id, trace_id, "generate", generated_image_id)
-            decision, is_new = orch.create_decision(
-                operation="generate", provider=gen.generation_provider or "fal",
-                model=gen.base_model or "flux-dev",
-                trace_id=trace_id, idempotency_key=idem_key,
-                resource_id=generated_image_id, job_id=job_id,
-                with_lora=bool(loras_for_provider),
-                generation_params=params,
-                request_snapshot={"generation_params": params, "prompt": gen.prompt[:200] if gen.prompt else None},
-            )
-            if not is_new:
+        with billable(
+            db, user_id, operation="generate",
+            provider=gen.generation_provider or "fal",
+            model=gen.base_model or "flux-dev",
+            trace_id=trace_id, resource_id=generated_image_id, job_id=job_id,
+            with_lora=bool(loras_for_provider),
+            generation_params=params,
+            request_snapshot={"generation_params": params, "prompt": gen.prompt[:200] if gen.prompt else None},
+            defer_debit=False,
+        ) as b_gen:
+            if b_gen.skipped:
                 logger.info("Duplicate generate detected for %s, skipping", generated_image_id)
                 _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
                 return {"status": "skipped", "generated_image_id": generated_image_id}
 
-        try:
-            result = _run_async(
+            # Store billing context for cancellation handling in except block
+            _billing_ctx = b_gen
+
+            result = b_gen.call(
+                _run_async,
                 generator.generate(
                     prompt=gen.prompt,
                     negative_prompt=gen.negative_prompt,
@@ -694,21 +677,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
                     safety_tolerance=params.get("safety_tolerance"),
                     enable_web_search=params.get("enable_web_search"),
                     image_size=params.get("image_size"),
-                )
-            )
-        except Exception as e:
-            if orch and decision:
-                orch.fail_decision(decision.id, str(e))
-            raise
-
-        if orch and decision:
-            in_tok, out_tok, prov_cost = get_last_api_call_tokens()
-            clear_last_api_call_tokens()
-            orch.record_actual(
-                decision.id, actual_input_tokens=in_tok,
-                actual_output_tokens=out_tok, provider_cost=prov_cost,
-                defer_debit=False,
-                response_snapshot=result.metadata,
+                ),
             )
 
         # Save result
@@ -755,8 +724,8 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
     except GenerationCancelledError:
         elapsed = (time.monotonic() - task_start) * 1000
         logger.info(f"Generation cancelled for generated_image {generated_image_id}")
-        if orch and decision:
-            orch.cancel_decision(decision.id)
+        if _billing_ctx is not None:
+            _billing_ctx.cancel()
         write_log(
             category=LogCategory.TASK,
             message=f"Task generate_image cancelled for generated_image {generated_image_id}",
@@ -1064,37 +1033,22 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
 
         editor = get_editor(db=db, edit_model=edit_model, user_id=user_id)
         trace_id = get_trace_id()
-        orch = BillingOrchestrator(db, user_id) if "edit" in ORCHESTRATOR_ENABLED_OPS else None
-        decision = None
+        _edit_billing_ctx = None
 
-        if orch:
-            idem_key = make_idempotency_key(user_id, trace_id, "edit", generated_image_id)
-            decision, is_new = orch.create_decision(
-                operation="edit", provider="fal", model=edit_model,
-                trace_id=trace_id, idempotency_key=idem_key,
-                resource_id=generated_image_id, job_id=job_id,
-                generation_params=params,
-            )  # resolver handles short name → full catalog name
-            if not is_new:
+        with billable(
+            db, user_id, operation="edit",
+            provider="fal", model=edit_model,
+            trace_id=trace_id, resource_id=generated_image_id, job_id=job_id,
+            generation_params=params,
+            defer_debit=False,
+        ) as b_edit:
+            if b_edit.skipped:
                 logger.info("Duplicate edit detected for %s, skipping", generated_image_id)
                 _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
                 return {"status": "skipped", "generated_image_id": generated_image_id}
 
-        try:
-            result = _run_async(editor.edit(**edit_kwargs))
-        except Exception as e:
-            if orch and decision:
-                orch.fail_decision(decision.id, str(e))
-            raise
-
-        if orch and decision:
-            in_tok, out_tok, prov_cost = get_last_api_call_tokens()
-            clear_last_api_call_tokens()
-            orch.record_actual(
-                decision.id, actual_input_tokens=in_tok,
-                actual_output_tokens=out_tok, provider_cost=prov_cost,
-                defer_debit=False,
-            )
+            _edit_billing_ctx = b_edit
+            result = b_edit.call(_run_async, editor.edit(**edit_kwargs))
 
         # Save first output image
         if not result.images:
@@ -1143,8 +1097,8 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
     except GenerationCancelledError:
         elapsed = (time.monotonic() - task_start) * 1000
         logger.info(f"Edit cancelled for generated_image {generated_image_id}")
-        if orch and decision:
-            orch.cancel_decision(decision.id)
+        if _edit_billing_ctx is not None:
+            _edit_billing_ctx.cancel()
         write_log(
             category=LogCategory.TASK,
             message=f"Task edit_image cancelled for generated_image {generated_image_id}",
@@ -1445,10 +1399,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
             embedder = get_embedder(db=db, user_id=user_id)
             describer = get_describer(db=db, user_id=user_id)
 
-        # --- Orchestrator for evaluate sub-calls ---
-        orch = BillingOrchestrator(db, user_id) if "evaluate" in ORCHESTRATOR_ENABLED_OPS else None
-
-        # Resolve provider strings for orchestrator decisions
+        # Resolve provider strings for billing decisions
         _gen_provider = "fal"
         _gen_model = lora.base_model or "flux-dev"
         _desc_provider = getattr(describer, "provider_name", "openai") if describer else "openai"
@@ -1459,42 +1410,22 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
         _eval_model = evaluator.get_model_name() if evaluator else "unknown"
 
         def _orch_call(sub_op, provider, model, resource_id, call_fn, **decision_kwargs):
-            """Wrap a provider call with orchestrator decision tracking."""
-            decision = None
-            if orch:
-                idem_key = make_idempotency_key(
-                    user_id, get_trace_id(), f"evaluate_{sub_op}", resource_id,
-                )
-                decision, is_new = orch.create_decision(
-                    operation="evaluate",
-                    provider=provider,
-                    model=model,
-                    trace_id=get_trace_id(),
-                    idempotency_key=idem_key,
-                    resource_id=evaluation_id,
-                    job_id=job_id,
-                    request_snapshot={"sub_operation": sub_op},
-                    **decision_kwargs,
-                )
-                if not is_new:
-                    return None  # skip duplicate
-            try:
-                result = call_fn()
-            except Exception as e:
-                if orch and decision:
-                    orch.fail_decision(decision.id, str(e))
-                raise
-            if orch and decision:
-                in_tok, out_tok, prov_cost = get_last_api_call_tokens()
-                clear_last_api_call_tokens()
-                orch.record_actual(
-                    decision.id,
-                    actual_input_tokens=in_tok,
-                    actual_output_tokens=out_tok,
-                    provider_cost=prov_cost,
-                    defer_debit=True,
-                )
-            return result
+            """Wrap a provider call with billable context manager."""
+            idem_key = make_idempotency_key(
+                user_id, get_trace_id(), f"evaluate_{sub_op}", resource_id,
+            )
+            with billable(
+                db, user_id, operation="evaluate",
+                provider=provider, model=model,
+                idempotency_key=idem_key,
+                resource_id=evaluation_id, job_id=job_id,
+                request_snapshot={"sub_operation": sub_op},
+                defer_debit=True,
+                **decision_kwargs,
+            ) as b:
+                if b.skipped:
+                    return None
+                return b.call(call_fn)
 
         progress_idx = 0
 

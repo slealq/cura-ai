@@ -369,13 +369,11 @@ async def expand_prompt(
 
     from app.providers import _resolve_config
     from app.services.billing_context import (
-        get_trace_id,
         init_trace,
-        make_idempotency_key,
         set_billing_user,
         set_trace_id,
     )
-    from app.services.billing_orchestrator import ORCHESTRATOR_ENABLED_OPS, BillingOrchestrator
+    from app.services.billing_decorator import billable
     from app.services.billing_service import BillingService, InsufficientBalanceError, ZeroCostEstimateError
 
     try:
@@ -398,78 +396,60 @@ async def expand_prompt(
 
     set_billing_user(current_user.id)
     init_trace()
-    orch = BillingOrchestrator(db, current_user.id) if "expand_prompt" in ORCHESTRATOR_ENABLED_OPS else None
-    decision = None
-    if orch:
-        try:
-            idem_key = make_idempotency_key(current_user.id, get_trace_id(), "expand_prompt", None)
-            decision, is_new = orch.create_decision(
-                operation="expand_prompt",
-                provider="openai",
-                model=expansion_model,
-                trace_id=get_trace_id(),
-                idempotency_key=idem_key,
-                prompt_text=request.prompt,
-                request_snapshot={"prompt": request.prompt[:500], "model": expansion_model},
-            )
-            # No idempotency skip for expand_prompt — each call is intentionally unique
-        except ZeroCostEstimateError:
-            raise HTTPException(status_code=422, detail="Billing configuration error — cannot price this operation")
 
     try:
-        response = await client.chat.completions.create(
-            model=expansion_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a prompt engineer for AI image generation. "
-                        "The user will give you a short, terse image idea. "
-                        "Expand it into a single vivid paragraph suitable for an image generation model. "
-                        "Add details about composition, lighting, style, mood, colors, and textures "
-                        "while preserving the user's original intent. "
-                        "Return ONLY the expanded prompt text with no commentary or explanation."
-                    ),
-                },
-                {"role": "user", "content": request.prompt},
-            ],
-            max_tokens=expansion_max_tokens,
-        )
+        with billable(
+            db, current_user.id, operation="expand_prompt",
+            provider="openai", model=expansion_model,
+            prompt_text=request.prompt,
+            request_snapshot={"prompt": request.prompt[:500], "model": expansion_model},
+            defer_debit=False,
+        ) as b_expand:
+            # No idempotency skip for expand_prompt — each call is intentionally unique
 
-        expanded = response.choices[0].message.content or ""
-        usage = response.usage
-
-        # Record billing
-        if orch and decision and usage:
-            orch.record_actual(
-                decision.id,
-                actual_input_tokens=usage.prompt_tokens,
-                actual_output_tokens=usage.completion_tokens,
-                defer_debit=False,
-                response_snapshot={
-                    "model": response.model,
-                    "usage": {"prompt_tokens": usage.prompt_tokens, "completion_tokens": usage.completion_tokens, "total_tokens": usage.total_tokens},
-                    "expanded_length": len(expanded),
-                },
-            )
-        elif usage:
-            # Fallback if orchestrator not enabled
-            billing = BillingService(db, current_user.id)
-            billing.record_usage(
-                operation="expand_prompt",
-                provider="openai",
+            response = await client.chat.completions.create(
                 model=expansion_model,
-                input_tokens=usage.prompt_tokens,
-                output_tokens=usage.completion_tokens,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a prompt engineer for AI image generation. "
+                            "The user will give you a short, terse image idea. "
+                            "Expand it into a single vivid paragraph suitable for an image generation model. "
+                            "Add details about composition, lighting, style, mood, colors, and textures "
+                            "while preserving the user's original intent. "
+                            "Return ONLY the expanded prompt text with no commentary or explanation."
+                        ),
+                    },
+                    {"role": "user", "content": request.prompt},
+                ],
+                max_tokens=expansion_max_tokens,
             )
 
-        return ExpandPromptResponse(expanded_prompt=expanded.strip())
+            expanded = response.choices[0].message.content or ""
+            usage = response.usage
 
+            # Record billing via set_actual (direct OpenAI response, not ContextVar)
+            if usage:
+                b_expand.set_actual(
+                    input_tokens=usage.prompt_tokens,
+                    output_tokens=usage.completion_tokens,
+                    response_snapshot={
+                        "model": response.model,
+                        "usage": {"prompt_tokens": usage.prompt_tokens, "completion_tokens": usage.completion_tokens, "total_tokens": usage.total_tokens},
+                        "expanded_length": len(expanded),
+                    },
+                )
+
+            return ExpandPromptResponse(expanded_prompt=expanded.strip())
+
+    except (InsufficientBalanceError, ZeroCostEstimateError) as e:
+        if isinstance(e, InsufficientBalanceError):
+            raise HTTPException(status_code=402, detail="Insufficient credits")
+        raise HTTPException(status_code=422, detail="Billing configuration error — cannot price this operation")
     except HTTPException:
         raise
     except Exception as e:
-        if orch and decision:
-            orch.fail_decision(decision.id, str(e))
         logger.error(f"Failed to expand prompt: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to expand prompt: {str(e)}")
     finally:
