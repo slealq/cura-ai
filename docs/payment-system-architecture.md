@@ -23,7 +23,7 @@
 
 ## 1. Executive Summary
 
-SightLab has a production-grade internal billing system: sparks currency (1 spark = $0.001 USD), atomic balance operations, idempotent debits, cost catalog, and full audit trail. The missing piece is accepting real money.
+SightLab has a production-grade internal billing system: sparks virtual currency, atomic balance operations, idempotent debits, cost catalog, and full audit trail. Sparks are an internal accounting unit (1 spark = $0.001 USD internally) — but this equivalence is never shown to users. Pack and subscription pricing sets the user-facing exchange rate. The missing piece is accepting real money.
 
 **Recommendation:** Start with **Stripe** (requires US LLC) or **Lemon Squeezy** (works directly from Costa Rica) for one-time credit pack purchases. The architecture below is provider-agnostic — the webhook handler and ledger design work with any provider.
 
@@ -33,7 +33,7 @@ The core design principle: **the payment provider is a deposit ATM**. It sends m
 
 The current system provides:
 
-- **Sparks currency**: 1 spark = $0.001 USD, stored in `UserBalance.balance_sparks`
+- **Sparks currency**: 1 spark = $0.001 USD internally (never shown to users), stored in `UserBalance.balance_sparks`
 - **Atomic operations**: `reserve_sparks()` uses SQL `UPDATE ... WHERE` to prevent TOCTOU races
 - **Idempotent debits**: Unique constraint on `(user_id, reference_id)` prevents double-charging
 - **Full audit trail**: `BalanceTransaction` append-only ledger with trace IDs
@@ -464,7 +464,7 @@ Surface alerts if blended margin drops below 1.5x (warning) or 1.3x (critical).
 Frontend                    Backend                     Provider
    │                          │                            │
    │  POST /billing/checkout  │                            │
-   │  {pack_id: "10k"}       │                            │
+   │  {pack_id: 2}            │                            │
    │─────────────────────────>│                            │
    │                          │  Generate purchase_id      │
    │                          │  (UUID, internal)          │
@@ -548,10 +548,13 @@ This prevents vendor lock-in. The `PaymentService` depends on the `PaymentGatewa
 # Pseudocode for webhook handler
 
 def handle_payment_webhook(request):
-    # 1. STORE RAW EVENT (before any processing)
+    payload = request.body
+    signature = request.headers["Stripe-Signature"]
+
+    # 1. STORE RAW EVENT (before verification, for debugging)
     raw_event = PaymentWebhookEvent(
         provider="stripe",
-        event_type=event.type,
+        event_type="unknown",  # Updated after verification
         payload=json.loads(payload),
         received_at=utcnow(),
     )
@@ -559,18 +562,19 @@ def handle_payment_webhook(request):
     db.flush()
 
     # 2. VERIFY SIGNATURE (reject spoofed webhooks)
-    payload = request.body
-    signature = request.headers["Stripe-Signature"]
     event = stripe.Webhook.construct_event(payload, signature, webhook_secret)
+    raw_event.event_type = event.type
+    raw_event.provider_event_id = event.id
 
-    # 3. EXTRACT EVENT
+    # 3. DISPATCH BY EVENT TYPE
     if event.type != "checkout.session.completed":
+        raw_event.processed = True
+        db.commit()
         return 200  # Acknowledge but ignore
 
     session = event.data.object
     metadata = session.metadata
     purchase_id = metadata["purchase_id"]  # Our internal UUID
-    user_id = int(metadata["user_id"])
     provider_payment_id = session.payment_intent
 
     # 4. FIND PENDING TRANSACTION (created at checkout time)
@@ -579,14 +583,16 @@ def handle_payment_webhook(request):
     ).first()
 
     if not txn:
-        # Orphaned webhook — log anomaly, create txn anyway
-        log.warning(f"No PENDING txn for purchase_id={purchase_id}")
-        txn = PaymentTransaction(...)
-        db.add(txn)
+        log.error(f"No PENDING txn for purchase_id={purchase_id}")
+        raise ValueError(f"Orphaned webhook: {purchase_id}")
 
     # 5. IDEMPOTENCY CHECK (prevent double-credit)
     if txn.status == PaymentStatus.COMPLETED:
         return 200  # Already processed
+
+    if txn.status != PaymentStatus.PENDING:
+        log.warning(f"Unexpected status {txn.status} for {purchase_id}")
+        return 200
 
     # 6. UPDATE TRANSACTION
     txn.provider_payment_id = provider_payment_id
@@ -594,12 +600,11 @@ def handle_payment_webhook(request):
     txn.completed_at = utcnow()
     txn.webhook_event_id = raw_event.id
 
-    # 7. CREDIT SPARKS (uses existing billing_service)
-    #    The ledger entry is the source of truth, not txn.sparks_credited
+    # 7. CREDIT SPARKS (ledger is the source of truth)
     pack = db.query(SparkPack).get(txn.pack_id)
     sparks_to_credit = pack.sparks_amount + pack.bonus_sparks
 
-    billing = BillingService(db, user_id)
+    billing = BillingService(db, txn.user_id)
     balance_txn = billing.add_credits(
         amount=sparks_to_credit,
         description=f"Purchased {sparks_to_credit} sparks ({txn.purchase_id})",
@@ -607,6 +612,7 @@ def handle_payment_webhook(request):
 
     # 8. LINK BACK (payment -> ledger for traceability)
     txn.balance_txn_id = balance_txn.id
+    raw_event.processed = True
 
     # 9. COMMIT (atomic: all updates in one transaction)
     db.commit()
@@ -741,9 +747,9 @@ class SparkPack(Base):
     __tablename__ = "spark_packs"
 
     id = Column(Integer, primary_key=True)
-    name = Column(String(64), nullable=False)        # "Starter", "Pro"
-    sparks_amount = Column(Integer, nullable=False)   # 5000, 25000, 60000
-    price_cents = Column(Integer, nullable=False)     # 500, 2000, 4000
+    name = Column(String(64), nullable=False)        # "Starter", "Creator", "Pro", "Studio"
+    sparks_amount = Column(Integer, nullable=False)   # 7000, 20000, 42000, 90000
+    price_cents = Column(Integer, nullable=False)     # 1000, 2500, 5000, 10000
     currency = Column(String(8), default="usd")
     bonus_sparks = Column(Integer, default=0)         # Volume discount bonus
     is_featured = Column(Boolean, default=False)      # Highlighted "Recommended" pack
@@ -1122,70 +1128,171 @@ This appears in the sidebar or header, not as a blocking modal.
 
 ### Phase 1: Minimal Working Payment System (2-3 weeks)
 
-**Backend:**
+Goal: Users can buy spark packs with real money. Admin can see purchases and issue refunds.
 
-1. Alembic migration: `payment_transactions` + `payment_webhook_events` + `spark_packs` tables
-2. Seed `spark_packs` with initial tiers (Starter/Creator/Pro/Studio)
-3. `backend/app/services/payment_gateway.py`: Abstract `PaymentGateway` interface + `StripeGateway` implementation
-4. `backend/app/services/payment_service.py`:
-   - `create_checkout_session(user_id, pack_id)` -- creates PENDING txn, returns checkout URL
-   - `handle_webhook(provider, payload, signature)` -- stores event, processes payment
-   - `get_purchase_history(user_id)` -- returns past purchases with status
-5. `backend/app/api/webhooks.py`: Webhook endpoint (no auth, signature-verified)
-6. `backend/app/api/billing.py`: Add `POST /billing/checkout`, `GET /billing/packs`, `GET /billing/purchases`
-7. Environment variables: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PUBLISHABLE_KEY`, `PAYMENT_PROVIDER`
+#### Step 1 — Database (migration 034)
 
-**Frontend:**
+Create three new tables in a single Alembic migration:
 
-8. `frontend/src/app/billing/page.tsx`: Add "Buy Sparks" section with pack cards (featured pack highlighted)
-9. Redirect to Stripe Checkout on pack selection
-10. Handle `?purchase=success` redirect with balance polling
-11. Add purchase history to billing page
+| Table | Key columns | Notes |
+|-------|-------------|-------|
+| `spark_packs` | name, sparks_amount, price_cents, bonus_sparks, is_featured, is_active, sort_order | Seed with 4 tiers (see below) |
+| `payment_webhook_events` | provider, event_type, provider_event_id (unique), payload (JSON), processed, processing_error | Raw event store |
+| `payment_transactions` | purchase_id (unique UUID), user_id, provider, provider_payment_id (unique), provider_session_id, amount_cents, currency, usd_amount_cents, exchange_rate, pack_id (FK), status (enum), refunded_amount_cents, balance_txn_id (FK), webhook_event_id (FK), ip_address | PENDING -> COMPLETED flow |
 
-**Infrastructure:**
+**Seed data for `spark_packs`:**
 
-12. Configure webhook URL in provider dashboard (or via CLI for dev)
-13. Set up webhook forwarding for local development (`stripe listen --forward-to`)
+```python
+packs = [
+    {"name": "Starter",  "sparks_amount": 7000,  "price_cents": 1000,  "bonus_sparks": 0,     "is_featured": False, "sort_order": 1},
+    {"name": "Creator",  "sparks_amount": 20000, "price_cents": 2500,  "bonus_sparks": 2000,  "is_featured": True,  "sort_order": 2},
+    {"name": "Pro",      "sparks_amount": 42000, "price_cents": 5000,  "bonus_sparks": 6000,  "is_featured": False, "sort_order": 3},
+    {"name": "Studio",   "sparks_amount": 90000, "price_cents": 10000, "bonus_sparks": 15000, "is_featured": False, "sort_order": 4},
+]
+```
 
-### Phase 2: Improved Billing UX (1-2 weeks)
+#### Step 2 — Models
 
-1. Custom checkout page using Stripe Elements (embed payment form in-app)
-2. Saved payment methods (Link wallet / Stripe Customer portal)
-3. Email receipts on successful purchase
-4. Low balance warning banner ("47 sparks remaining -- buy more?")
-5. Admin dashboard: purchase analytics, revenue metrics, abandoned checkout rate
-6. Reconciliation Celery beat task (daily provider vs local check)
-7. New account purchase cooldown (max $20 for accounts < 24h old)
+New files:
 
-### Phase 3: Subscriptions & Auto-Top-Up (2-3 weeks)
+| File | Contents |
+|------|----------|
+| `backend/app/models/payment.py` | `PaymentStatus` enum, `PaymentTransaction`, `PaymentWebhookEvent`, `SparkPack` models |
 
-1. Subscription plans (e.g., "Pro Plan: 50,000 sparks/month for $35")
-2. Auto-top-up: when balance drops below threshold, charge saved card
-3. Stripe Customer Portal for subscription management
-4. Usage-based billing option (monthly invoice based on actual consumption)
-5. Promotional credits / coupon codes (with shorter expiration)
-6. Referral credits
-7. Credit expiration policy (optional, 12-month default for purchased, 30-day for promotional)
-8. Secondary payment provider (PayPal or Lemon Squeezy) via `PaymentGateway` abstraction
+Update `backend/app/models/__init__.py` to export the new models.
 
-### New API Endpoints (Phase 1)
+#### Step 3 — Payment Gateway Abstraction
 
-| Endpoint | Method | Auth | Purpose |
-|----------|--------|------|---------|
-| `GET /billing/packs` | GET | User | List available spark packs |
-| `POST /billing/checkout` | POST | User | Create checkout session, returns URL |
-| `GET /billing/purchases` | GET | User | Purchase history |
-| `POST /webhooks/stripe` | POST | None* | Stripe webhook (*signature-verified) |
-| `GET /billing/admin/purchases` | GET | Admin | All purchases, filterable |
-| `POST /billing/admin/refund/{payment_id}` | POST | Admin | Issue refund |
-| `GET /billing/admin/abandoned` | GET | Admin | Abandoned checkouts (PENDING/EXPIRED) |
-| `GET /billing/admin/webhook-events` | GET | Admin | Raw webhook event log |
-
-### New Environment Variables
+New file: `backend/app/services/payment_gateway.py`
 
 ```
-STRIPE_SECRET_KEY=sk_live_...
-STRIPE_PUBLISHABLE_KEY=pk_live_...
-STRIPE_WEBHOOK_SECRET=whsec_...
+PaymentGateway (ABC)
+  ├── create_checkout_session(amount_cents, currency, metadata, success_url, cancel_url) -> CheckoutResult
+  ├── verify_webhook(payload, signature) -> WebhookEvent
+  └── create_refund(provider_payment_id, amount_cents?) -> RefundResult
+
+StripeGateway(PaymentGateway)    # Phase 1 implementation
+LemonSqueezyGateway(PaymentGateway)  # Phase 1 alternative (if no US LLC)
+
+get_payment_gateway() -> PaymentGateway  # Factory, reads PAYMENT_PROVIDER env var
+```
+
+The choice of Stripe vs Lemon Squeezy depends on entity setup (US LLC vs Costa Rica). The gateway abstraction means either can be swapped with zero changes to the rest of the codebase.
+
+#### Step 4 — Payment Service
+
+New file: `backend/app/services/payment_service.py`
+
+| Method | Description |
+|--------|-------------|
+| `create_checkout(user_id, pack_id)` | Validate pack exists and is active. Generate `purchase_id` (UUID). Create PENDING `PaymentTransaction`. Call gateway `create_checkout_session()`. Update txn with `provider_session_id`. Return checkout URL. |
+| `handle_webhook(provider, payload, signature)` | Store raw event in `payment_webhook_events`. Verify signature via gateway. Dispatch by event type. For `checkout.session.completed`: find PENDING txn by `purchase_id`, transition to COMPLETED, call `BillingService.add_credits()`, link `balance_txn_id`. All in one atomic commit. |
+| `get_purchases(user_id, limit, skip)` | Paginated purchase history (joins to `SparkPack` for pack name and to `BalanceTransaction` for credited sparks). |
+| `create_refund(payment_id, admin_user_id)` | Call gateway `create_refund()`. Update txn status. Create ADJUSTMENT `BalanceTransaction` to reverse sparks. Only if user has sufficient balance for full reversal; otherwise partial. |
+
+#### Step 5 — API Routes
+
+New file: `backend/app/api/webhooks.py`
+
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `POST /webhooks/stripe` | POST | None (signature-verified) | Stripe webhook receiver |
+| `POST /webhooks/lemon-squeezy` | POST | None (signature-verified) | LS webhook receiver (if using LS) |
+
+Add to existing `backend/app/api/billing.py`:
+
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `GET /billing/packs` | GET | User | List active spark packs (sorted by sort_order) |
+| `POST /billing/checkout` | POST | User | Create checkout session, returns `{checkout_url}` |
+| `GET /billing/purchases` | GET | User | Paginated purchase history |
+| `GET /billing/admin/purchases` | GET | Admin | All purchases, filterable by user/status/date |
+| `POST /billing/admin/refund/{payment_id}` | POST | Admin | Issue refund |
+| `GET /billing/admin/abandoned` | GET | Admin | PENDING/EXPIRED checkouts |
+| `GET /billing/admin/webhook-events` | GET | Admin | Raw webhook event log |
+
+Register webhooks router in `backend/app/main.py` (no `/api` prefix — webhooks are at `/webhooks/stripe`).
+
+#### Step 6 — Frontend Changes
+
+| File | Change |
+|------|--------|
+| `frontend/src/app/billing/page.tsx` | Remove "1 spark = $0.001 USD" text (line 66). Add "Buy Sparks" section above existing balance card. Pack cards with featured highlight. "Buy" button calls `POST /billing/checkout` and redirects to returned URL. |
+| `frontend/src/app/billing/page.tsx` | Handle `?purchase=success` query param: show success toast, poll `/billing/balance` every 2s for 30s until balance increases. |
+| `frontend/src/app/billing/page.tsx` | Add purchase history table below transaction history (or as a new tab). |
+| `frontend/src/lib/api.ts` | Add `billingApi.getPacks()`, `billingApi.createCheckout(packId)`, `billingApi.getPurchases()` functions. |
+
+#### Step 7 — Infrastructure & Config
+
+| Task | Details |
+|------|---------|
+| Environment variables | Add `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`, `PAYMENT_PROVIDER` to `.env`, Docker Compose, and Azure Container App secrets. |
+| Webhook URL (production) | Configure in Stripe Dashboard: `https://<backend-url>/webhooks/stripe` |
+| Webhook forwarding (local dev) | `stripe listen --forward-to localhost:8000/webhooks/stripe` |
+| Docker Compose | Add `stripe` pip dependency to `backend/requirements.txt` |
+| Stripe test mode | All development uses Stripe test keys (`sk_test_...`, `pk_test_...`). Test cards: `4242424242424242` (success), `4000000000000002` (decline). |
+
+#### Phase 1 Deliverables Checklist
+
+- [ ] Migration 034 creates 3 tables with seed data
+- [ ] Models in `payment.py`
+- [ ] `PaymentGateway` ABC + `StripeGateway` (or `LemonSqueezyGateway`)
+- [ ] `PaymentService` with checkout, webhook, purchases, refund
+- [ ] Webhook API route (signature-verified, no auth)
+- [ ] Billing API routes (packs, checkout, purchases, admin)
+- [ ] Frontend: pack cards, checkout redirect, balance polling, purchase history
+- [ ] Frontend: remove "1 spark = $0.001" display
+- [ ] Stripe test mode working locally with `stripe listen`
+- [ ] Manual test: buy pack -> webhook -> sparks appear in balance
+
+---
+
+### Phase 2: Billing UX & Safety (1-2 weeks)
+
+Goal: Better checkout experience, admin visibility, fraud guardrails.
+
+| Task | Details |
+|------|---------|
+| **Low balance warning** | When `available_balance < 100 sparks`, show banner in sidebar/header: "Low balance: X sparks remaining. [Buy more]" |
+| **Reconciliation task** | Celery beat job (daily): query provider API for payments in last 48h, compare against `payment_transactions`, flag mismatches. Auto-expire PENDING txns older than 24h. Alert via Sentry. |
+| **Margin monitoring** | Admin endpoint `GET /billing/admin/margins`: for each COMPLETED payment, compute `net_received / cogs`. Surface alerts if blended margin < 1.5x (warning) or < 1.3x (critical). |
+| **Abandoned checkout analytics** | Admin endpoint `GET /billing/admin/abandoned`: list PENDING/EXPIRED txns with user info and pack. Shows conversion funnel. |
+| **New account cooldown** | Accounts < 24h old: max single purchase $20. Enforce in `create_checkout()`. |
+| **Purchase velocity limit** | Max 3 purchases per user per hour. Enforce in `create_checkout()`. |
+| **Email receipts** | Send email on successful purchase (via provider's built-in receipt or custom email). |
+| **Saved payment methods** | Enable Stripe Link wallet or Stripe Customer objects for one-click returning purchases. |
+
+---
+
+### Phase 3: Subscriptions & Growth (2-3 weeks)
+
+Goal: Recurring revenue, auto-top-up, promotional tools.
+
+| Task | Details |
+|------|---------|
+| **Subscription plans** | Three tiers: Hobby ($15/mo, 15,000 sparks), Pro ($40/mo, 45,000 sparks), Studio ($80/mo, 100,000 sparks). Monthly reset with no rollover (standard model). |
+| **Subscription models** | New `subscription_plans` table + `user_subscriptions` table (user_id, plan_id, provider_subscription_id, status, current_period_start/end). |
+| **Subscription webhooks** | Handle `invoice.paid` (credit monthly sparks), `customer.subscription.deleted` (cancel), `invoice.payment_failed` (notify user). |
+| **Auto-top-up** | User sets threshold (e.g., "recharge 10,000 sparks when balance < 500"). Requires saved payment method. Triggered by `BillingService` when balance drops below threshold during debit. |
+| **Stripe Customer Portal** | Link to Stripe-hosted portal for subscription management (cancel, change plan, update payment method). |
+| **Promotional credits** | Admin can create promo codes that grant bonus sparks. `promo_codes` table (code, sparks_amount, expires_at, max_uses, uses_count). Credits marked with `expires_at` on `BalanceTransaction`. |
+| **Credit expiration** | Add `expires_at` column to `BalanceTransaction`. Purchased sparks: 12-month expiry. Promo sparks: 30-day expiry. Debit consumes oldest non-expired first (FIFO). |
+| **Secondary provider** | Add `LemonSqueezyGateway` or `PayPalGateway` via `PaymentGateway` abstraction. User selects payment method at checkout. |
+| **Referral credits** | User generates referral link. New user signs up -> both get bonus sparks after first purchase. |
+
+---
+
+### New Environment Variables (All Phases)
+
+```bash
+# Phase 1
 PAYMENT_PROVIDER=stripe          # or "lemon_squeezy"
+STRIPE_SECRET_KEY=sk_test_...    # sk_live_... in production
+STRIPE_PUBLISHABLE_KEY=pk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+
+# Phase 2 (if using LS as secondary)
+LEMON_SQUEEZY_API_KEY=...
+LEMON_SQUEEZY_WEBHOOK_SECRET=...
+LEMON_SQUEEZY_STORE_ID=...
 ```
