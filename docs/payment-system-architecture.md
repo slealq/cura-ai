@@ -256,7 +256,48 @@ Packs use **decreasing price-per-spark** to incentivize larger purchases:
 | Pro | $50 | 42,000 | 6,000 | 48,000 | $0.00104 | $47.00 | $28.80 | 1.63x |
 | Studio | $100 | 90,000 | 15,000 | 105,000 | $0.00095 | $94.50 | $63.00 | 1.50x |
 
-**Why the margins decrease with pack size:**
+#### Margin Walkthrough: Starter ($10 → 7,000 sparks → 2.14x)
+
+```
+Step 1: Net after payment fees
+  Gross:  $10.00
+  LS fee: 5% + $0.50 = $1.00
+  Net:    $9.00
+
+Step 2: Cost to fulfill 7,000 sparks (if user spends them all)
+  Provider cost per spark:       $0.0005  (half of $0.001, because 2x markup)
+  Infrastructure overhead (20%): $0.0001
+  Fully-loaded COGS per spark:   $0.0006
+
+  COGS = 7,000 × $0.0006 = $4.20
+
+Step 3: Margin
+  $9.00 / $4.20 = 2.14x
+
+  For every $1 of cost to fulfill those sparks, you keep $2.14 in revenue.
+```
+
+#### Margin Walkthrough: Studio ($100 → 105,000 sparks → 1.50x)
+
+```
+Step 1: Net after payment fees
+  Gross:  $100.00
+  LS fee: 5% + $0.50 = $5.50
+  Net:    $94.50
+
+Step 2: Cost to fulfill 105,000 sparks
+  COGS = 105,000 × $0.0006 = $63.00
+
+Step 3: Margin
+  $94.50 / $63.00 = 1.50x
+```
+
+The margin is lower because the user gets far more sparks per dollar (volume discount).
+The trade-off: lower margin but higher absolute revenue per transaction ($94.50 net vs
+$9.00 on Starter) and lower fee impact ($0.50 fixed fee is 0.5% of $100 vs 5% of $10).
+
+#### Why the margins decrease with pack size
+
 - Larger packs have lower effective fee rates (fixed $0.50 is smaller %)
 - Volume discount drives users toward bigger purchases (higher LTV)
 - Even the Studio pack at 1.50x is profitable — the Starter pack at 2.14x subsidizes
@@ -265,6 +306,13 @@ Packs use **decreasing price-per-spark** to incentivize larger purchases:
 ~1.80x across all pack sizes.
 
 **No $5 pack.** Lemon Squeezy's $0.50 fixed fee makes a $5 pack cost 15% in fees alone. Minimum pack is $10.
+
+#### Key assumption: usage rate
+
+All margins above assume the user **spends every spark they purchase**. In practice,
+some percentage goes unused — and unused sparks cost $0 in provider calls. If a user
+buys 7,000 sparks but only uses 5,000, the real COGS is $3.00 not $4.20, making the
+effective margin 3.0x instead of 2.14x. Unused sparks are pure profit.
 
 ### Subscription Pricing (Better Value)
 
@@ -276,11 +324,43 @@ Subscriptions are 15-25% cheaper per spark than packs, incentivizing predictable
 | Pro | $40/mo | 45,000 | $0.00089 | 22% cheaper |
 | Studio | $80/mo | 100,000 | $0.00080 | 30% cheaper |
 
-Subscription sparks reset monthly (no rollover in base plan). Unused sparks expire at month end. This is standard for credit subscription models (Midjourney, Replicate).
+#### Margin Walkthrough: Pro Subscription ($40/mo → 45,000 sparks → 1.38x headline)
+
+```
+Step 1: Net after payment fees
+  LS adds +0.5% for subscriptions, so 5.5% + $0.50:
+  Gross:  $40.00
+  LS fee: 5.5% + $0.50 = $2.70
+  Net:    $37.30
+
+Step 2: Cost to fulfill 45,000 sparks (if user spends them all)
+  COGS = 45,000 × $0.0006 = $27.00
+
+Step 3: Headline margin (100% usage)
+  $37.30 / $27.00 = 1.38x
+```
+
+This looks thin — but subscriptions have **breakage** (unused credits that expire).
+If 20% of subscription sparks go unused on average:
+
+```
+Effective COGS: 45,000 × 0.80 × $0.0006 = $21.60
+Adjusted margin: $37.30 / $21.60 = 1.73x
+```
+
+#### Why subscriptions work at lower headline margins
+
+- **Predictable recurring revenue** (MRR — the metric investors and lenders care about)
+- **Higher LTV** — a user paying $40/mo for 6 months = $240 total vs a one-time $50 pack
+- **Breakage** — unused sparks expire monthly, improving real-world margin from 1.38x to ~1.73x
+- **Lower churn cost** — acquiring a subscriber once vs re-acquiring pack buyers repeatedly
+
+Subscription sparks reset monthly (no rollover in base plan). Unused sparks expire at
+month end. This is standard for credit subscription models (Midjourney, Replicate).
 
 Optional: allow rollover for up to 1 month of unused sparks at higher-tier plans.
 
-LS adds +0.5% for subscription billing, which is negligible on these amounts.
+LS adds +0.5% for subscription billing, factored into the margins above.
 
 ### What Users Can DO With Sparks
 
