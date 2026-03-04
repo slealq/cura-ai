@@ -44,9 +44,11 @@ import type {
   ProviderConfig,
   ProviderModel,
   ReconciliationResponse,
+  ScatterResponse,
   SearchResponse,
   StepResponse,
   SummarizeCostsResponse,
+  TrendResponse,
   TokenResponse,
   TraceResponse,
   TrainingConfig,
@@ -1463,6 +1465,20 @@ export const billingApi = {
 
   adminGetMetrics: async (hours: number = 24): Promise<MetricsResponse> => {
     const { data } = await api.get('/billing/admin/metrics', { params: { hours } });
+    return data;
+  },
+
+  adminGetScatterData: async (params?: {
+    hours?: number;
+    operation?: string;
+    limit?: number;
+  }): Promise<ScatterResponse> => {
+    const { data } = await api.get('/billing/admin/decisions/scatter', { params });
+    return data;
+  },
+
+  adminGetAnomalyTrend: async (hours: number = 168): Promise<TrendResponse> => {
+    const { data } = await api.get('/billing/admin/anomalies/trend', { params: { hours } });
     return data;
   },
 

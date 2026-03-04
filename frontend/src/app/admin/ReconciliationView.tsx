@@ -3,15 +3,49 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
+import {
+  ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, ReferenceLine, ZAxis, Legend,
+} from 'recharts';
 import { billingApi } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import type { ReconciliationRow } from '@/types';
+import type { ReconciliationRow, ScatterPoint } from '@/types';
+
+const OPERATION_COLORS: Record<string, string> = {
+  tag: '#3b82f6',
+  describe: '#8b5cf6',
+  embed: '#06b6d4',
+  generate: '#f59e0b',
+  edit: '#ec4899',
+  train: '#ef4444',
+  evaluate: '#10b981',
+  summarize: '#6366f1',
+  expand_prompt: '#f97316',
+};
 
 function deltaColor(pct: number): string {
   const abs = Math.abs(pct);
   if (abs < 10) return 'text-green-600 dark:text-green-400';
   if (abs < 30) return 'text-yellow-600 dark:text-yellow-400';
   return 'text-red-600 dark:text-red-400';
+}
+
+function ScatterTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: ScatterPoint }> }) {
+  if (!active || !payload?.length) return null;
+  const p = payload[0].payload;
+  const delta = p.actual_sparks - p.estimated_sparks;
+  const deltaPct = p.estimated_sparks > 0 ? ((delta / p.estimated_sparks) * 100).toFixed(1) : '0';
+  return (
+    <div className="bg-popover border rounded-lg shadow-lg p-3 text-xs space-y-1">
+      <div className="font-medium">{p.operation}</div>
+      <div className="text-muted-foreground">{p.provider}</div>
+      <div>Estimated: {p.estimated_sparks} sparks</div>
+      <div>Actual: {p.actual_sparks} sparks</div>
+      <div className={delta > 0 ? 'text-red-500' : 'text-green-500'}>
+        Delta: {delta > 0 ? '+' : ''}{delta} ({deltaPct}%)
+      </div>
+    </div>
+  );
 }
 
 export default function ReconciliationView() {
@@ -29,6 +63,29 @@ export default function ReconciliationView() {
       threshold_pct: filters.threshold_pct,
     }),
   });
+
+  const { data: scatterData } = useQuery({
+    queryKey: ['admin-scatter', filters.operation],
+    queryFn: () => billingApi.adminGetScatterData({
+      hours: 24,
+      operation: filters.operation || undefined,
+      limit: 500,
+    }),
+  });
+
+  // Group scatter points by operation for multi-colored dots
+  const scatterByOp: Record<string, ScatterPoint[]> = {};
+  if (scatterData?.items) {
+    for (const pt of scatterData.items) {
+      if (!scatterByOp[pt.operation]) scatterByOp[pt.operation] = [];
+      scatterByOp[pt.operation].push(pt);
+    }
+  }
+
+  // Compute axis max for reference line
+  const maxVal = scatterData?.items?.length
+    ? Math.max(...scatterData.items.map((p) => Math.max(p.estimated_sparks, p.actual_sparks))) * 1.1
+    : 100;
 
   return (
     <div className="space-y-4">
@@ -67,6 +124,52 @@ export default function ReconciliationView() {
           <span className="text-muted-foreground">%</span>
         </label>
       </div>
+
+      {/* Scatter Plot */}
+      {scatterData && scatterData.items.length > 0 && (
+        <div className="border rounded-lg p-4">
+          <h3 className="text-sm font-medium mb-3">Estimated vs Actual (last 24h)</h3>
+          <ResponsiveContainer width="100%" height={300}>
+            <ScatterChart margin={{ top: 10, right: 20, bottom: 10, left: 10 }}>
+              <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+              <XAxis
+                type="number"
+                dataKey="estimated_sparks"
+                name="Estimated"
+                domain={[0, maxVal]}
+                tick={{ fontSize: 11 }}
+                label={{ value: 'Estimated Sparks', position: 'insideBottom', offset: -5, fontSize: 11 }}
+              />
+              <YAxis
+                type="number"
+                dataKey="actual_sparks"
+                name="Actual"
+                domain={[0, maxVal]}
+                tick={{ fontSize: 11 }}
+                label={{ value: 'Actual Sparks', angle: -90, position: 'insideLeft', fontSize: 11 }}
+              />
+              <ZAxis range={[30, 30]} />
+              <Tooltip content={<ScatterTooltip />} />
+              <Legend />
+              <ReferenceLine
+                segment={[{ x: 0, y: 0 }, { x: maxVal, y: maxVal }]}
+                stroke="#888"
+                strokeDasharray="5 5"
+                label={{ value: 'Perfect', position: 'insideTopLeft', fontSize: 10, fill: '#888' }}
+              />
+              {Object.entries(scatterByOp).map(([op, points]) => (
+                <Scatter
+                  key={op}
+                  name={op}
+                  data={points}
+                  fill={OPERATION_COLORS[op] || '#888'}
+                  opacity={0.7}
+                />
+              ))}
+            </ScatterChart>
+          </ResponsiveContainer>
+        </div>
+      )}
 
       {/* Summary */}
       {data && (

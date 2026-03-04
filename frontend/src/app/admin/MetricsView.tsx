@@ -138,6 +138,25 @@ export default function MetricsView() {
             </div>
           )}
 
+          {/* Anomalies by type */}
+          {data.anomalies_by_type && Object.keys(data.anomalies_by_type).length > 0 && (
+            <div>
+              <h3 className="text-sm font-medium mb-2">Anomalies by Type</h3>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                {Object.entries(data.anomalies_by_type)
+                  .sort(([, a], [, b]) => b - a)
+                  .map(([type, count]) => (
+                    <div key={type} className="flex items-center justify-between text-sm border rounded-lg px-3 py-2">
+                      <span className="text-muted-foreground">{type.replace(/_/g, ' ')}</span>
+                      <span className={cn('font-mono font-medium', count > 0 ? 'text-yellow-600 dark:text-yellow-400' : '')}>
+                        {count}
+                      </span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+
           {/* By operation */}
           <div>
             <h3 className="text-sm font-medium mb-2">By Operation</h3>

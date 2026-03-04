@@ -50,11 +50,19 @@ class TransactionListResponse(BaseModel):
     total: int
 
 
+class OperationUsageDetail(BaseModel):
+    operation: str
+    count: int
+    total_sparks: int
+    avg_sparks: float
+
+
 class UsageSummaryResponse(BaseModel):
     total_cost: float
     by_operation: dict[str, float]
     by_provider: dict[str, float]
     record_count: int
+    by_operation_detail: list[OperationUsageDetail] = []
 
 
 class AddCreditsRequest(BaseModel):
@@ -257,6 +265,29 @@ class MetricsResponse(BaseModel):
     by_operation: list[OperationMetric]
     by_provider: list[ProviderMetric]
     alerts: list[MetricAlert]
+
+
+class ScatterPoint(BaseModel):
+    estimated_sparks: int
+    actual_sparks: int
+    operation: str
+    provider: str
+    created_at: str
+
+
+class ScatterResponse(BaseModel):
+    items: list[ScatterPoint]
+
+
+class TrendBucket(BaseModel):
+    hour: str
+    total: int
+    by_type: dict[str, int]
+
+
+class TrendResponse(BaseModel):
+    items: list[TrendBucket]
+    hours: int
 
 
 class EvaluationCostBreakdown(BaseModel):
@@ -892,6 +923,94 @@ def admin_get_reconciliation(
     return BillingService.get_reconciliation_summary(
         db, start, end, operation, provider, threshold_pct,
     )
+
+
+# --- Scatter / Trend endpoints ---
+
+
+@router.get("/admin/decisions/scatter", response_model=ScatterResponse)
+def admin_get_scatter_data(
+    hours: int = Query(24, ge=1, le=168),
+    operation: str | None = None,
+    limit: int = Query(500, ge=1, le=2000),
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Return individual (estimated, actual) pairs for scatter plot."""
+    from datetime import timedelta
+
+    from app.models.cost_decision import CostDecision
+
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    query = (
+        db.query(CostDecision, UsageRecord)
+        .join(UsageRecord, UsageRecord.cost_decision_id == CostDecision.id)
+        .filter(
+            CostDecision.created_at >= cutoff,
+            CostDecision.estimated_sparks.isnot(None),
+            CostDecision.estimated_sparks > 0,
+            UsageRecord.delta_sparks.isnot(None),
+            UsageRecord.delta_sparks > 0,
+        )
+    )
+    if operation:
+        query = query.filter(CostDecision.operation == operation)
+
+    rows = query.order_by(CostDecision.created_at.desc()).limit(limit).all()
+    return {
+        "items": [
+            {
+                "estimated_sparks": d.estimated_sparks,
+                "actual_sparks": u.delta_sparks,
+                "operation": d.operation,
+                "provider": d.provider,
+                "created_at": d.created_at.isoformat(),
+            }
+            for d, u in rows
+        ],
+    }
+
+
+@router.get("/admin/anomalies/trend", response_model=TrendResponse)
+def admin_get_anomaly_trend(
+    hours: int = Query(168, ge=1, le=720),
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Return hourly anomaly counts grouped by type."""
+    from datetime import timedelta
+
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    rows = (
+        db.query(
+            func.date_trunc("hour", BillingAnomaly.created_at).label("hour"),
+            BillingAnomaly.anomaly_type,
+            func.count(BillingAnomaly.id).label("cnt"),
+        )
+        .filter(BillingAnomaly.created_at >= cutoff)
+        .group_by("hour", BillingAnomaly.anomaly_type)
+        .order_by("hour")
+        .all()
+    )
+
+    buckets: dict[str, dict[str, int]] = {}
+    for row in rows:
+        hour_key = row.hour.isoformat()
+        if hour_key not in buckets:
+            buckets[hour_key] = {}
+        buckets[hour_key][row.anomaly_type] = row.cnt
+
+    return {
+        "items": [
+            {
+                "hour": h,
+                "total": sum(by_type.values()),
+                "by_type": by_type,
+            }
+            for h, by_type in buckets.items()
+        ],
+        "hours": hours,
+    }
 
 
 # --- Anomaly endpoints ---

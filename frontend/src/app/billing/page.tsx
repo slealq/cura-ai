@@ -123,20 +123,32 @@ export default function BillingPage() {
               </div>
             )}
 
-            {/* By operation */}
-            {Object.keys(usage.by_operation).length > 0 && (
-              <div className="bg-card border rounded-lg p-4">
-                <p className="text-sm font-medium mb-3">By Operation</p>
-                <div className="grid grid-cols-2 gap-2">
-                  {Object.entries(usage.by_operation)
-                    .sort(([, a], [, b]) => b - a)
-                    .map(([op, cost]) => (
-                      <div key={op} className="flex items-center justify-between text-sm bg-muted rounded-lg px-3 py-2">
-                        <span className="text-muted-foreground">{op}</span>
-                        <span className="font-medium">{formatNumber(cost, 4)}</span>
-                      </div>
-                    ))}
+            {/* By operation — detailed table */}
+            {usage.by_operation_detail && usage.by_operation_detail.length > 0 && (
+              <div className="bg-card border rounded-lg overflow-hidden">
+                <div className="px-4 py-3 border-b">
+                  <p className="text-sm font-medium">By Operation</p>
                 </div>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/50">
+                      <th className="text-left px-4 py-2 font-medium">Operation</th>
+                      <th className="text-right px-4 py-2 font-medium">Count</th>
+                      <th className="text-right px-4 py-2 font-medium">Total Sparks</th>
+                      <th className="text-right px-4 py-2 font-medium">Avg/Call</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {usage.by_operation_detail.map((row) => (
+                      <tr key={row.operation} className="border-b last:border-0">
+                        <td className="px-4 py-2">{row.operation}</td>
+                        <td className="px-4 py-2 text-right font-mono">{row.count.toLocaleString()}</td>
+                        <td className="px-4 py-2 text-right font-mono">{formatNumber(row.total_sparks)}</td>
+                        <td className="px-4 py-2 text-right font-mono text-muted-foreground">{row.avg_sparks.toFixed(1)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>

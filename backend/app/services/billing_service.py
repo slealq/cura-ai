@@ -447,19 +447,32 @@ class BillingService:
         total_cost = 0
         by_operation: dict[str, int] = {}
         by_provider: dict[str, int] = {}
+        op_counts: dict[str, int] = {}
 
         for r in records:
             sparks = r.delta_sparks if r.delta_sparks is not None else int(r.charged_cost * USD_TO_SPARKS)
             total_cost += sparks
             op_key = r.operation
             by_operation[op_key] = by_operation.get(op_key, 0) + sparks
+            op_counts[op_key] = op_counts.get(op_key, 0) + 1
             by_provider[r.provider] = by_provider.get(r.provider, 0) + sparks
+
+        by_operation_detail = [
+            {
+                "operation": op,
+                "count": op_counts[op],
+                "total_sparks": total,
+                "avg_sparks": round(total / op_counts[op], 1) if op_counts[op] > 0 else 0,
+            }
+            for op, total in sorted(by_operation.items(), key=lambda x: x[1], reverse=True)
+        ]
 
         return {
             "total_cost": total_cost,
             "by_operation": by_operation,
             "by_provider": by_provider,
             "record_count": len(records),
+            "by_operation_detail": by_operation_detail,
         }
 
     # --- Cost estimation ---

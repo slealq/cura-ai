@@ -92,7 +92,14 @@ export default function OperationsMonitor() {
       </div>
 
       {activeTab === 'Reconciliation' && <ReconciliationView />}
-      {activeTab === 'Anomalies' && <AnomaliesView />}
+      {activeTab === 'Anomalies' && (
+        <AnomaliesView
+          onViewTrace={(traceId) => {
+            setSelectedTraceId(traceId);
+            setActiveTab('Operations');
+          }}
+        />
+      )}
       {activeTab === 'Metrics' && <MetricsView />}
 
       {activeTab === 'Operations' && <>
@@ -204,7 +211,9 @@ export default function OperationsMonitor() {
         </div>
       )}
 
-      {/* Trace detail drawer */}
+      </>}
+
+      {/* Trace detail drawer — rendered outside tab content so it shows from any tab */}
       {selectedTraceId && (
         <TraceDetailDrawer
           traceId={selectedTraceId}
@@ -213,7 +222,6 @@ export default function OperationsMonitor() {
           onClose={() => setSelectedTraceId(null)}
         />
       )}
-      </>}
     </section>
   );
 }

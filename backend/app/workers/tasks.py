@@ -2023,6 +2023,8 @@ def _create_reconciliation_anomaly(
         return
 
     detail["decision_id"] = decision.id
+    if decision.trace_id:
+        detail["trace_id"] = decision.trace_id
     anomaly = BillingAnomaly(
         user_id=decision.user_id,
         anomaly_type=anomaly_type,

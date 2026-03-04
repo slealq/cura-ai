@@ -508,11 +508,19 @@ export interface TransactionListResponse {
   total: number;
 }
 
+export interface OperationUsageDetail {
+  operation: string;
+  count: number;
+  total_sparks: number;
+  avg_sparks: number;
+}
+
 export interface UsageSummary {
   total_cost: number;
   by_operation: Record<string, number>;
   by_provider: Record<string, number>;
   record_count: number;
+  by_operation_detail: OperationUsageDetail[];
 }
 
 export interface AdminUserBalance {
@@ -704,6 +712,7 @@ export interface MetricsResponse {
   pending_decisions: number;
   avg_delta_pct: number;
   catalog_miss_count: number;
+  anomalies_by_type: Record<string, number>;
   by_operation: OperationMetric[];
   by_provider: ProviderMetric[];
   alerts: MetricAlert[];
@@ -829,4 +838,29 @@ export interface TraceResponse {
   usage_records: TraceUsageRecord[];
   pipeline_logs: TracePipelineLog[];
   transactions: TraceTransaction[];
+}
+
+// --- Scatter / Trend types ---
+
+export interface ScatterPoint {
+  estimated_sparks: number;
+  actual_sparks: number;
+  operation: string;
+  provider: string;
+  created_at: string;
+}
+
+export interface ScatterResponse {
+  items: ScatterPoint[];
+}
+
+export interface TrendBucket {
+  hour: string;
+  total: number;
+  by_type: Record<string, number>;
+}
+
+export interface TrendResponse {
+  items: TrendBucket[];
+  hours: number;
 }
