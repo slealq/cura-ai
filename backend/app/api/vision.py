@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.core.security import get_current_user
+from app.core.security import get_current_user, get_current_user_from_token_param
 from app.db.base import get_db
 from app.models.user import User
 from app.services.billing_context import (
@@ -83,6 +83,7 @@ class VisionResultResponse(BaseModel):
     source_image_id: int | None = None
     source_generated_id: int | None = None
     source_object_key: str | None = None
+    source_thumbnail_url: str | None = None
     created_at: datetime
 
 
@@ -426,9 +427,46 @@ async def list_results(
     current_user: User = Depends(get_current_user),
 ):
     """List vision analysis results for the current user, newest first."""
+    from app.models.generated_image import GeneratedImage
+    from app.models.image import Image
+
     vision_service = get_vision_service(db, current_user.id)
     items = vision_service.list_results(skip=skip, limit=limit)
     total = vision_service.count_results()
+
+    # Batch-fetch thumbnail URIs to avoid N+1 queries
+    image_ids = {r.source_image_id for r in items if r.source_image_id}
+    gen_ids = {r.source_generated_id for r in items if r.source_generated_id}
+
+    img_thumb_map: dict[int, str | None] = {}
+    if image_ids:
+        rows = db.query(Image.id, Image.thumbnail_uri_small).filter(
+            Image.id.in_(image_ids), Image.user_id == current_user.id,
+        ).all()
+        img_thumb_map = {r.id: r.thumbnail_uri_small for r in rows}
+
+    gen_thumb_map: dict[int, str | None] = {}
+    if gen_ids:
+        rows = db.query(GeneratedImage.id, GeneratedImage.thumbnail_uri_small).filter(
+            GeneratedImage.id.in_(gen_ids), GeneratedImage.user_id == current_user.id,
+        ).all()
+        gen_thumb_map = {r.id: r.thumbnail_uri_small for r in rows}
+
+    def _resolve_thumbnail(r) -> str | None:
+        if r.source_image_id and r.source_image_id in img_thumb_map:
+            uri = img_thumb_map[r.source_image_id]
+            if uri:
+                filename = uri.rsplit("/", 1)[-1]
+                return f"/api/images/thumbnails/{filename}"
+        if r.source_generated_id and r.source_generated_id in gen_thumb_map:
+            uri = gen_thumb_map[r.source_generated_id]
+            if uri:
+                filename = uri.rsplit("/", 1)[-1]
+                return f"/api/generation/thumbnails/{filename}"
+        if r.source_object_key:
+            return f"/api/vision/sources/{r.source_object_key}"
+        return None
+
     return VisionResultListResponse(
         items=[
             VisionResultResponse(
@@ -444,6 +482,7 @@ async def list_results(
                 source_image_id=r.source_image_id,
                 source_generated_id=r.source_generated_id,
                 source_object_key=r.source_object_key,
+                source_thumbnail_url=_resolve_thumbnail(r),
                 created_at=r.created_at,
             )
             for r in items
@@ -464,6 +503,25 @@ async def delete_result(
     vision_service = get_vision_service(db, current_user.id)
     if not vision_service.delete_result(result_id):
         raise HTTPException(status_code=404, detail="Result not found")
+
+
+@router.get("/sources/{object_key:path}")
+async def serve_vision_source(
+    object_key: str,
+    current_user: User = Depends(get_current_user_from_token_param),
+):
+    """Serve an uploaded vision source image (for thumbnail display in results)."""
+    from app.services.storage import get_storage_service
+
+    storage = get_storage_service()
+    ext = object_key.rsplit(".", 1)[-1].lower()
+    mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif"}
+    media_type = mime_map.get(ext, "image/jpeg")
+
+    response = storage.get_file_response("generated", object_key, media_type)
+    if response is None:
+        raise HTTPException(status_code=404, detail="Source image not found")
+    return response
 
 
 @router.post("/upload-source", response_model=VisionSourceUploadResponse)

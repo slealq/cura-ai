@@ -1207,6 +1207,7 @@ export const visionApi = {
       source_image_id?: number;
       source_generated_id?: number;
       source_object_key?: string;
+      source_thumbnail_url?: string | null;
       created_at: string;
     }>;
     total: number;
@@ -1228,6 +1229,10 @@ export const visionApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
     return data;
+  },
+
+  sourceImageUrl: (objectKey: string): string => {
+    return authUrl(`/api/vision/sources/${objectKey}`);
   },
 };
 

@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { visionApi, settingsApi, billingApi, imagesApi } from '@/lib/api';
+import { visionApi, settingsApi, billingApi, imagesApi, authUrl } from '@/lib/api';
 import { Loader2, Eye, X, Upload, ImageIcon, Copy, Check, Trash2, ChevronDown, ChevronUp, Save, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import ImagePickerModal from '@/components/ImagePickerModal';
@@ -77,6 +77,7 @@ export default function VisionPage() {
 
   // Results from server
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
   // Fetch persisted results
   const { data: resultsData, isLoading: resultsLoading } = useQuery({
@@ -430,7 +431,7 @@ export default function VisionPage() {
             {currentCost != null && currentCost > 0 && (
               <span className="inline-flex items-center gap-0.5 text-xs text-amber-600 dark:text-amber-400">
                 <Zap className="h-3 w-3" />
-                ~{currentCost} sparks
+                ~{Math.round(currentCost)} sparks
               </span>
             )}
           </div>
@@ -674,24 +675,40 @@ export default function VisionPage() {
                 </div>
               </div>
 
-              {result.mode === 'tag' && result.result_tags && (
-                <div className="flex flex-wrap gap-1.5">
-                  {result.result_tags.map((tag, i) => (
-                    <span
-                      key={i}
-                      className="px-2.5 py-1 bg-muted rounded-full text-xs font-medium"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              )}
+              <div className="flex gap-3">
+                {result.source_thumbnail_url && (
+                  <button
+                    onClick={() => setLightboxUrl(authUrl(result.source_thumbnail_url!))}
+                    className="shrink-0"
+                  >
+                    <img
+                      src={authUrl(result.source_thumbnail_url)}
+                      alt=""
+                      className="h-64 max-w-96 rounded object-contain border border-border hover:ring-2 hover:ring-primary/50 transition-shadow cursor-pointer"
+                    />
+                  </button>
+                )}
+                <div className="flex-1 space-y-3">
+                  {result.mode === 'tag' && result.result_tags && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {result.result_tags.map((tag, i) => (
+                        <span
+                          key={i}
+                          className="px-2.5 py-1 bg-muted rounded-full text-xs font-medium"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
 
-              {(result.mode === 'describe' || result.mode === 'custom') && result.result_text && (
-                <div className="text-sm whitespace-pre-wrap bg-muted/30 rounded-lg p-3 max-h-96 overflow-y-auto">
-                  {result.result_text}
+                  {(result.mode === 'describe' || result.mode === 'custom') && result.result_text && (
+                    <div className="text-sm whitespace-pre-wrap bg-muted/30 rounded-lg p-3 max-h-96 overflow-y-auto">
+                      {result.result_text}
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
             </div>
           ))}
         </section>
@@ -711,6 +728,27 @@ export default function VisionPage() {
         <div className="text-center py-16 text-muted-foreground">
           <Loader2 className="h-8 w-8 mx-auto mb-3 animate-spin opacity-30" />
           <p className="text-sm">Loading results...</p>
+        </div>
+      )}
+
+      {/* Lightbox overlay */}
+      {lightboxUrl && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 cursor-pointer"
+          onClick={() => setLightboxUrl(null)}
+        >
+          <button
+            onClick={() => setLightboxUrl(null)}
+            className="absolute top-4 right-4 p-2 text-white/70 hover:text-white transition-colors"
+          >
+            <X className="h-6 w-6" />
+          </button>
+          <img
+            src={lightboxUrl}
+            alt=""
+            className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg"
+            onClick={(e) => e.stopPropagation()}
+          />
         </div>
       )}
 
