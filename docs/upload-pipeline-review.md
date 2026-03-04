@@ -129,16 +129,9 @@
 
 ### B2. Folder Assignment Bugs
 
-**Root cause 1: CRITICAL — `job.result` dictionary race condition**
-- `images.py:186-193`: When updating `job.result`, the endpoint reads the current dict, appends new IDs, and writes back. With 3 parallel chunks hitting this code simultaneously:
-  ```
-  Chunk A reads job.result: image_ids=[1,2]
-  Chunk B reads job.result: image_ids=[1,2]   (stale!)
-  Chunk A writes: image_ids=[1,2,3,4]
-  Chunk B writes: image_ids=[1,2,5,6]          (overwrites A's [3,4])
-  ```
-- **Result**: Images 3 and 4 are permanently lost from `all_upload_ids`. They exist in the DB but are never assigned to the folder.
-- **No SELECT FOR UPDATE** is used. The default PostgreSQL READ COMMITTED isolation lets both chunks read the pre-update state.
+**~~Root cause 1: CRITICAL — `job.result` dictionary race condition~~ — FIXED (Feb 2026)**
+- ~~`images.py:186-193`: When updating `job.result`, the endpoint reads the current dict, appends new IDs, and writes back.~~
+- **Fix:** `with_for_update()` row lock on `Job` serializes concurrent chunk writers. Uses `lazyload(Job.image)` to avoid PostgreSQL's "FOR UPDATE cannot be applied to nullable side of outer join" error.
 
 **Root cause 2: Dual folder assignment paths**
 - Both the API endpoint (`images.py:220-221`) and the Celery worker (`tasks.py:238`) call `_assign_folder_on_completion()`. Both paths can fire, wasting resources but not causing data issues (the function is idempotent).
@@ -159,16 +152,16 @@ The UI upload page correctly shows "No folder (upload to library only)" as the d
 **Duplicate detection is application-level with a DB safety net:**
 - `fast_ingest()` checks `WHERE file_hash = X AND user_id = Y` before inserting.
 - Migration 017 creates `UNIQUE(user_id, file_hash)` as a DB constraint.
-- **Gap**: `fast_ingest()` doesn't catch `IntegrityError`. If two concurrent requests pass the application check, the second `db.flush()` will raise an unhandled `IntegrityError`, propagated as a 500 error for that file. The file is already written to storage at this point (orphaned).
+- ~~**Gap**: `fast_ingest()` doesn't catch `IntegrityError`.~~ **FIXED:** `IntegrityError` is now caught in `fast_ingest()` — gracefully returns `None` (duplicate) instead of 500 error.
 
 **Non-atomic storage + DB writes:**
 - `image_service.py:177`: `save_image()` writes to storage.
 - `image_service.py:195-196`: `db.add(image)` + `db.flush()` writes to DB.
 - If the process crashes between lines 177 and 196, the file is orphaned in storage with no DB record. There is no cleanup handler.
 
-**Missing `_finish_ingest_job_item` call on re-delivery skip:**
-- `tasks.py:374-379`: If image status != PENDING (re-delivery guard), the task skips it with `continue` — but does NOT call `_finish_ingest_job_item()`. This means re-delivered images that were already processed won't increment job progress.
-- **Impact**: If a Celery task is re-delivered (worker crash + `task_acks_late=True`), the skipped images' progress is never counted, and the job hangs at `progress < total_items` forever.
+**~~Missing `_finish_ingest_job_item` call on re-delivery skip~~ — FIXED (Feb 2026):**
+- ~~`tasks.py:374-379`: If image status != PENDING (re-delivery guard), the task skips it with `continue` — but does NOT call `_finish_ingest_job_item()`.~~
+- **Fix:** `_finish_ingest_job_item(db, job_id, failed=False)` is now called on skipped re-delivered images, so job progress is correctly counted even after worker restarts.
 
 ---
 
@@ -383,17 +376,17 @@ The `billing_context.py` already has `init_trace()` / `get_trace_id()` for billi
 
 ## F. Concrete Code Hotspots
 
-| File:Line | Function | Risk | Why |
-|-----------|----------|------|-----|
-| `api/images.py:186-193` | `upload_images_batch` — job.result update | **CRITICAL** | Race condition: concurrent chunks overwrite each other's `image_ids`. No locking. |
-| `services/image_service.py:177` | `fast_ingest` — `save_image()` before DB | **HIGH** | Non-atomic: file orphaned if `db.flush()` fails. No cleanup. |
-| `services/image_service.py:159-166` | `fast_ingest` — duplicate check | **HIGH** | Application-level check + DB constraint, but `IntegrityError` unhandled → 500 error + orphaned file. |
-| `workers/tasks.py:374-379` | `process_ingest_batch` — re-delivery guard | **HIGH** | Skipped images don't call `_finish_ingest_job_item()` → job hangs forever. |
-| `services/image_service.py:171-174` | `fast_ingest` — `compute_image_metadata()` | **MEDIUM** | PIL + phash inline in HTTP handler. ~20-50ms/file adds up with 15 files/chunk. |
-| `services/folder_service.py:155-160` | `add_images_to_folder` — image_count | **MEDIUM** | Denormalized count computed without locking → drift under concurrency. |
-| `workers/tasks.py:405+407` | `process_ingest_batch` — commit then finish_job | **MEDIUM** | Task crash between `db.commit()` and `_finish_ingest_job_item()` → image processed but progress not counted. |
-| `api/images.py:140` | `upload_images_batch` — `file.read()` | **LOW** | Entire file in memory. 15 large files = 150MB+ per chunk. 3 parallel chunks = 450MB+. |
-| `workers/celery_app.py:86` | Docker compose: `--concurrency=1` | **LOW** | Only 1 concurrent task on default worker. Ingestion bottleneck for large uploads. |
+| File:Line | Function | Risk | Why | Status (Mar 2026) |
+|-----------|----------|------|-----|---|
+| `api/images.py:186-193` | `upload_images_batch` — job.result update | ~~CRITICAL~~ | Race condition: concurrent chunks overwrite each other's `image_ids`. No locking. | **FIXED** — `with_for_update()` + `lazyload(Job.image)` |
+| `services/image_service.py:177` | `fast_ingest` — `save_image()` before DB | **HIGH** | Non-atomic: file orphaned if `db.flush()` fails. No cleanup. | Open |
+| `services/image_service.py:159-166` | `fast_ingest` — duplicate check | ~~HIGH~~ | Application-level check + DB constraint, `IntegrityError` handling added. | **FIXED** — `IntegrityError` caught, returns None (duplicate) |
+| `workers/tasks.py:374-379` | `process_ingest_batch` — re-delivery guard | ~~HIGH~~ | Skipped images now call `_finish_ingest_job_item()`. | **FIXED** — progress counted on skip |
+| `services/image_service.py:171-174` | `fast_ingest` — `compute_image_metadata()` | ~~MEDIUM~~ | PIL + phash deferred to Celery worker. | **FIXED** — dimensions/phash computed by Celery task |
+| `services/folder_service.py:155-160` | `add_images_to_folder` — image_count | **MEDIUM** | Denormalized count computed without locking → drift under concurrency. | Open |
+| `workers/tasks.py:405+407` | `process_ingest_batch` — commit then finish_job | **MEDIUM** | Task crash between `db.commit()` and `_finish_ingest_job_item()` → image processed but progress not counted. | Open |
+| `api/images.py:140` | `upload_images_batch` — `file.read()` | **LOW** | Entire file in memory. 15 large files = 150MB+ per chunk. 3 parallel chunks = 450MB+. | Open |
+| `workers/celery_app.py:86` | Docker compose: `--concurrency=1` | **LOW** | Only 1 concurrent task on default worker. Ingestion bottleneck for large uploads. | Open |
 
 ---
 
@@ -461,16 +454,16 @@ The Celery task already has the fallback path (`tasks.py:384-392`: `if image.wid
 
 ---
 
-## Next Actions Checklist
+## Next Actions Checklist — Updated March 2026
 
-1. [ ] **Apply Patch 1** — `with_for_update()` on job.result reads in `api/images.py`
-2. [ ] **Apply Patch 2** — Add `_finish_ingest_job_item()` to re-delivery skip path in `tasks.py`
-3. [ ] **Apply Patch 3** — Catch `IntegrityError` in `fast_ingest()`
-4. [ ] **Apply Patch 4** — Remove `compute_image_metadata()` from `fast_ingest()`, rely on Celery fallback
-5. [ ] **Verify**: Upload 100 images to a new folder with 3 parallel chunks → confirm all images appear in folder
-6. [ ] **Verify**: Kill Celery worker mid-batch, restart → confirm job completes (no hung progress)
-7. [ ] **Verify**: Upload same file in two simultaneous chunks → confirm no 500 error, both resolve as duplicate
+1. [x] **Apply Patch 1** — `with_for_update()` on job.result reads in `api/images.py` (+ `lazyload(Job.image)` to avoid FOR UPDATE outer join error)
+2. [x] **Apply Patch 2** — Add `_finish_ingest_job_item()` to re-delivery skip path in `tasks.py`
+3. [x] **Apply Patch 3** — Catch `IntegrityError` in `fast_ingest()`
+4. [x] **Apply Patch 4** — Remove `compute_image_metadata()` from `fast_ingest()`, rely on Celery fallback
+5. [x] **Verify**: Upload 100 images to a new folder with 3 parallel chunks → confirm all images appear in folder
+6. [x] **Verify**: Kill Celery worker mid-batch, restart → confirm job completes (no hung progress)
+7. [x] **Verify**: Upload same file in two simultaneous chunks → confirm no 500 error, both resolve as duplicate
 8. [ ] **Fix `image_count` denormalization** — flush before counting in `folder_service.py:155-160`
 9. [ ] **Add orphan cleanup** — Celery beat task comparing storage objects to DB records
 10. [ ] **Consider**: Increase default worker concurrency to 2 (`docker-compose.yml:86`) for faster thumbnail throughput
-11. [ ] **Consider**: Add upload session correlation IDs for end-to-end debugging
+11. [x] **Add upload correlation IDs** — `RequestContextMiddleware` now generates `trace_id` + `request_id` per request. Frontend sends `X-Trace-Id` + `X-Session-Id`. Full end-to-end correlation implemented (though `upload_session_id` specifically is not a separate concept — `trace_id` serves this purpose)

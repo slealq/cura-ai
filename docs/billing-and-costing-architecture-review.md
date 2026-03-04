@@ -166,13 +166,28 @@ sequenceDiagram
 - `generation_tasks.py`: `generate_image()`, `edit_image()`, `train_lora()`, `evaluate_lora()`
 - `api/generation.py`: `expand_prompt()`
 
-#### Actual Usage Contract (current state — fragile)
+#### Actual Usage Contract — Updated March 2026
 
-Every provider call must ultimately produce actual usage data so billing can compute the real charge. Today, this data flows through an **implicit side-channel**:
+Every provider call must ultimately produce actual usage data so billing can compute the real charge. The data flows through two paths:
 
-1. Provider calls `write_log(API_CALL, input_tokens=..., output_tokens=..., provider_cost=...)`.
-2. `write_log()` detects the operation is in `ORCHESTRATOR_ENABLED_OPS` and calls `set_last_api_call_tokens(in, out, cost)` — storing values in a ContextVar.
-3. The calling task reads them back via `get_last_api_call_tokens()` and passes them to `record_actual()`.
+**Path 1 (preferred): `billable.call()` wrapper**
+All task functions now use the `billable()` context manager:
+```python
+with billable(db, user_id, operation="tag", provider="openai", model="gpt-4o", ...) as b:
+    result = b.call(tagger.tag_image, image_data, prompt)
+```
+`b.call()` internally: (1) invokes the provider function, (2) reads `get_last_api_call_tokens()` from the ContextVar bridge, (3) calls `_record_from_context()` to persist actual usage on the CostDecision. On exception: automatically calls `fail_decision()`.
+
+**Path 2 (escape hatch): `b.set_actual()` explicit**
+For cases where ContextVars are unavailable or the provider returns data in a non-standard way:
+```python
+with billable(...) as b:
+    result = provider.some_call(...)
+    b.set_actual(input_tokens=100, output_tokens=50, provider_cost=0.02)
+```
+
+**Path 3 (deprecated fallback): ContextVar-only**
+If neither `b.call()` nor `b.set_actual()` is used, `_on_exit()` attempts to read tokens from the ContextVar bridge and logs a deprecation warning. This path exists for backward compatibility during migration.
 
 **What must come back from each provider call:**
 
@@ -184,28 +199,30 @@ Every provider call must ultimately produce actual usage data so billing can com
 | `unit_metrics` | dict | Not captured today | e.g., `{"megapixels": 1.2, "resolution": "1024x1024", "steps": 30}` |
 | `raw_response` | dict | Partial (request/response snapshots on CostDecision) | Provider API response blob |
 
-**Problem:** The ContextVar transport is the *only* mechanism. If any async/context boundary loses the ContextVar (e.g., a new asyncio Task that doesn't share the container, or an exception before `write_log()` runs), actual usage is silently `None` — and billing computes $0. See failure mode B.1 #12.
+**Remaining concern:** The underlying ContextVar transport (`_last_api_tokens_var`) is still the mechanism by which `write_log()` passes tokens to `b.call()`. The target (explicit return values from provider functions) is not yet implemented. However, the `billable()` wrapper significantly reduces the risk window — the extract-and-record flow is now atomic within `b.call()` rather than being a multi-step manual process.
 
-**Target:** Actual usage should be passed explicitly from provider boundary to billing, not inferred later from side-channel ContextVars. See C.1 invariant #8 and C.2 building block #2.
+#### Sequence 2: Deferred Billing Path (pipeline: tag + describe + embed in one job) — Updated March 2026
 
-#### Sequence 2: Deferred Billing Path (pipeline: tag + describe + embed in one job)
+**Pipeline-level reservation:** Instead of reserving per-operation, the pipeline now estimates total cost (tag + describe + embed) upfront and reserves once. Each sub-operation uses `skip_reservation=True` to avoid redundant per-decision reservations.
 
 ```mermaid
 sequenceDiagram
     participant Task as process_image_pipeline
     participant Ctx as billing_context
-    participant Orch as BillingOrchestrator
     participant Svc as BillingService
+    participant Bill as billable() ctx mgr
     participant Fin as finalize_job_billing
 
     Task->>Ctx: set_billing_deferred(True)
+    Task->>Svc: reserve_sparks(total_estimate for tag+describe+embed)
+    Note over Svc: Single combined reservation
 
     loop For each stage (tag, describe, embed)
-        Task->>Orch: create_decision(op)
-        Note over Orch: Reserves sparks per-op
-        Task->>Orch: record_actual(defer_debit=True)
-        Note over Orch: Creates UsageRecord, releases reservation, status=EXECUTED
-        Note over Orch: Does NOT debit balance yet
+        Task->>Bill: with billable(..., skip_reservation=True) as b
+        Note over Bill: Skips per-decision reservation (pipeline holds it)
+        Bill->>Bill: b.call(provider_fn)
+        Note over Bill: Records actual via ContextVar bridge, defer_debit=True
+        Note over Bill: Creates UsageRecord, status=EXECUTED, does NOT debit
     end
 
     Task->>Fin: finalize_job_billing(create_debit=True)
@@ -359,7 +376,10 @@ Where billing-related parameters live:
 | CostDecision audit trail | Active | Every orchestrated op creates a `CostDecision` with `trace_id`, request/response snapshots, estimated vs actual tokens, catalog match tier |
 | BillingAnomaly | Active | Catalog misses recorded automatically. Admin API for listing/resolving/creating catalog entries from anomalies |
 | Health metrics | Active | `BillingService.get_metrics()` computes failure rate, cancel rate, stale decisions, avg estimate-vs-actual delta, catalog misses over configurable window |
-| Reconciliation | **Manual only** | Admin endpoint `GET /billing/admin/reconciliation` compares estimated vs actual sparks per CostDecision. No automated alerting |
+| Reconciliation | **Automated** | Hourly `reconcile_billing()` Celery Beat task detects: stale decisions (>30min PENDING), missing actuals, estimate drift (>50%), reservation leaks. Admin endpoint `GET /billing/admin/reconciliation` for manual review. `GET /admin/anomalies/trend` for hourly anomaly counts |
+| OTel billing metrics | Active | 9 instruments in `_BillingMeters` class: counters for decisions/failures/cancellations/anomalies/catalog_misses; histograms for estimate_delta_pct, charge_sparks, debit_latency_ms, reservation_sparks |
+| Request context | Active | `RequestContextMiddleware` generates `trace_id` + `request_id` per HTTP request. Frontend sends `X-Trace-Id` + `X-Session-Id`. Both echoed in response headers |
+| Frontend Sentry | Active | `@sentry/react` with error boundaries (`error.tsx`, `global-error.tsx`). Observability helpers in `lib/observability.ts` |
 | Trace reconstruction | Active | Admin endpoint `GET /billing/admin/trace/{trace_id}` reconstructs full billing trace: decisions + usage records + pipeline logs + transactions |
 
 **Cross-reference:** See [Observability Architecture Review](./observability-architecture-review.md) sections D.1 (golden metrics), F (tooling decision — Sentry + OTel + PostHog), and K (Sentry Logs integration).
@@ -370,92 +390,95 @@ Where billing-related parameters live:
 
 ### B.0 — Executive Root Causes
 
-The billing system has sophisticated infrastructure (orchestrator pattern, idempotency, reservations, deferred billing, anomaly tracking). But three structural problems make it unreliable in practice:
+The billing system has sophisticated infrastructure (orchestrator pattern, idempotency, reservations, deferred billing, anomaly tracking). Three structural problems were identified; all three have been addressed as of March 2026:
 
-**1. Mismatch between decision lifecycle and task lifecycle.** Multiple call sites can skip `record_actual()` on early returns, exceptions, or cancellation paths. This leaves `CostDecision` in PENDING and funds reserved but never debited — until stale cleanup runs 2 hours later. The user perceives this as "not charging" or "balance stuck." The orchestrator's `create_decision()` → provider → `record_actual()` sequence is manually implemented in ~10 locations with no `finally:` guarantee.
+**1. ~~Mismatch between decision lifecycle and task lifecycle.~~** **RESOLVED** via the `billable()` context manager (`billing_decorator.py`). All provider calls now use `with billable(...) as b: result = b.call(provider_fn)`. The context manager's `_on_exit()` handler ensures decisions are finalized (via ContextVar fallback in migration mode) even on exceptions or early returns. All ~10 call sites migrated.
 
-**2. Model/catalog resolution depends on scattered code dictionaries.** Adding a new model means touching 5-6 files (MODEL_MAPs, CostCatalog, pricing_engine, token_estimator, providers, frontend). Missing any one of them causes either $0 charges (catalog miss), wrong pricing (wrong model resolved), or inaccurate estimates (wrong token formula). There is no startup validation to catch these mismatches — they surface only when a real user triggers the operation.
+**2. ~~Model/catalog resolution depends on scattered code dictionaries.~~** **RESOLVED** via `model_registry.py`. A unified `ModelRegistry` consolidates the 3 `MODEL_MAP` dicts. Startup validation (`validate_against_catalog(db)`) checks every registered model against `CostCatalog` and logs errors for mismatches. Adding a model is now a single `register()` call + catalog entry.
 
-**3. Actual usage transport is implicit and fragile.** The "actual" token counts from a provider call travel through a ContextVar side-channel (`_last_api_tokens_var`), set by `write_log()` and read later by the calling task. If any async boundary, exception, or code path loses the ContextVar, actual usage is `None` — and billing silently computes $0 for a call that already happened. The provider already ran. The user got their image/tag/description. But billing recorded nothing.
+**3. ~~Actual usage transport is implicit and fragile.~~** **MITIGATED** via `billable.call()`. The preferred path (`b.call(fn)`) automatically extracts tokens from the ContextVar bridge and records actual usage in one step. The ContextVar remains as transport but is no longer the "only mechanism" — `b.call()` wraps the entire extract-and-record flow with error handling. `b.set_actual()` provides an explicit escape hatch when ContextVars are unavailable.
 
-**The common thread:** Each of these causes a **silent billing failure** — the operation succeeds but the charge is wrong or missing. The system has no mechanism to detect or alert on these at runtime.
+**Remaining concern:** The ContextVar bridge still exists as the underlying transport for token data from `write_log()` to `b.call()`. The target (explicit return values from provider calls) is not yet implemented. However, the `billable()` context manager significantly reduces the window for silent failures — decisions left in PENDING trigger the `_on_exit()` fallback + reconciliation task detection.
+
+**Additional fix (March 2026): Tenacity @retry decorators removed from all providers.**
+All 23 `@retry` decorators were removed from the 4 provider files (`openai_provider.py`, `anthropic_provider.py`, `fal_provider.py`, `fal_vision_provider.py`). The retry lambda had a bug where it returned `True` on success, causing every successful API call to be retried up to 3 times — tripling API costs. Provider failures are now surfaced immediately to the user. A regression test (`tests/test_no_retry_decorators.py`) prevents future retry decorator usage.
 
 ---
 
 ### B.1 — Failure Taxonomy
 
-| # | Failure Mode | Severity | Likelihood | Detection | Recovery |
-|---|-------------|----------|------------|-----------|----------|
-| 1 | **Catalog miss → charges $0** | HIGH | HIGH (on new model) | `BillingAnomaly` record + `BILLING MISS` log warning | Admin creates catalog entry; past operations unchargeable |
-| 2 | **MODEL_MAP not updated → wrong catalog lookup** | HIGH | HIGH (on new model) | Silent — resolves to wrong model or falls through to raw name | Manual fix in code + re-deploy |
-| 3 | **Pricing engine not updated → flat rate instead of variable** | MEDIUM | MEDIUM | Overcharges or undercharges; no alert | Add function to `_PRICING_REGISTRY` |
-| 4 | **Provider succeeds but `record_actual()` crashes** | HIGH | LOW | Reservation leak (sparks locked but never debited/released) | `cleanup_stale_reservations()` runs periodically, marks as FAILED after 2h |
-| 5 | **Zero-cost estimate (guard triggers)** | MEDIUM | HIGH (on misconfiguration) | `ZeroCostEstimateError` raised, decision marked FAILED, operation blocked | Fix catalog entry or MODEL_MAP |
-| 6 | **OTel provider spans silently dropped** | MEDIUM | CERTAIN | None — no spans visible in any backend | Enable `OTLPIntegration` in sentry_config.py |
-| 7 | **No `sentry_sdk.capture_exception()` in billing code** | MEDIUM | CERTAIN | Billing errors logged but not in Sentry Issues | Add capture calls in orchestrator error paths |
-| 8 | **Token estimation inaccuracy** | LOW | MEDIUM | `get_metrics()` shows avg delta % between estimated and actual | Tune `token_estimator.py` constants |
-| 9 | **Concurrent reservation overspend** | LOW | LOW | `UserBalance.reserved_sparks` goes negative | `reserve_sparks()` uses atomic `UPDATE ... SET reserved_sparks = reserved_sparks + ?` |
-| 10 | **`finalize_job_billing()` double-debit** | LOW | LOW | Unique partial index on `balance_transactions(user_id, reference_id)` for debits prevents duplicates | `IntegrityError` caught silently |
+| # | Failure Mode | Severity | Likelihood | Detection | Recovery | Status (Mar 2026) |
+|---|-------------|----------|------------|-----------|----------|---|
+| 1 | **Catalog miss → charges $0** | HIGH | HIGH (on new model) | `BillingAnomaly` record + `BILLING MISS` log warning | Admin creates catalog entry; past operations unchargeable | **Mitigated** — `ModelRegistry.validate_against_catalog()` runs at startup, catching mismatches before production traffic |
+| 2 | **MODEL_MAP not updated → wrong catalog lookup** | HIGH | HIGH (on new model) | Silent — resolves to wrong model or falls through to raw name | Manual fix in code + re-deploy | **Resolved** — `model_registry.py` consolidates all MODEL_MAPs. Single `register()` call per model |
+| 3 | **Pricing engine not updated → flat rate instead of variable** | MEDIUM | MEDIUM | Overcharges or undercharges; no alert | Add function to `_PRICING_REGISTRY` | Open |
+| 4 | **Provider succeeds but `record_actual()` crashes** | HIGH | LOW | Reservation leak (sparks locked but never debited/released) | `cleanup_stale_reservations()` runs periodically, marks as FAILED after 2h | **Mitigated** — `billable()` context manager's `_on_exit()` provides fallback recording. Hourly `reconcile_billing()` task detects stale PENDING decisions (>30min) |
+| 5 | **Zero-cost estimate (guard triggers)** | MEDIUM | HIGH (on misconfiguration) | `ZeroCostEstimateError` raised, decision marked FAILED, operation blocked | Fix catalog entry or MODEL_MAP | Open (expected behavior) |
+| 6 | **OTel provider spans silently dropped** | MEDIUM | CERTAIN | None — no spans visible in any backend | Enable `OTLPIntegration` in sentry_config.py | Open — OTel installed but Sentry `instrumenter="sentry"` drops OTel spans |
+| 7 | **No `sentry_sdk.capture_exception()` in billing code** | MEDIUM | CERTAIN | Billing errors logged but not in Sentry Issues | Add capture calls in orchestrator error paths | **Partially addressed** — Sentry SDK installed, billing errors surface via Sentry's logging integration. Explicit `capture_exception()` calls not yet added |
+| 8 | **Token estimation inaccuracy** | LOW | MEDIUM | `get_metrics()` shows avg delta % between estimated and actual | Tune `token_estimator.py` constants | Open |
+| 9 | **Concurrent reservation overspend** | LOW | LOW | `UserBalance.reserved_sparks` goes negative | `reserve_sparks()` uses atomic `UPDATE ... SET reserved_sparks = reserved_sparks + ?` | Open (existing safeguard) |
+| 10 | **`finalize_job_billing()` double-debit** | LOW | LOW | Unique partial index on `balance_transactions(user_id, reference_id)` for debits prevents duplicates | `IntegrityError` caught silently | Open (existing safeguard) |
 | 11 | **Provider cost mismatch (fal.ai actual vs catalog)** | LOW | MEDIUM | Reconciliation endpoint shows delta; no automated alert | Admin reviews reconciliation dashboard |
 | 12 | **Actual usage missing (ContextVar lost) → cost computed as 0** | HIGH | MEDIUM | Reconciliation shows zero-actual anomaly; no runtime alert | Pass explicit usage from provider boundary; see C.2 #2 |
 | 13 | **Decision remains PENDING due to early return/cancel → funds reserved, never debited** | HIGH | MEDIUM | Stale cleanup metrics (2h lag); user sees "stuck" balance | Ensure `finally:` paths in all task code; decorator auto-finalizes; see C.2 #2 |
 
 ---
 
-### B.2 — The Many Registries Problem
+### B.2 — The Many Registries Problem — ~~RESOLVED~~ (March 2026)
 
-> A "model" is currently defined in multiple places with no single authoritative schema, making correctness non-verifiable at startup.
+> ~~A "model" is currently defined in multiple places with no single authoritative schema, making correctness non-verifiable at startup.~~
 
-Adding a new model requires touching **5-6 locations** with no cross-validation:
+**Resolution:** `model_registry.py` implements the `ModelRegistry` proposed in C.2 #1. Adding a model now requires:
 
 ```
-1. MODEL_MAP dict in billing_service.py     ← Maps short name → catalog key
-2. CostCatalog DB rows                      ← Pricing rates (per-token, per-call, markup)
-3. _PRICING_REGISTRY in pricing_engine.py   ← Variable pricing function (if applicable)
-4. token_estimator.py                       ← Token estimation formula (if vision model)
-5. providers/__init__.py factory functions   ← Provider instantiation
-6. Frontend model selectors                 ← UI dropdowns and config
+1. ModelRegistry.register() in model_registry.py  ← Single source of truth for short name → catalog key
+2. CostCatalog DB rows                            ← Pricing rates (via admin API or migration)
+3. _PRICING_REGISTRY in pricing_engine.py          ← Variable pricing function (if applicable)
+4. Frontend model selectors                        ← UI dropdowns
 ```
 
-**Why this is dangerous:**
+**What changed:**
+- Steps 1+5 (MODEL_MAP + provider routing) collapsed into `model_registry.py` with `register()` calls
+- **Startup validation:** `validate_against_catalog(db)` runs on app boot and Celery `worker_ready`. Compares every registered model against `CostCatalog` and logs mismatches
+- **Resolution function:** `ModelRegistry.resolve(short_name, operation, with_lora)` replaces the 3 `resolve_catalog_model()` lookups in `billing_service.py`
+- `get_pricing_strategy_key()` links models to their pricing function
 
-- Missing step 1 (MODEL_MAP): `resolve_catalog_model()` passes the short name through → catalog lookup fails → `BillingAnomaly` → $0 charge
-- Missing step 2 (CostCatalog): Exact match fails, may fall through to wildcard or `none` → $0 charge or wrong pricing
-- Missing step 3 (pricing_engine): Variable-cost model gets flat `cost_per_call` rate → over/undercharge
-- Missing step 4 (token_estimator): Falls back to Anthropic heuristic → inaccurate estimates
-- No startup validation catches these mismatches — they only surface at runtime when a user triggers the operation
-
-**Current mitigation:** The zero-cost estimate guard in `create_decision()` blocks operations that would resolve to 0 sparks, which catches the worst case (completely missing catalog entry). But it doesn't catch wrong-but-nonzero pricing.
-
-**The real ask:** We want a world where adding a model is a single operation — define the model spec once, and billing, estimation, provider routing, and UI all derive from it. Today, each of those is a separate manual step. This is what Part C's data-driven model spec proposal addresses.
+**Remaining gaps:**
+- Steps 3-4 (pricing_engine, token_estimator) are still separate code registries — not yet consolidated into the ModelRegistry
+- Frontend model selectors are still hardcoded (not served from ModelRegistry via API)
+- Target state (DB-backed `ModelSpec` table) not yet implemented
 
 ---
 
-### B.3 — Observability Gaps in Billing
+### B.3 — Observability Gaps in Billing — Status Update (March 2026)
 
-**No Sentry exceptions for billing failures:**
-The orchestrator logs errors via `logger.error()` but never calls `sentry_sdk.capture_exception()`. This means:
-- Zero-cost actuals (post-execution check in `billing_orchestrator.py:record_actual()`) are logged but don't appear in Sentry Issues
-- Catalog misses are recorded as `BillingAnomaly` DB rows but don't fire Sentry alerts
-- `record_usage_standalone()` swallows exceptions in a bare `except` block (`billing_service.py:1120`)
+**Sentry for billing failures — PARTIALLY ADDRESSED:**
+Sentry SDK is now installed and initialized (`sentry_config.py`). The `LoggingIntegration` captures `logger.error()` calls in Sentry at the ERROR level. However:
+- ~~No explicit `sentry_sdk.capture_exception()` calls~~ — billing errors now surface in Sentry via the logging integration, but dedicated `capture_exception()` calls with billing-specific context (decision_id, estimated/actual sparks) are not yet added
+- `record_usage_standalone()` still swallows exceptions in a bare `except` block (`billing_service.py`)
 
-**No Sentry breadcrumbs for billing lifecycle:**
-The reserve → execute → debit lifecycle produces structured logs but no Sentry breadcrumbs. When investigating a user-reported billing error in Sentry, the billing context is invisible.
+**Sentry breadcrumbs for billing lifecycle — NOT YET IMPLEMENTED:**
+The reserve → execute → debit lifecycle produces structured logs but no Sentry breadcrumbs. This gap remains.
 
-**Provider spans created but dropped:**
-All 4 provider files (`openai_provider.py`, `anthropic_provider.py`, `fal_provider.py`, `fal_vision_provider.py`) wrap every API call in `provider_span()`. This creates OTel spans with `ai.provider`, `ai.operation`, `ai.model` attributes. However:
-- `otel.py` docstring explicitly notes: "With Sentry's `instrumenter="sentry"` (default), OTel spans are silently dropped"
-- No `OTLPIntegration` is configured in `sentry_config.py`
-- These spans are never exported to any backend
+**Provider spans created but dropped — UNCHANGED:**
+All 4 provider files wrap calls in `provider_span()` (OTel spans with `ai.provider`, `ai.operation`, `ai.model` attributes). These are still silently dropped because Sentry's `instrumenter="sentry"` ignores OTel spans. Fix: enable `OTLPIntegration` in `sentry_config.py`.
 
-**No automated alerts:**
-- No alert when anomaly rate exceeds threshold
-- No alert when zero-cost actuals occur
-- No alert for stale reservations (cleanup runs silently)
-- No Celery Beat schedule for `cleanup_stale_reservations()` or `monitor_queue_health()` — they exist as functions but require manual scheduling
+**Automated reconciliation — IMPLEMENTED:**
+- ~~No Celery Beat schedule~~ → `reconcile_billing()` runs hourly via Celery Beat (3600s interval)
+- Detects 4 anomaly types: `stale_decision` (>30min PENDING), `missing_actual_reconcile`, `estimate_drift` (>50% delta), `reservation_leak`
+- Creates `BillingAnomaly` records with detailed context
 
-**No unified billing dashboard:**
-We invested in Sentry and OTel to have a mechanism to detect billing failures, estimate drift, and provider latency. But we have not yet wired billing events into these systems. The observability infrastructure exists; the billing integration does not. Part C.2 #5 proposes the specific wiring.
+**OTel billing metrics — IMPLEMENTED:**
+9 OTel instruments in `core/otel.py` (`_BillingMeters` class):
+- Counters: `decision_total`, `decision_failed`, `decision_cancelled`, `anomaly_total`, `catalog_miss`
+- Histograms: `estimate_delta_pct`, `charge_sparks`, `debit_latency_ms`, `reservation_sparks`
+
+**Remaining gaps:**
+- No external alerting (PagerDuty, Slack) on anomalies
+- No explicit Sentry breadcrumbs for billing state transitions
+- Provider OTel spans still dropped
+- `record_usage_standalone()` exception swallowing
 
 ---
 
@@ -503,22 +526,21 @@ Without this, unified quoting is a backend improvement that still produces confu
 
 ---
 
-### B.5 — No Easy Way to Add a Model
+### B.5 — ~~No Easy Way to Add a Model~~ — IMPROVED (March 2026)
 
-Today, adding a new model (e.g., a new fal.ai generation model) requires a developer to:
+Adding a new model now requires:
 
-1. Add entries to the appropriate `MODEL_MAP` dict in `billing_service.py`
-2. Insert `CostCatalog` rows via admin API or migration
-3. Optionally add a pricing function to `pricing_engine.py` `_PRICING_REGISTRY`
-4. Optionally add token estimation logic to `token_estimator.py`
-5. Wire up the provider factory in `providers/__init__.py`
-6. Add the model to frontend selectors/config
+1. **`ModelRegistry.register()` call** in `model_registry.py` — defines short name, provider, catalog key, operation, LoRA variant, pricing strategy key
+2. **Insert `CostCatalog` rows** via admin API or migration — pricing rates
+3. Optionally add a **pricing function** to `pricing_engine.py` `_PRICING_REGISTRY`
+4. Add the **model to frontend** selectors/config
 
-Each step is in a different file, uses a different data structure, and has no validation that all steps were completed. The developer must understand the billing architecture to get it right. There is no checklist, no test, and no startup validation.
+**What changed:**
+- Steps 1+5 from the original list (MODEL_MAP + provider factory wiring) are now a single `register()` call
+- **Startup validation** (`validate_against_catalog(db)`) runs on app boot and Celery worker startup — catches missing catalog entries before runtime
+- The developer no longer needs to know about 3 separate MODEL_MAP dicts
 
-**What we want instead:** A single "model specification" that completely defines a model — its provider, catalog key, pricing strategy, token estimation strategy, supported operations, and UI metadata. Adding a model should be one operation in one place. Removing a model should be one operation. The system should refuse to start if any model spec is inconsistent with the database.
-
-This is the central goal of Part C.
+**What remains:** Steps 3-4 (pricing_engine, frontend selectors) are still separate. Target state: DB-backed `ModelSpec` table with admin UI for model management.
 
 ---
 
@@ -528,17 +550,17 @@ This is the central goal of Part C.
 
 Rules the billing system must maintain:
 
-| # | Invariant | Current Status |
+| # | Invariant | Status (March 2026) |
 |---|-----------|----------------|
-| 1 | **No silent free operations** — every billable op must either (a) charge > 0 sparks, or (b) be explicitly flagged as anomaly and quarantined for reconciliation | Pre-execution: enforced by zero-cost estimate guard. Post-execution: **VIOLATED** — zero-cost actuals are logged but not flagged as anomalies or blocked. Policy needed for what happens when actual is unexpectedly 0 (see Phase 0.5) |
-| 2 | **Pre-authorize before execute** — reserve estimated cost before calling provider | Enforced by orchestrator for all ops in `ORCHESTRATOR_ENABLED_OPS` |
-| 3 | **Settle after execute** — debit actual cost (or release reservation) after provider returns | Enforced by `record_actual()` + `finalize_job_billing()`, but `finally:` guarantees are missing in task code — early returns/exceptions can skip settlement |
-| 4 | **Idempotent billing at every boundary** — re-delivery must not double-charge at any level | Partially enforced. Decision creation: `idempotency_key` unique constraint on `CostDecision`. Debit transaction: unique partial index on `balance_transactions(user_id, reference_id)`. **Gap:** `UsageRecord` creation has no deduplication — a retried `record_actual()` can create duplicate records |
-| 5 | **Atomic balance mutations with row-level locking** — reserve/debit/release must be atomic | Enforced by atomic `UPDATE ... SET balance_sparks = balance_sparks - ?`. All reserve/release/debit operations must run inside a single DB transaction with row-level locking on `UserBalance` for the user. Current code uses SQLAlchemy session semantics which provides this |
-| 6 | **Single source of model truth** — one specification defines a model for all consumers | **VIOLATED** — 3 MODEL_MAP dicts + pricing_engine registry + token_estimator + provider factories + frontend selectors. See B.2 |
-| 7 | **Observable by default** — every billing state transition must be traceable | **PARTIALLY VIOLATED** — CostDecision provides audit trail, but Sentry integration is missing. See B.3 |
-| 8 | **Actual usage must be explicit** — actual usage data (tokens, provider cost) must be passed explicitly from the provider boundary to billing, or stored immediately at the provider boundary. ContextVars may be a temporary transport but must not be the only mechanism | **VIOLATED** — ContextVars are the only transport today. See B.0 root cause #3 |
-| 9 | **Every state transition emits a durable event** — reserve, execute, record, charge, fail, cancel must each produce both a DB state change and a Sentry breadcrumb | **VIOLATED** — DB state changes exist but no Sentry breadcrumbs. See B.3 |
+| 1 | **No silent free operations** — every billable op must either (a) charge > 0 sparks, or (b) be explicitly flagged as anomaly and quarantined for reconciliation | Pre-execution: enforced by zero-cost estimate guard. Post-execution: **Improved** — hourly `reconcile_billing()` detects `missing_actual_reconcile` and `estimate_drift` anomalies. Zero-cost actuals still not explicitly blocked at the moment of recording |
+| 2 | **Pre-authorize before execute** — reserve estimated cost before calling provider | **Enforced.** Pipeline jobs use combined reservation (`skip_reservation=True` on sub-ops). Individual ops reserve per-decision |
+| 3 | **Settle after execute** — debit actual cost (or release reservation) after provider returns | **Enforced via `billable()` context manager.** `_on_exit()` handler provides ContextVar fallback in migration mode. `b.call()` wraps provider invocation with automatic recording. `b.fail()` handles exceptions |
+| 4 | **Idempotent billing at every boundary** — re-delivery must not double-charge at any level | Partially enforced. Decision creation: `idempotency_key` unique constraint on `CostDecision`. `billable()` returns `b.skipped=True` for duplicate decisions. Debit transaction: unique partial index. **Gap:** `UsageRecord` creation still has no deduplication |
+| 5 | **Atomic balance mutations with row-level locking** — reserve/debit/release must be atomic | **Enforced.** Atomic `UPDATE ... SET balance_sparks = balance_sparks - ?` with SQLAlchemy session semantics |
+| 6 | **Single source of model truth** — one specification defines a model for all consumers | **Mostly enforced.** `model_registry.py` consolidates MODEL_MAPs with startup validation. Remaining gaps: pricing_engine and token_estimator strategies not yet linked, frontend selectors still hardcoded |
+| 7 | **Observable by default** — every billing state transition must be traceable | **Improved.** CostDecision audit trail + Sentry error tracking + OTel billing metrics (9 instruments). Remaining gap: no Sentry breadcrumbs for individual state transitions |
+| 8 | **Actual usage must be explicit** — actual usage data must be passed explicitly from the provider boundary to billing | **Improved via `b.call()`.** ContextVars remain as underlying transport, but `b.call()` wraps the extract-and-record flow. `b.set_actual()` provides explicit escape hatch. ContextVar-only path still works as deprecation fallback |
+| 9 | **Every state transition emits a durable event** — reserve, execute, record, charge, fail, cancel must each produce both a DB state change and a Sentry breadcrumb | **Partially addressed.** DB state changes exist. OTel counters emitted for decisions/failures/cancellations. Sentry breadcrumbs still not emitted per transition |
 
 ---
 
@@ -982,7 +1004,9 @@ graph TB
 
 ## Part D — Incremental Migration Plan
 
-### Phase 0: Observability (Sentry exceptions + breadcrumbs + high-signal semantics)
+### Phase 0: Observability (Sentry exceptions + breadcrumbs + high-signal semantics) — PARTIAL
+
+> **Status: PARTIALLY COMPLETE (March 2026).** Sentry SDK installed and active (backend + frontend + Celery). `LoggingIntegration` captures billing errors. Dedicated breadcrumbs and `BillingError` wrapper not yet added.
 
 **Goal:** Make billing failures visible in Sentry without changing any billing logic.
 
@@ -1110,7 +1134,9 @@ Recommend Option A for now — returning the result prevents user disruption whi
 
 ---
 
-### Phase 1: Unified Model Registry with Startup Validation
+### Phase 1: Unified Model Registry with Startup Validation — DONE
+
+> **Status: COMPLETE (March 2026).** `model_registry.py` implemented with `register()`, `resolve()`, `validate_against_catalog()`. All 3 MODEL_MAP dicts consolidated. Startup + worker_ready validation active.
 
 **Goal:** Single source of truth for model name resolution. Startup validation catches mismatches before they reach users — not just "catalog row exists" but a comprehensive cross-check of all the pieces a model needs.
 
@@ -1176,9 +1202,11 @@ Recommend Option A for now — returning the result prevents user disruption whi
 
 ---
 
-### Phase 2: `@billable` Decorator — The Only Way to Call Providers
+### Phase 2: `billable()` Context Manager — The Only Way to Call Providers — DONE
 
-**Goal:** Make `@billable` the **enforced-only path** for provider calls. Eliminate manual orchestrator call patterns, preventing incomplete billing (forgetting `record_actual()`, swallowing errors, charging $0). The decorator wraps the provider call itself via `billable.call()`, so it can observe the response and capture actuals directly.
+> **Status: COMPLETE (March 2026).** `billing_decorator.py` implemented as a context manager (not decorator). All task functions migrated to `with billable(...) as b: b.call(fn)`. Migration mode active (ContextVar fallback with deprecation warning). Pipeline-level reservation with `skip_reservation=True` also implemented.
+
+**Goal:** Make `billable()` the **enforced-only path** for provider calls. Eliminate manual orchestrator call patterns, preventing incomplete billing (forgetting `record_actual()`, swallowing errors, charging $0). The context manager wraps the provider call itself via `b.call()`, so it can observe the response and capture actuals directly.
 
 **Key design: `billable.call()` wraps the provider call**
 
@@ -1244,7 +1272,9 @@ with billable(op="generate", provider="fal-ai", model="flux-dev", ...) as billin
 
 ---
 
-### Phase 3: Automated Reconciliation + Alerts + OTel Metrics
+### Phase 3: Automated Reconciliation + Alerts + OTel Metrics — PARTIAL
+
+> **Status: PARTIALLY COMPLETE (March 2026).** Hourly `reconcile_billing()` task active (4 anomaly types). OTel billing metrics active (9 instruments). `cleanup_stale_reservations()` exists but not on Beat schedule. External alerting (PagerDuty, Slack) not yet configured.
 
 **Goal:** Proactive detection of billing drift and anomalies without admin intervention. Emit OTel metrics for real-time health monitoring (not just post-mortem breadcrumbs).
 
@@ -1335,7 +1365,9 @@ reservation_amount = meter.create_histogram("billing.reservation.amount_sparks")
 
 ---
 
-### Phase 4: Frontend Billing Dashboard Improvements
+### Phase 4: Frontend Billing Dashboard Improvements — NOT STARTED
+
+> **Status: NOT STARTED (March 2026).** Backend endpoints for scatter data and anomaly trend exist. Frontend components (charts, click-through) not yet built. A detailed implementation plan exists in a separate planning document.
 
 **Goal:** Surface reconciliation data, anomaly alerts, and per-operation cost trends to the admin UI.
 
