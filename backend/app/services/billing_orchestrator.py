@@ -282,6 +282,28 @@ class BillingOrchestrator:
                 )
             return existing_record
 
+        # --- Pricing engine fallback ---
+        # Some providers (e.g. fal.ai flux-2-pro) don't return cost or tokens.
+        # Compute the actual cost from the pricing engine using request params.
+        if actual_input_tokens is None and actual_output_tokens is None and provider_cost is None:
+            gen_params = (decision.request_snapshot or {}).get("generation_params")
+            if gen_params:
+                from app.services.pricing_engine import compute_raw_cost
+                raw = compute_raw_cost(decision.provider, decision.model, decision.operation, gen_params)
+                if raw is not None:
+                    provider_cost = float(raw)
+                    logger.info(
+                        "ORCH pricing-engine fallback | decision=%s %s/%s raw=$%.6f params=%s",
+                        decision_id, decision.provider, decision.model, provider_cost, gen_params,
+                    )
+                else:
+                    logger.error(
+                        "ORCH MISSING PRICING STRATEGY | decision=%s %s/%s op=%s — "
+                        "no pricing function registered and provider returned no cost. "
+                        "Add a pricing strategy in pricing_engine.py + model_registry.py",
+                        decision_id, decision.provider, decision.model, decision.operation,
+                    )
+
         # --- Validate actuals ---
         validation_error = self._validate_actual(
             decision, actual_input_tokens, actual_output_tokens, provider_cost,

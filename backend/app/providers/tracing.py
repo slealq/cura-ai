@@ -19,16 +19,18 @@ def provider_span(provider: str, operation: str, model: str = ""):
     try:
         from opentelemetry import trace
         tracer = trace.get_tracer("cura.providers")
-        with tracer.start_as_current_span(
+        cm = tracer.start_as_current_span(
             f"{provider}.{operation}",
             attributes={
                 "ai.provider": provider,
                 "ai.operation": operation,
                 "ai.model": model,
             },
-        ) as span:
-            yield span
-    except ImportError:
-        yield None
+        )
     except Exception:
+        # OTel not available or setup failed — proceed without tracing
         yield None
+        return
+
+    with cm as span:
+        yield span

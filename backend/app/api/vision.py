@@ -245,6 +245,10 @@ async def analyze_image(
         if _src:
             _img_w, _img_h = _src.width, _src.height
 
+    # Track billing decision at outer scope so exception handlers can release reservations
+    orch = None
+    decision = None
+
     try:
         if request.mode == "tag":
             if request.tag_prompt is not None:
@@ -409,12 +413,17 @@ async def analyze_image(
             return VisionDescribeResult(id=saved.id, mode="custom", description=result.description, model=result.model, duration_ms=duration_ms, cost_sparks=_cost_to_sparks(charged_cost))
 
     except InsufficientBalanceError:
+        # No reservation to release — create_decision raised before reserving
         raise HTTPException(status_code=402, detail="Insufficient credits")
     except ZeroCostEstimateError:
         raise HTTPException(status_code=422, detail="Billing configuration error — cannot price this operation")
     except ValueError as e:
+        if orch and decision:
+            orch.fail_decision(decision.id, str(e))
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        if orch and decision:
+            orch.fail_decision(decision.id, str(e))
         logger.error(f"Vision analysis failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Vision analysis failed: {e}")
 

@@ -301,8 +301,12 @@ class AnthropicDescriber(BaseDescriber):
             )
             raise error
 
+        # Use parsed JSON "description" if available, otherwise fall back to
+        # the raw text response (custom prompts return plain text, not JSON).
+        description = result.get("description") or content or ""
+
         return DescriptionResult(
-            description=result.get("description", ""),
+            description=description,
             model=self.model,
             raw_response={"content": content},
         )

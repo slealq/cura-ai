@@ -221,6 +221,11 @@ class OpenAIDescriber(BaseDescriber):
         if not description_prompt:
             raise ValueError("description_prompt is required (composed by task layer)")
 
+        # Only request JSON response format when the prompt asks for JSON output.
+        # Custom user prompts may not mention JSON, and OpenAI rejects json_object
+        # format unless the messages contain the word "json".
+        _use_json_fmt = "json" in description_prompt.lower()
+
         start = time.monotonic()
         try:
             with provider_span("openai", "describe", self.model) as span:
@@ -243,7 +248,7 @@ class OpenAIDescriber(BaseDescriber):
                     ],
                     **_token_limit_param(self.model, self.token_limit),
                     **({"temperature": self.temperature} if self.temperature is not None else {}),
-                    response_format={"type": "json_object"},
+                    **({"response_format": {"type": "json_object"}} if _use_json_fmt else {}),
                 )
                 if span and hasattr(response, 'usage') and response.usage:
                     span.set_attribute("ai.tokens.input", response.usage.prompt_tokens)
@@ -288,7 +293,12 @@ class OpenAIDescriber(BaseDescriber):
             )
             raise
 
-        result = json.loads(content) if content else {}
+        # Parse response: try JSON first (standard tag/describe prompts),
+        # fall back to plain text (custom prompts that don't request JSON).
+        try:
+            result = json.loads(content) if content else {}
+        except (json.JSONDecodeError, TypeError):
+            result = {}
 
         # Check for AI-reported error
         if "error" in result and not result.get("description"):

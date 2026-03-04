@@ -275,8 +275,12 @@ class FalVisionDescriber(BaseDescriber):
             )
             raise error
 
+        # Use parsed JSON "description" if available, otherwise fall back to
+        # the raw text response (custom prompts return plain text, not JSON).
+        description = parsed.get("description") or content or ""
+
         return DescriptionResult(
-            description=parsed.get("description", ""),
+            description=description,
             model=self.model,
             raw_response={"content": content},
         )
