@@ -4,6 +4,7 @@ Every billable operation gets a CostDecision record BEFORE the provider call,
 with full request/response snapshots for end-to-end traceability.
 """
 import logging
+import math
 from datetime import datetime
 
 from sqlalchemy.orm import Session
@@ -70,11 +71,16 @@ class BillingOrchestrator:
         description: str | None = None,
         with_lora: bool = False,
         generation_params: dict | None = None,
+        skip_reservation: bool = False,
     ) -> tuple[CostDecision, bool]:
         """Create a billing decision before a provider call.
 
         Returns (decision, is_new). If is_new is False, the caller should
         skip the provider call (idempotent duplicate).
+
+        When *skip_reservation* is True the per-decision ``reserve_sparks``
+        call is skipped — the caller is responsible for holding a
+        pipeline-level reservation instead.
         """
         # Check existing by idempotency_key
         if idempotency_key:
@@ -189,9 +195,11 @@ class BillingOrchestrator:
                 sentry_sdk.capture_exception(exc)
             raise exc
 
-        # Reserve estimated sparks to prevent concurrent overspend
+        # Reserve estimated sparks to prevent concurrent overspend.
+        # When skip_reservation is True (pipeline sub-operations), the caller
+        # already holds a combined reservation — skip per-decision reserve.
         reserved = 0
-        if estimated_sparks and estimated_sparks > 0:
+        if not skip_reservation and estimated_sparks and estimated_sparks > 0:
             svc = BillingService(self.db, self.user_id)
             if not svc.reserve_sparks(estimated_sparks, decision.id):
                 decision.status = DecisionStatus.FAILED.value
@@ -291,7 +299,7 @@ class BillingOrchestrator:
             provider_cost=provider_cost,
         )
 
-        sparks = int(charged_cost * USD_TO_SPARKS)
+        sparks = math.ceil(charged_cost * USD_TO_SPARKS)
 
         # Post-guard: log ERROR if actual cost resolved to zero (provider already called)
         if sparks <= 0:

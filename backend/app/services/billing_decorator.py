@@ -216,6 +216,9 @@ def billable(
     request_snapshot: dict | None = None,
     # Settlement
     defer_debit: bool | None = None,
+    # Pipeline reservation: when True, skip per-decision reservation
+    # (caller holds a combined reservation for the entire pipeline).
+    skip_reservation: bool = False,
 ):
     """Context manager for billable provider calls.
 
@@ -254,6 +257,7 @@ def billable(
         description=description,
         with_lora=with_lora,
         generation_params=generation_params,
+        skip_reservation=skip_reservation,
     )
 
     ctx = _BillableContext(

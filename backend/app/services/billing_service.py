@@ -1,5 +1,6 @@
 """Service for credit balance management and usage tracking."""
 import logging
+import math
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -450,7 +451,7 @@ class BillingService:
         op_counts: dict[str, int] = {}
 
         for r in records:
-            sparks = r.delta_sparks if r.delta_sparks is not None else int(r.charged_cost * USD_TO_SPARKS)
+            sparks = r.delta_sparks if r.delta_sparks is not None else math.ceil(r.charged_cost * USD_TO_SPARKS)
             total_cost += sparks
             op_key = r.operation
             by_operation[op_key] = by_operation.get(op_key, 0) + sparks
@@ -1050,7 +1051,7 @@ class BillingService:
             .group_by(UsageRecord.user_id)
             .all()
         )
-        spent_map = {r.user_id: {"total_spent": int((r.total_spent or 0) * USD_TO_SPARKS), "last_activity": r.last_activity} for r in spent_query}
+        spent_map = {r.user_id: {"total_spent": math.ceil((r.total_spent or 0) * USD_TO_SPARKS), "last_activity": r.last_activity} for r in spent_query}
 
         output = []
         for user, balance in results:
@@ -1093,7 +1094,7 @@ class BillingService:
 
         for r in records:
             total_raw += r.raw_cost
-            sparks = r.delta_sparks if r.delta_sparks is not None else int(r.charged_cost * USD_TO_SPARKS)
+            sparks = r.delta_sparks if r.delta_sparks is not None else math.ceil(r.charged_cost * USD_TO_SPARKS)
             total_charged += sparks
             by_provider[r.provider] = by_provider.get(r.provider, 0) + sparks
             by_operation[r.operation] = by_operation.get(r.operation, 0) + sparks

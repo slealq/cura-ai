@@ -6,7 +6,6 @@ from typing import Any
 
 import fal_client
 import httpx
-from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 
 from app.core.config import get_settings
 from app.models.pipeline_log import LogCategory, LogLevel
@@ -234,8 +233,6 @@ class FalGenerator(BaseGenerator):
         self.config = FAL_MODEL_CONFIG.get(base_model, FAL_MODEL_CONFIG["flux-dev"])
         self.base_model = base_model
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30),
-           retry=retry_if_not_exception_type(GenerationCancelledError))
     async def generate(
         self,
         prompt: str,
@@ -501,8 +498,6 @@ class FalEditor(BaseEditor):
         self.config = FAL_EDIT_MODEL_CONFIG.get(edit_model, FAL_EDIT_MODEL_CONFIG["qwen-image-max-edit"])
         self.edit_model = edit_model
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30),
-           retry=retry_if_not_exception_type(GenerationCancelledError))
     async def edit(
         self,
         image_urls: list[str],

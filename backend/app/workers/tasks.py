@@ -24,7 +24,12 @@ from app.services.billing_context import (
     set_trace_id,
 )
 from app.services.billing_decorator import billable
-from app.services.billing_service import InsufficientBalanceError, ZeroCostEstimateError, finalize_job_billing
+from app.services.billing_service import (
+    BillingService,
+    InsufficientBalanceError,
+    ZeroCostEstimateError,
+    finalize_job_billing,
+)
 from app.services.cluster_service import get_cluster_service
 from app.services.clustering import get_clustering_service
 from app.services.image_service import get_image_service
@@ -1153,6 +1158,73 @@ def process_image_pipeline(
         tagger = get_tagger(provider=provider, model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_tag)
         trace_id = get_trace_id()
 
+        # --- Pipeline-level reservation ---
+        # Compute total estimated sparks (tag + describe + embed) and reserve
+        # once upfront, so the user sees a single combined deduction.
+        describer = get_describer(provider=provider, model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_describe)
+        embedder = get_embedder(db=db, user_id=user_id)
+
+        from app.services.cost_calculator import (
+            estimate_operation_tokens,
+            resolve_catalog_model,
+        )
+        from app.services.cost_calculator import (
+            estimate_sparks as _estimate_sparks,
+        )
+
+        pipeline_reserved = 0
+        try:
+            _tag_prov, _tag_model, _tag_op = resolve_catalog_model(
+                provider or "openai", tagger.get_model_name(), "tag",
+            )
+            _desc_prov, _desc_model, _desc_op = resolve_catalog_model(
+                provider or "openai", describer.get_model_name(), "describe",
+            )
+            _emb_prov, _emb_model, _emb_op = resolve_catalog_model(
+                "openai", embedder.get_model_name(), "embed",
+            )
+
+            tag_in, tag_out = estimate_operation_tokens(
+                _tag_prov, _tag_model, _tag_op,
+                image_width=image.width, image_height=image.height,
+                prompt_text=tag_prompt,
+            )
+            desc_in, desc_out = estimate_operation_tokens(
+                _desc_prov, _desc_model, _desc_op,
+                image_width=image.width, image_height=image.height,
+                prompt_text=description_prompt,
+            )
+            emb_in, emb_out = estimate_operation_tokens(
+                _emb_prov, _emb_model, _emb_op,
+            )
+
+            tag_sparks, _ = _estimate_sparks(db, _tag_prov, _tag_model, _tag_op, tag_in, tag_out)
+            desc_sparks, _ = _estimate_sparks(db, _desc_prov, _desc_model, _desc_op, desc_in, desc_out)
+            emb_sparks, _ = _estimate_sparks(db, _emb_prov, _emb_model, _emb_op, emb_in, emb_out)
+
+            total_est = (tag_sparks or 0) + (desc_sparks or 0) + (emb_sparks or 0)
+            if total_est > 0:
+                svc = BillingService(db, user_id)
+                if not svc.reserve_sparks(total_est):
+                    raise InsufficientBalanceError(
+                        f"User {user_id} has insufficient credits "
+                        f"(need ~{total_est} sparks for pipeline)"
+                    )
+                pipeline_reserved = total_est
+                logger.info(
+                    "PIPELINE_RESERVE | user=%s image=%s total=%d (tag=%s desc=%s emb=%s)",
+                    user_id, image_id, total_est, tag_sparks, desc_sparks, emb_sparks,
+                )
+        except InsufficientBalanceError:
+            raise
+        except Exception as est_err:
+            # If estimation fails, fall back to per-operation reservations
+            logger.warning(
+                "PIPELINE_RESERVE failed, falling back to per-op: %s", est_err,
+            )
+
+        _skip_res = pipeline_reserved > 0
+
         with billable(
             db, user_id, operation="tag",
             provider=provider or "openai", model=tagger.get_model_name(),
@@ -1160,6 +1232,7 @@ def process_image_pipeline(
             image_id=image_id, job_id=job_id,
             image_width=image.width, image_height=image.height,
             prompt_text=tag_prompt,
+            skip_reservation=_skip_res,
         ) as b_tag:
             if b_tag.skipped:
                 logger.info("Duplicate tag detected for image %s, skipping", image_id)
@@ -1171,8 +1244,6 @@ def process_image_pipeline(
                 tagging_duration_ms = round((time.monotonic() - tag_start) * 1000)
 
         # Describe
-        describer = get_describer(provider=provider, model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_describe)
-
         with billable(
             db, user_id, operation="describe",
             provider=provider or "openai", model=describer.get_model_name(),
@@ -1180,6 +1251,7 @@ def process_image_pipeline(
             image_id=image_id, job_id=job_id,
             image_width=image.width, image_height=image.height,
             prompt_text=description_prompt,
+            skip_reservation=_skip_res,
         ) as b_desc:
             if b_desc.skipped:
                 logger.info("Duplicate describe detected for image %s, skipping", image_id)
@@ -1198,8 +1270,6 @@ def process_image_pipeline(
         text = "\n".join(text_parts)
 
         # Embed
-        embedder = get_embedder(db=db, user_id=user_id)
-
         with billable(
             db, user_id, operation="embed",
             provider="openai", model=embedder.get_model_name(),
@@ -1207,6 +1277,7 @@ def process_image_pipeline(
             image_id=image_id, job_id=job_id,
             tags=tag_result.tags,
             description=description_result.description,
+            skip_reservation=_skip_res,
         ) as b_embed:
             if b_embed.skipped:
                 logger.info("Duplicate embed detected for image %s, skipping", image_id)
@@ -1269,6 +1340,15 @@ def process_image_pipeline(
         image_service.update_status(image_id, ImageStatus.FAILED, _unwrap_error(e))
         raise
     finally:
+        # Release pipeline-level reservation before finalizing
+        if pipeline_reserved > 0:
+            try:
+                svc = BillingService(db, user_id)
+                svc.release_reservation(pipeline_reserved)
+                logger.info("PIPELINE_RELEASE | user=%s image=%s released=%d", user_id, image_id, pipeline_reserved)
+            except Exception:
+                logger.warning("Failed to release pipeline reservation", exc_info=True)
+
         # Finalize billing: aggregate deferred usage records into one debit
         if job_id:
             try:

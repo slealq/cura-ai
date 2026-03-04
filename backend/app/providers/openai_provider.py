@@ -5,7 +5,6 @@ import logging
 import time
 
 from openai import AsyncOpenAI
-from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 
 from app.core.config import get_settings
 from app.models.pipeline_log import LogCategory, LogLevel
@@ -89,8 +88,6 @@ class OpenAITagger(BaseTagger):
         self.token_limit = (max_tokens or {}).get("tag", 1000)
         self.temperature = temperature
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10),
-           retry=retry_if_not_exception_type(AIContentError))
     async def tag_image(
         self, image_data: bytes, mime_type: str, tag_prompt: str | None = None
     ) -> TaggingResult:
@@ -215,8 +212,6 @@ class OpenAIDescriber(BaseDescriber):
         self.token_limit = (max_tokens or {}).get("describe", 3000)
         self.temperature = temperature
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10),
-           retry=retry_if_not_exception_type(AIContentError))
     async def describe_image(
         self, image_data: bytes, mime_type: str, description_prompt: str | None = None
     ) -> DescriptionResult:
@@ -327,7 +322,6 @@ class OpenAIEmbedder(BaseEmbedder):
         self.model = model or settings.openai_embedding_model
         self._dimensions = 1536  # text-embedding-3-small default
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def embed_text(self, text: str) -> EmbeddingResult:
         """Generate embedding for text."""
         start = time.monotonic()
@@ -379,7 +373,6 @@ class OpenAIEmbedder(BaseEmbedder):
             dimensions=len(response.data[0].embedding),
         )
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def embed_batch(self, texts: list[str]) -> list[EmbeddingResult]:
         """Generate embeddings for multiple texts."""
         with provider_span("openai", "embed_batch", self.model) as span:
@@ -415,7 +408,6 @@ class OpenAIClusterSummarizer(BaseClusterSummarizer):
         self.model = model or settings.openai_vision_model
         self.token_limit = (max_tokens or {}).get("summarize", 500)
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def summarize_cluster(
         self,
         common_tags: list[str],
@@ -637,7 +629,6 @@ class OpenAIEvaluator(BaseEvaluator):
         self.client = AsyncOpenAI(api_key=api_key)
         self.model = model or settings.openai_vision_model
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def evaluate_pair(
         self,
         original_image_data: bytes,
@@ -720,7 +711,6 @@ class OpenAIEvaluator(BaseEvaluator):
             raw_response={"content": content, "usage": response.usage.model_dump() if response.usage else None},
         )
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def evaluate_single(
         self,
         image_data: bytes,
@@ -792,7 +782,6 @@ class OpenAIEvaluator(BaseEvaluator):
             raw_response={"content": content, "usage": response.usage.model_dump() if response.usage else None},
         )
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def summarize_assessments(
         self,
         model_name: str,
@@ -856,7 +845,6 @@ class OpenAIEvaluator(BaseEvaluator):
         result = json.loads(content) if content else {}
         return result.get("summary", "")
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def generate_creative_prompts(
         self,
         trigger_word: str,

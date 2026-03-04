@@ -415,7 +415,7 @@ export default function DescribeAllDialog({ folderId, imageCount, onClose, onSta
           {/* Footer */}
           <div className="flex items-center gap-2 justify-end pt-2 border-t border-border">
             {mode === 'manual' && costPerImage !== null && costPerImage > 0 && (
-              <span className="inline-flex items-center gap-0.5 text-xs text-amber-600 dark:text-amber-400 mr-auto" title={`~${Math.round(costPerImage)} sparks per image`}>
+              <span className="inline-flex items-center gap-0.5 text-xs text-amber-600 dark:text-amber-400 mr-auto" title={`~${Math.round(costPerImage)} sparks per image (tag + describe + embed)`}>
                 <Zap className="h-3 w-3" />
                 ~{Math.round(costPerImage * imageCount)} sparks
                 <span className="text-muted-foreground ml-0.5">({Math.round(costPerImage)}/image)</span>

@@ -6,7 +6,6 @@ import re
 import time
 
 from anthropic import AsyncAnthropic
-from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 
 from app.core.config import get_settings
 from app.models.pipeline_log import LogCategory, LogLevel
@@ -70,8 +69,6 @@ class AnthropicTagger(BaseTagger):
         self.token_limit = (max_tokens or {}).get("tag", 1000)
         self.temperature = min(temperature, 1.0) if temperature is not None else None
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10),
-           retry=retry_if_not_exception_type(AIContentError))
     async def tag_image(
         self, image_data: bytes, mime_type: str, tag_prompt: str | None = None
     ) -> TaggingResult:
@@ -186,8 +183,6 @@ class AnthropicDescriber(BaseDescriber):
         self.token_limit = (max_tokens or {}).get("describe", 3000)
         self.temperature = min(temperature, 1.0) if temperature is not None else None
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10),
-           retry=retry_if_not_exception_type(AIContentError))
     async def describe_image(
         self, image_data: bytes, mime_type: str, description_prompt: str | None = None
     ) -> DescriptionResult:
@@ -285,7 +280,6 @@ class AnthropicClusterSummarizer(BaseClusterSummarizer):
         self.model = model or settings.anthropic_vision_model
         self.token_limit = (max_tokens or {}).get("summarize", 500)
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def summarize_cluster(
         self,
         common_tags: list[str],
@@ -505,7 +499,6 @@ class AnthropicEvaluator(BaseEvaluator):
         self.client = AsyncAnthropic(api_key=api_key)
         self.model = model or settings.anthropic_vision_model
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def evaluate_pair(
         self,
         original_image_data: bytes,
@@ -591,7 +584,6 @@ class AnthropicEvaluator(BaseEvaluator):
             raw_response={"content": content},
         )
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def evaluate_single(
         self,
         image_data: bytes,
@@ -663,7 +655,6 @@ class AnthropicEvaluator(BaseEvaluator):
             raw_response={"content": content},
         )
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def summarize_assessments(
         self,
         model_name: str,
@@ -725,7 +716,6 @@ class AnthropicEvaluator(BaseEvaluator):
         result = extract_json(content)
         return result.get("summary", "")
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def generate_creative_prompts(
         self,
         trigger_word: str,

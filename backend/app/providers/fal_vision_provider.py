@@ -6,7 +6,6 @@ import re
 import time
 
 import fal_client
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers.base import (
@@ -75,8 +74,6 @@ class FalVisionTagger(BaseTagger):
         self.token_limit = (max_tokens or {}).get("tag", 1000)
         self.temperature = temperature
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30),
-           retry=lambda retry_state: not isinstance(retry_state.outcome.exception(), AIContentError) if retry_state.outcome and retry_state.outcome.failed else True)
     async def tag_image(
         self, image_data: bytes, mime_type: str, tag_prompt: str | None = None
     ) -> TaggingResult:
@@ -185,8 +182,6 @@ class FalVisionDescriber(BaseDescriber):
         self.token_limit = (max_tokens or {}).get("describe", 3000)
         self.temperature = temperature
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30),
-           retry=lambda retry_state: not isinstance(retry_state.outcome.exception(), AIContentError) if retry_state.outcome and retry_state.outcome.failed else True)
     async def describe_image(
         self, image_data: bytes, mime_type: str, description_prompt: str | None = None
     ) -> DescriptionResult:
@@ -287,7 +282,6 @@ class FalVisionEvaluator(BaseEvaluator):
         _ensure_fal_key(api_key)
         self.model = model or DEFAULT_FAL_VISION_MODEL
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
     async def evaluate_pair(
         self,
         original_image_data: bytes,
@@ -356,7 +350,6 @@ class FalVisionEvaluator(BaseEvaluator):
             raw_response={"content": content},
         )
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
     async def evaluate_single(
         self,
         image_data: bytes,
@@ -422,7 +415,6 @@ class FalVisionEvaluator(BaseEvaluator):
             raw_response={"content": content},
         )
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
     async def summarize_assessments(
         self,
         model_name: str,
@@ -493,7 +485,6 @@ class FalVisionEvaluator(BaseEvaluator):
         parsed = _extract_json(content)
         return parsed.get("summary", "")
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
     async def generate_creative_prompts(
         self,
         trigger_word: str,
