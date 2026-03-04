@@ -678,7 +678,7 @@ export default function VisionPage() {
               <div className="flex gap-3">
                 {result.source_thumbnail_url && (
                   <button
-                    onClick={() => setLightboxUrl(authUrl(result.source_thumbnail_url!))}
+                    onClick={() => setLightboxUrl(authUrl(result.source_full_url || result.source_thumbnail_url!))}
                     className="shrink-0"
                   >
                     <img

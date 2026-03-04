@@ -497,15 +497,12 @@ class BillingOrchestrator:
         anomaly_type: str | None = None
         detail_msg: str | None = None
 
-        # All actuals missing
+        # All actuals missing — fatal for per-token models, but per-call
+        # models can fall back to catalog cost_per_call.
         if input_tokens is None and output_tokens is None and provider_cost is None:
-            anomaly_type = "missing_actual_usage"
-            detail_msg = "All actuals are None"
-
-        # Per-call model must have provider_cost
-        elif billing_model == "per_call" and provider_cost is None:
-            anomaly_type = "missing_provider_cost"
-            detail_msg = f"Per-call model {decision.model} missing provider_cost"
+            if billing_model != "per_call":
+                anomaly_type = "missing_actual_usage"
+                detail_msg = "All actuals are None (non per-call model)"
 
         # Negative tokens
         elif (input_tokens is not None and input_tokens < 0) or \

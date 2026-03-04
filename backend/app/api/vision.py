@@ -84,6 +84,7 @@ class VisionResultResponse(BaseModel):
     source_generated_id: int | None = None
     source_object_key: str | None = None
     source_thumbnail_url: str | None = None
+    source_full_url: str | None = None
     created_at: datetime
 
 
@@ -448,11 +449,13 @@ async def list_results(
     gen_ids = {r.source_generated_id for r in items if r.source_generated_id}
 
     img_thumb_map: dict[int, str | None] = {}
+    img_key_map: dict[int, str | None] = {}
     if image_ids:
-        rows = db.query(Image.id, Image.thumbnail_uri_small).filter(
+        rows = db.query(Image.id, Image.thumbnail_uri_small, Image.object_key).filter(
             Image.id.in_(image_ids), Image.user_id == current_user.id,
         ).all()
         img_thumb_map = {r.id: r.thumbnail_uri_small for r in rows}
+        img_key_map = {r.id: r.object_key for r in rows}
 
     gen_thumb_map: dict[int, str | None] = {}
     if gen_ids:
@@ -460,6 +463,15 @@ async def list_results(
             GeneratedImage.id.in_(gen_ids), GeneratedImage.user_id == current_user.id,
         ).all()
         gen_thumb_map = {r.id: r.thumbnail_uri_small for r in rows}
+
+    def _resolve_full_url(r) -> str | None:
+        if r.source_image_id and r.source_image_id in img_key_map:
+            key = img_key_map[r.source_image_id]
+            if key:
+                return f"/api/images/files/{key}"
+        if r.source_generated_id:
+            return f"/api/generation/images/{r.source_generated_id}/file"
+        return None
 
     def _resolve_thumbnail(r) -> str | None:
         if r.source_image_id and r.source_image_id in img_thumb_map:
@@ -492,6 +504,7 @@ async def list_results(
                 source_generated_id=r.source_generated_id,
                 source_object_key=r.source_object_key,
                 source_thumbnail_url=_resolve_thumbnail(r),
+                source_full_url=_resolve_full_url(r),
                 created_at=r.created_at,
             )
             for r in items

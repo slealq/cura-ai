@@ -1208,6 +1208,7 @@ export const visionApi = {
       source_generated_id?: number;
       source_object_key?: string;
       source_thumbnail_url?: string | null;
+      source_full_url?: string | null;
       created_at: string;
     }>;
     total: number;
