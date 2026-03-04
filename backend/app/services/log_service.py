@@ -144,7 +144,7 @@ def write_log(
                 # skip the legacy record_usage_standalone() path.
                 if operation in ORCHESTRATOR_ENABLED_OPS:
                     from app.services.billing_context import set_last_api_call_tokens
-                    set_last_api_call_tokens(input_tokens, output_tokens, provider_cost)
+                    set_last_api_call_tokens(input_tokens, output_tokens, provider_cost, pipeline_log_id=entry.id)
                     entry.billing_failed = False
                     db.commit()
                 else:

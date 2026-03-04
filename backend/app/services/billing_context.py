@@ -122,6 +122,7 @@ def init_token_container() -> None:
             "input_tokens": None,
             "output_tokens": None,
             "provider_cost": None,
+            "pipeline_log_id": None,
         })
 
 
@@ -129,16 +130,18 @@ def set_last_api_call_tokens(
     input_tokens: int | None,
     output_tokens: int | None,
     provider_cost: float | None = None,
+    pipeline_log_id: int | None = None,
 ):
     """Store token counts from the most recent API call for orchestrator pickup."""
     container = _last_api_tokens_var.get()
     if container is None:
         # Fallback: create container now (e.g. direct FastAPI await path)
-        container = {"input_tokens": None, "output_tokens": None, "provider_cost": None}
+        container = {"input_tokens": None, "output_tokens": None, "provider_cost": None, "pipeline_log_id": None}
         _last_api_tokens_var.set(container)
     container["input_tokens"] = input_tokens
     container["output_tokens"] = output_tokens
     container["provider_cost"] = provider_cost
+    container["pipeline_log_id"] = pipeline_log_id
 
 
 def get_last_api_call_tokens() -> tuple[int | None, int | None, float | None]:
@@ -153,6 +156,14 @@ def get_last_api_call_tokens() -> tuple[int | None, int | None, float | None]:
     )
 
 
+def get_last_pipeline_log_id() -> int | None:
+    """Get the pipeline_log_id stored alongside the most recent API call tokens."""
+    container = _last_api_tokens_var.get()
+    if container is None:
+        return None
+    return container.get("pipeline_log_id")
+
+
 def clear_last_api_call_tokens():
     """Clear stored token counts after orchestrator has consumed them."""
     container = _last_api_tokens_var.get()
@@ -160,6 +171,7 @@ def clear_last_api_call_tokens():
         container["input_tokens"] = None
         container["output_tokens"] = None
         container["provider_cost"] = None
+        container["pipeline_log_id"] = None
 
 
 def make_idempotency_key(

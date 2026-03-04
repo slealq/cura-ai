@@ -376,13 +376,13 @@ async def get_processing_costs(
         .all()
     )
 
-    # charged_cost is stored in USD; 1 spark = $0.001 → multiply by 1000
+    # Prefer delta_sparks (integer sparks) when available; fall back to charged_cost * 1000
     usd_to_sparks = 1000
 
     operations = []
     total_sparks = 0.0
     for r in records:
-        sparks = round(float(r.charged_cost) * usd_to_sparks, 2)
+        sparks = float(r.delta_sparks) if r.delta_sparks is not None else round(float(r.charged_cost) * usd_to_sparks, 2)
         total_sparks += sparks
         operations.append(ProcessingCostOperation(
             operation=r.operation,

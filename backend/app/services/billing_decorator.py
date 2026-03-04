@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 from app.services.billing_context import (
     clear_last_api_call_tokens,
     get_last_api_call_tokens,
+    get_last_pipeline_log_id,
     get_trace_id,
     is_billing_deferred,
     make_idempotency_key,
@@ -138,6 +139,7 @@ class _BillableContext:
             return
 
         in_tok, out_tok, prov_cost = get_last_api_call_tokens()
+        pl_id = get_last_pipeline_log_id()
         clear_last_api_call_tokens()
 
         defer = self._resolve_defer()
@@ -148,6 +150,7 @@ class _BillableContext:
             provider_cost=prov_cost,
             defer_debit=defer,
             response_snapshot=response_snapshot,
+            pipeline_log_id=pl_id,
         )
         self._actual_recorded = True
 
