@@ -108,6 +108,10 @@ celery_app.conf.update(
             "task": "app.workers.tasks.reconcile_billing",
             "schedule": 3600.0,  # once per hour
         },
+        "reconcile-payments": {
+            "task": "app.workers.tasks.reconcile_payments",
+            "schedule": 86400.0,  # once per day
+        },
     },
 )
 

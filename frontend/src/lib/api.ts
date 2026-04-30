@@ -57,6 +57,11 @@ import type {
   UsageSummary,
   UserBalance,
   VisionCosts,
+  SparkPack,
+  PurchaseListResponse,
+  SubscriptionPlan,
+  UserSubscription,
+  PromoRedeemResult,
 } from '@/types';
 
 const apiBaseURL = process.env.NEXT_PUBLIC_API_URL
@@ -1500,6 +1505,69 @@ export const billingApi = {
 
   getSummarizeCosts: async (clusterCount: number = 1): Promise<SummarizeCostsResponse> => {
     const { data } = await api.get('/billing/summarize-costs', { params: { cluster_count: clusterCount } });
+    return data;
+  },
+
+  // --- Spark Packs & Checkout ---
+
+  getPacks: async (): Promise<SparkPack[]> => {
+    const { data } = await api.get('/billing/packs');
+    return data;
+  },
+
+  createCheckout: async (packId: number, successUrl?: string, cancelUrl?: string): Promise<{ checkout_url: string; purchase_id: string }> => {
+    const { data } = await api.post('/billing/checkout', {
+      pack_id: packId,
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+    });
+    return data;
+  },
+
+  getPurchases: async (skip = 0, limit = 50): Promise<PurchaseListResponse> => {
+    const { data } = await api.get('/billing/purchases', { params: { skip, limit } });
+    return data;
+  },
+
+  // --- Subscriptions ---
+
+  getSubscriptionPlans: async (): Promise<SubscriptionPlan[]> => {
+    const { data } = await api.get('/billing/subscription/plans');
+    return data;
+  },
+
+  getSubscription: async (): Promise<UserSubscription | null> => {
+    try {
+      const { data } = await api.get('/billing/subscription');
+      return data;
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.status === 404) return null;
+      throw err;
+    }
+  },
+
+  createSubscriptionCheckout: async (
+    planId: number,
+    successUrl?: string,
+    cancelUrl?: string,
+  ): Promise<{ checkout_url: string }> => {
+    const { data } = await api.post('/billing/subscription/checkout', {
+      plan_id: planId,
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+    });
+    return data;
+  },
+
+  cancelSubscription: async (): Promise<{ status: string }> => {
+    const { data } = await api.post('/billing/subscription/cancel');
+    return data;
+  },
+
+  // --- Promo Codes ---
+
+  redeemPromo: async (code: string): Promise<PromoRedeemResult> => {
+    const { data } = await api.post('/billing/promo/redeem', { code });
     return data;
   },
 };

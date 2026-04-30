@@ -1485,3 +1485,470 @@ def admin_search_operations(
         "skip": skip,
         "limit": limit,
     }
+
+
+# ─── Spark Packs & Checkout ─────────────────────────────────────────────────
+
+
+class PackResponse(BaseModel):
+    id: int
+    name: str
+    sparks_amount: int
+    bonus_sparks: int
+    price_cents: int
+    currency: str
+    is_featured: bool
+
+
+class CheckoutRequest(BaseModel):
+    pack_id: int
+    success_url: str | None = None
+    cancel_url: str | None = None
+
+
+class CheckoutResponse(BaseModel):
+    checkout_url: str
+    purchase_id: str
+
+
+class PurchaseItem(BaseModel):
+    id: int
+    purchase_id: str
+    pack_name: str
+    sparks_amount: int
+    amount_cents: int
+    currency: str
+    status: str
+    created_at: str
+    completed_at: str | None
+
+
+class PurchaseListResponse(BaseModel):
+    items: list[PurchaseItem]
+    total: int
+
+
+@router.get("/packs", response_model=list[PackResponse])
+def list_packs(db: Session = Depends(get_db)):
+    """List active spark packs available for purchase."""
+    from app.services.payment_service import PaymentService
+
+    service = PaymentService(db)
+    packs = service.list_packs()
+    return [
+        PackResponse(
+            id=p.id,
+            name=p.name,
+            sparks_amount=p.sparks_amount,
+            bonus_sparks=p.bonus_sparks,
+            price_cents=p.price_cents,
+            currency=p.currency,
+            is_featured=p.is_featured,
+        )
+        for p in packs
+    ]
+
+
+@router.post("/checkout", response_model=CheckoutResponse)
+async def create_checkout(
+    body: CheckoutRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Create a payment checkout session for a spark pack."""
+    from app.services.payment_service import FraudCheckError, PaymentService
+
+    service = PaymentService(db, current_user.id)
+    try:
+        result = await service.create_checkout(
+            pack_id=body.pack_id,
+            user_email=current_user.email,
+            success_url=body.success_url or "http://localhost:3000/billing?purchase=success",
+            cancel_url=body.cancel_url or "http://localhost:3000/billing",
+        )
+        return CheckoutResponse(**result)
+    except FraudCheckError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/purchases", response_model=PurchaseListResponse)
+def list_purchases(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get current user's purchase history."""
+    from app.services.payment_service import PaymentService
+
+    service = PaymentService(db, current_user.id)
+    return service.get_purchases(skip=skip, limit=limit)
+
+
+@router.get("/admin/purchases")
+def admin_list_purchases(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """List all purchases (admin only)."""
+    from app.services.payment_service import PaymentService
+
+    service = PaymentService(db)
+    return service.get_all_purchases(skip=skip, limit=limit)
+
+
+@router.post("/admin/refund/{payment_id}")
+async def admin_refund(
+    payment_id: int,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Issue a refund for a payment (admin only)."""
+    from app.services.payment_service import PaymentService
+
+    service = PaymentService(db)
+    try:
+        return await service.create_refund(payment_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/admin/webhook-events")
+def admin_webhook_events(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """List raw webhook events (admin only)."""
+    from app.services.payment_service import PaymentService
+
+    service = PaymentService(db)
+    return service.get_webhook_events(skip=skip, limit=limit)
+
+
+@router.get("/admin/margins")
+def admin_margins(
+    start_date: str | None = Query(None),
+    end_date: str | None = Query(None),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Revenue vs COGS margin monitoring (admin only)."""
+    from app.services.payment_service import PaymentService
+
+    start = datetime.fromisoformat(start_date) if start_date else None
+    end = datetime.fromisoformat(end_date) if end_date else None
+    service = PaymentService(db)
+    return service.get_margins(start_date=start, end_date=end)
+
+
+@router.get("/admin/abandoned")
+def admin_abandoned_checkouts(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    start_date: str | None = Query(None),
+    end_date: str | None = Query(None),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Abandoned checkout analytics (admin only)."""
+    from app.services.payment_service import PaymentService
+
+    start = datetime.fromisoformat(start_date) if start_date else None
+    end = datetime.fromisoformat(end_date) if end_date else None
+    service = PaymentService(db)
+    return service.get_abandoned_checkouts(
+        skip=skip, limit=limit, start_date=start, end_date=end,
+    )
+
+
+# ─── Subscriptions ──────────────────────────────────────────────────────────
+
+
+class SubscriptionPlanResponse(BaseModel):
+    id: int
+    name: str
+    sparks_per_month: int
+    price_cents: int
+    currency: str
+
+
+class SubscriptionResponse(BaseModel):
+    id: int
+    plan_name: str
+    sparks_per_month: int
+    status: str
+    current_period_start: str | None
+    current_period_end: str | None
+    cancel_at_period_end: bool
+
+
+class SubscriptionCheckoutRequest(BaseModel):
+    plan_id: int
+    success_url: str | None = None
+    cancel_url: str | None = None
+
+
+@router.get("/subscription/plans", response_model=list[SubscriptionPlanResponse])
+def list_subscription_plans(db: Session = Depends(get_db)):
+    """List active subscription plans."""
+    from app.services.subscription_service import SubscriptionService
+
+    service = SubscriptionService(db)
+    plans = service.list_plans()
+    return [
+        SubscriptionPlanResponse(
+            id=p.id,
+            name=p.name,
+            sparks_per_month=p.sparks_per_month,
+            price_cents=p.price_cents,
+            currency=p.currency,
+        )
+        for p in plans
+    ]
+
+
+@router.get("/subscription")
+def get_subscription(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get current user's active subscription."""
+    from app.services.subscription_service import SubscriptionService
+
+    service = SubscriptionService(db, current_user.id)
+    sub = service.get_user_subscription()
+    if not sub:
+        raise HTTPException(status_code=404, detail="No active subscription")
+
+    from app.models.payment import SubscriptionPlan
+
+    plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == sub.plan_id).first()
+
+    return SubscriptionResponse(
+        id=sub.id,
+        plan_name=plan.name if plan else "Unknown",
+        sparks_per_month=plan.sparks_per_month if plan else 0,
+        status=sub.status.value,
+        current_period_start=sub.current_period_start.isoformat() if sub.current_period_start else None,
+        current_period_end=sub.current_period_end.isoformat() if sub.current_period_end else None,
+        cancel_at_period_end=sub.cancel_at_period_end,
+    )
+
+
+@router.post("/subscription/checkout")
+async def create_subscription_checkout(
+    body: SubscriptionCheckoutRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Create a subscription checkout session."""
+    from app.services.subscription_service import SubscriptionService
+
+    service = SubscriptionService(db, current_user.id)
+    try:
+        result = await service.create_subscription_checkout(
+            plan_id=body.plan_id,
+            user_email=current_user.email,
+            success_url=body.success_url or "http://localhost:3000/billing?subscription=success",
+            cancel_url=body.cancel_url or "http://localhost:3000/billing",
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/subscription/cancel")
+async def cancel_subscription(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Cancel current subscription at period end."""
+    from app.services.subscription_service import SubscriptionService
+
+    service = SubscriptionService(db, current_user.id)
+    try:
+        return await service.cancel_subscription()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ─── Promo Codes ─────────────────────────────────────────────────────────────
+
+
+class PromoRedeemRequest(BaseModel):
+    code: str
+
+
+class PromoRedeemResponse(BaseModel):
+    sparks_granted: int
+    new_balance: float
+
+
+class PromoCodeCreateRequest(BaseModel):
+    code: str
+    sparks_amount: int
+    expires_at: str | None = None
+    max_uses: int | None = None
+
+
+class PromoCodeResponse(BaseModel):
+    id: int
+    code: str
+    sparks_amount: int
+    expires_at: str | None
+    max_uses: int | None
+    uses_count: int
+    is_active: bool
+    created_at: str
+
+
+@router.post("/promo/redeem", response_model=PromoRedeemResponse)
+def redeem_promo(
+    body: PromoRedeemRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Redeem a promo code."""
+    from app.services.promo_service import PromoService
+
+    service = PromoService(db, current_user.id)
+    try:
+        result = service.redeem_code(body.code)
+        return PromoRedeemResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/admin/promo", response_model=PromoCodeResponse)
+def admin_create_promo(
+    body: PromoCodeCreateRequest,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Create a promo code (admin only)."""
+    from app.services.promo_service import PromoService
+
+    service = PromoService(db)
+    try:
+        expires = datetime.fromisoformat(body.expires_at) if body.expires_at else None
+        promo = service.create_promo_code(
+            code=body.code,
+            sparks_amount=body.sparks_amount,
+            admin_id=admin.id,
+            expires_at=expires,
+            max_uses=body.max_uses,
+        )
+        return PromoCodeResponse(
+            id=promo.id,
+            code=promo.code,
+            sparks_amount=promo.sparks_amount,
+            expires_at=promo.expires_at.isoformat() if promo.expires_at else None,
+            max_uses=promo.max_uses,
+            uses_count=promo.uses_count,
+            is_active=promo.is_active,
+            created_at=promo.created_at.isoformat(),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/admin/promo")
+def admin_list_promos(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """List all promo codes (admin only)."""
+    from app.services.promo_service import PromoService
+
+    service = PromoService(db)
+    return service.list_promo_codes(skip=skip, limit=limit)
+
+
+@router.patch("/admin/promo/{code_id}/deactivate")
+def admin_deactivate_promo(
+    code_id: int,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Deactivate a promo code (admin only)."""
+    from app.services.promo_service import PromoService
+
+    service = PromoService(db)
+    try:
+        return service.deactivate_promo_code(code_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class ProviderVariantUpdate(BaseModel):
+    provider_variant_id: str
+
+
+@router.patch("/admin/packs/{pack_id}")
+def admin_update_pack(
+    pack_id: int,
+    body: ProviderVariantUpdate,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Update a spark pack's provider_variant_id (admin only)."""
+    from app.models.payment import SparkPack
+
+    pack = db.query(SparkPack).filter(SparkPack.id == pack_id).first()
+    if not pack:
+        raise HTTPException(status_code=404, detail=f"Pack {pack_id} not found")
+
+    pack.provider_variant_id = body.provider_variant_id
+    db.commit()
+
+    return {
+        "id": pack.id,
+        "name": pack.name,
+        "provider_variant_id": pack.provider_variant_id,
+    }
+
+
+@router.patch("/admin/plans/{plan_id}")
+def admin_update_plan(
+    plan_id: int,
+    body: ProviderVariantUpdate,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Update a subscription plan's provider_variant_id (admin only)."""
+    from app.models.payment import SubscriptionPlan
+
+    plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == plan_id).first()
+    if not plan:
+        raise HTTPException(status_code=404, detail=f"Plan {plan_id} not found")
+
+    plan.provider_variant_id = body.provider_variant_id
+    db.commit()
+
+    return {
+        "id": plan.id,
+        "name": plan.name,
+        "provider_variant_id": plan.provider_variant_id,
+    }
+
+
+@router.get("/admin/subscriptions")
+def admin_list_subscriptions(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """List all subscriptions (admin only)."""
+    from app.services.subscription_service import SubscriptionService
+
+    service = SubscriptionService(db)
+    return service.admin_list_subscriptions(skip=skip, limit=limit)

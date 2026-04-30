@@ -1,7 +1,7 @@
 # SightLab Payment System Architecture
 
 > Technical report for integrating real-money payments into SightLab's sparks billing system.
-> Created: 2026-03-04 | Revised: 2026-03-04 (post architecture review)
+> Created: 2026-03-04 | Revised: 2026-03-04 (Phases 5-11 roadmap added)
 
 ## Table of Contents
 
@@ -176,10 +176,15 @@ In practice:
 
 | Concept | Definition | Example |
 |---------|------------|---------|
-| **Cost-spark** | Internal unit. 1 spark = $0.001 USD. Used for debits, reservations, catalog pricing. | Generate costs 50 sparks (= $0.05 after 2x markup on $0.025 provider cost) |
-| **Sell-spark** | What users receive when purchasing. Exchange rate set by pack/subscription pricing. | $20 Creator pack gives 15,000 sparks (= $0.00133/spark effective) |
+| **Cost-spark** | Internal accounting unit pegged to USD (`USD_TO_SPARKS = 1000` in code). Used for debits, reservations, cost catalog pricing. Engineers see this; users never do. | Generate costs 50 sparks (debit). Provider cost was $0.025, 2x markup → charged 50 sparks. |
+| **Purchased-spark** | What users receive when buying packs or subscribing. Exchange rate set by pack/subscription pricing, not by the internal peg. | $25 Creator pack gives 22,000 sparks. Effective rate = $0.00114/spark. |
 
-Users see "sparks" everywhere — they never see the internal dollar equivalence. The frontend should **remove** the "1 spark = $0.001 USD" display.
+> **Important:** The internal peg (`1 spark = $0.001`) is an engineering convenience, not a price.
+> It must never appear in user-facing UI, API responses, or documentation that users might see.
+> Pack pricing alone determines what sparks cost users. The two exchange rates (internal vs purchase)
+> are deliberately different — that delta (plus unused sparks) is where margin comes from.
+
+Users see "sparks" everywhere — they never see the internal dollar equivalence. The frontend should **remove** any "1 spark = $0.001 USD" display.
 
 ### Fully-Loaded Cost Per Spark
 
@@ -187,7 +192,7 @@ To set prices, we need the true cost of fulfilling 1 spark of user activity:
 
 ```
 Provider cost per spark:
-  1 spark = $0.001 (charged to user after 2x markup)
+  1 cost-spark = $0.001 (internal peg, used for debits)
   Provider actually costs $0.0005 (half, because of 2x markup)
 
 Infrastructure overhead (Azure compute, storage, Redis, networking):
@@ -203,13 +208,25 @@ Fully-loaded COGS per spark = $0.0005 + $0.0001 = $0.0006
 | Azure infrastructure | $0.0001 | ~20% overhead estimate |
 | **Total COGS** | **$0.0006** | Measure and refine over time |
 
+> **COGS model version: `v0_provider_half_plus_20pct`**
+>
+> This is a spreadsheet estimate. The margin reports and `get_margins()` endpoint use this
+> assumption implicitly. When measured telemetry is available (Phase 10), replace with a
+> versioned model backed by actual per-operation infrastructure costs. Bumping the version
+> string makes margin report changes auditable and prevents "why did margins change?" mysteries.
+
 ### Target Margins
 
-"2x profit" means: **profit = 2 x cost**, so **revenue = 3 x cost** (67% gross margin).
+> **Terminology (used consistently throughout this doc):**
+>
+> - **2x markup** = revenue = 2 x cost (50% gross margin). This is our floor.
+> - **2x profit** = profit = 2 x cost, so revenue = 3 x cost (67% gross margin). This is the blended target.
+>
+> We use **2x markup (50% GM) as the floor** for the worst-case pack (Studio), and target
+> **2x profit on a blended basis** across all pack sizes. The Starter pack at 2.14x subsidizes
+> the Studio pack at 1.50x, achieving ~1.80x weighted average (between floor and target).
 
-"2x markup" means: **revenue = 2 x cost** (50% gross margin).
-
-We target **2x markup (50% margin)** as the floor, after payment processor fees:
+We target **2x markup (50% margin) as the floor**, after payment processor fees:
 
 ```
 Target: net_revenue_per_spark >= 2 × COGS_per_spark
@@ -249,12 +266,12 @@ This means:
 
 Packs use **decreasing price-per-spark** to incentivize larger purchases:
 
-| Pack | Price | Sparks | Bonus | Total sparks | Effective $/spark | Net revenue (LS domestic) | COGS | Margin |
-|------|-------|--------|-------|-------------|-------------------|--------------------------|------|--------|
-| Starter | $10 | 7,000 | -- | 7,000 | $0.00143 | $9.00 | $4.20 | 2.14x |
-| Creator | $25 | 20,000 | 2,000 | 22,000 | $0.00114 | $23.25 | $13.20 | 1.76x |
-| Pro | $50 | 42,000 | 6,000 | 48,000 | $0.00104 | $47.00 | $28.80 | 1.63x |
-| Studio | $100 | 90,000 | 15,000 | 105,000 | $0.00095 | $94.50 | $63.00 | 1.50x |
+| Pack | Price | Base sparks | Bonus | Total sparks | Effective $/spark | Net revenue (LS domestic) | COGS | Margin |
+|------|-------|-------------|-------|-------------|-------------------|--------------------------|------|--------|
+| Starter | $10 | 5,000 | 2,000 | 7,000 | $0.00143 | $9.00 | $4.20 | 2.14x |
+| Creator | $25 | 15,000 | 7,000 | 22,000 | $0.00114 | $23.25 | $13.20 | 1.76x |
+| Pro | $50 | 35,000 | 13,000 | 48,000 | $0.00104 | $47.00 | $28.80 | 1.63x |
+| Studio | $100 | 70,000 | 35,000 | 105,000 | $0.00095 | $94.50 | $63.00 | 1.50x |
 
 #### Margin Walkthrough: Starter ($10 → 7,000 sparks → 2.14x)
 
@@ -264,10 +281,11 @@ Step 1: Net after payment fees
   LS fee: 5% + $0.50 = $1.00
   Net:    $9.00
 
-Step 2: Cost to fulfill 7,000 sparks (if user spends them all)
+Step 2: Cost to fulfill 7,000 sparks (5,000 base + 2,000 bonus)
   Provider cost per spark:       $0.0005  (half of $0.001, because 2x markup)
   Infrastructure overhead (20%): $0.0001
   Fully-loaded COGS per spark:   $0.0006
+  (COGS model: v0_provider_half_plus_20pct — refine with measured telemetry)
 
   COGS = 7,000 × $0.0006 = $4.20
 
@@ -945,8 +963,30 @@ def handle_checkout_completed(db: Session, event, raw_event):
 | **User navigates away before redirect** | User thinks payment failed | Webhook still fires independently. Balance updates regardless of redirect. |
 | **Provider API goes down** | Cannot create checkout | Retry with exponential backoff (2-3 attempts). If all fail, show error. Future: fallback to secondary provider. |
 | **Chargeback/dispute** | Sparks already used | Flag account, freeze balance if sparks remain. Admin review. |
-| **Refund requested** | Reverse sparks | Only refund if `balance_sparks >= sparks_to_reverse`. Partial refund if some sparks spent. |
+| **Refund requested** | Reverse sparks | See Refund Policy below. |
 | **Checkout abandoned** | PENDING txn with no payment | `checkout.session.expired` webhook updates to EXPIRED. Reconciliation catches any missed. |
+
+### Refund Policy
+
+Deterministic rules for how refunds interact with spent sparks:
+
+**Voluntary refund (admin-initiated):**
+
+1. Calculate `sparks_to_reverse = pack.sparks_amount + pack.bonus_sparks`
+2. Check `user_balance.balance_sparks`
+3. If `balance >= sparks_to_reverse`: full refund. Reverse all sparks, issue full payment refund via gateway.
+4. If `balance < sparks_to_reverse` and `balance > 0`: partial refund only. Reverse available sparks, refund prorated amount (`available / total * price_cents`). Mark transaction as `PARTIALLY_REFUNDED`.
+5. If `balance <= 0`: refund denied. User has spent the sparks — no reversal possible. Admin can override with a store credit adjustment instead.
+
+**Involuntary refund (chargeback/dispute):**
+
+1. Immediately set `PaymentTransaction.status = DISPUTED`.
+2. If `balance >= sparks_to_reverse`: freeze via `reserved_sparks += sparks_to_reverse`. Do not debit yet (wait for dispute resolution).
+3. If `balance < sparks_to_reverse`: allow negative balance. Set `user_balance.balance -= sparks_to_reverse`. Block all usage until balance is repaid (purchase more sparks or admin adjustment).
+4. On dispute won (closed in our favor): unfreeze reserved sparks, restore balance if it went negative.
+5. On dispute lost: finalize the debit, log to Sentry, flag account for review.
+
+**Key principle:** The ledger (`BalanceTransaction`) is always the source of truth. Refunds create `ADJUSTMENT` transactions, never modify existing credit transactions.
 
 ### Provider Outage Handling
 
@@ -1053,12 +1093,12 @@ charge.dispute.closed (lost)
 
 See [Section 4: Pricing Model](#4-pricing-model) for the margin analysis behind these numbers.
 
-| Pack | Price | Sparks | Bonus | Total | Featured |
-|------|-------|--------|-------|-------|----------|
-| Starter | $10 | 7,000 | -- | 7,000 | |
-| Creator | $25 | 20,000 | 2,000 | 22,000 | Recommended |
-| Pro | $50 | 42,000 | 6,000 | 48,000 | |
-| Studio | $100 | 90,000 | 15,000 | 105,000 | |
+| Pack | Price | Base sparks | Bonus | Total | Featured |
+|------|-------|-------------|-------|-------|----------|
+| Starter | $10 | 5,000 | 2,000 | 7,000 | |
+| Creator | $25 | 15,000 | 7,000 | 22,000 | Recommended |
+| Pro | $50 | 35,000 | 13,000 | 48,000 | |
+| Studio | $100 | 70,000 | 35,000 | 105,000 | |
 
 No $5 pack — Lemon Squeezy's $0.50 fixed fee makes small packs unprofitable.
 
@@ -1143,11 +1183,12 @@ Create three new tables in a single Alembic migration:
 **Seed data for `spark_packs`:**
 
 ```python
+# Canonical source: migration 052_add_payment_tables.py
 packs = [
-    {"name": "Starter",  "sparks_amount": 7000,  "price_cents": 1000,  "bonus_sparks": 0,     "is_featured": False, "sort_order": 1},
-    {"name": "Creator",  "sparks_amount": 20000, "price_cents": 2500,  "bonus_sparks": 2000,  "is_featured": True,  "sort_order": 2},
-    {"name": "Pro",      "sparks_amount": 42000, "price_cents": 5000,  "bonus_sparks": 6000,  "is_featured": False, "sort_order": 3},
-    {"name": "Studio",   "sparks_amount": 90000, "price_cents": 10000, "bonus_sparks": 15000, "is_featured": False, "sort_order": 4},
+    {"name": "Starter",  "sparks_amount": 5000,  "price_cents": 1000,  "bonus_sparks": 2000,  "is_featured": False, "sort_order": 1},
+    {"name": "Creator",  "sparks_amount": 15000, "price_cents": 2500,  "bonus_sparks": 7000,  "is_featured": True,  "sort_order": 2},
+    {"name": "Pro",      "sparks_amount": 35000, "price_cents": 5000,  "bonus_sparks": 13000, "is_featured": False, "sort_order": 3},
+    {"name": "Studio",   "sparks_amount": 70000, "price_cents": 10000, "bonus_sparks": 35000, "is_featured": False, "sort_order": 4},
 ]
 ```
 
@@ -1234,16 +1275,16 @@ Register webhooks router in `backend/app/main.py` (no `/api` prefix — webhooks
 
 #### Phase 1 Deliverables Checklist
 
-- [ ] Migration 034 creates 3 tables with seed data
-- [ ] Models in `payment.py`
-- [ ] `PaymentGateway` ABC + `StripeGateway` (or `LemonSqueezyGateway`)
-- [ ] `PaymentService` with checkout, webhook, purchases, refund
-- [ ] Webhook API route (signature-verified, no auth)
-- [ ] Billing API routes (packs, checkout, purchases, admin)
-- [ ] Frontend: pack cards, checkout redirect, balance polling, purchase history
-- [ ] Frontend: remove "1 spark = $0.001" display
-- [ ] Stripe test mode working locally with `stripe listen`
-- [ ] Manual test: buy pack -> webhook -> sparks appear in balance
+- [x] Migration 052 creates payment tables with seed data
+- [x] Models in `payment.py` (SparkPack, PaymentTransaction, PaymentWebhookEvent)
+- [x] `PaymentGateway` ABC + `LemonSqueezyGateway` + `MockPaymentGateway`
+- [x] `PaymentService` with checkout, webhook, purchases, refund
+- [x] Webhook API route (signature-verified, no auth)
+- [x] Billing API routes (packs, checkout, purchases, admin)
+- [x] Frontend: pack cards, checkout redirect, balance polling, purchase history
+- [x] Frontend: remove "1 spark = $0.001" display
+- [ ] Real LS test mode working with webhook forwarding (Phase 4)
+- [ ] Manual test: buy pack -> webhook -> sparks appear in balance (Phase 4)
 
 ---
 
@@ -1251,48 +1292,316 @@ Register webhooks router in `backend/app/main.py` (no `/api` prefix — webhooks
 
 Goal: Better checkout experience, admin visibility, fraud guardrails.
 
-| Task | Details |
-|------|---------|
-| **Low balance warning** | When `available_balance < 100 sparks`, show banner in sidebar/header: "Low balance: X sparks remaining. [Buy more]" |
-| **Reconciliation task** | Celery beat job (daily): query provider API for payments in last 48h, compare against `payment_transactions`, flag mismatches. Auto-expire PENDING txns older than 24h. Alert via Sentry. |
-| **Margin monitoring** | Admin endpoint `GET /billing/admin/margins`: for each COMPLETED payment, compute `net_received / cogs`. Surface alerts if blended margin < 1.5x (warning) or < 1.3x (critical). |
-| **Abandoned checkout analytics** | Admin endpoint `GET /billing/admin/abandoned`: list PENDING/EXPIRED txns with user info and pack. Shows conversion funnel. |
-| **New account cooldown** | Accounts < 24h old: max single purchase $20. Enforce in `create_checkout()`. |
-| **Purchase velocity limit** | Max 3 purchases per user per hour. Enforce in `create_checkout()`. |
-| **Email receipts** | Send email on successful purchase (via provider's built-in receipt or custom email). |
-| **Saved payment methods** | Enable Stripe Link wallet or Stripe Customer objects for one-click returning purchases. |
+| Task | Status | Details |
+|------|--------|---------|
+| **Low balance warning** | Done | When `available_balance < 100 sparks`, show banner in sidebar/header |
+| **Reconciliation task** | Done | `reconcile_stale_transactions()` expires PENDING txns > 24h. Sentry alerts. |
+| **Margin monitoring** | Done | `GET /billing/admin/margins`: per-user revenue vs COGS with warning/critical thresholds |
+| **Abandoned checkout analytics** | Done | `GET /billing/admin/abandoned`: PENDING/EXPIRED txns with conversion rate |
+| **New account cooldown** | Done | Accounts < 24h: max single purchase $20. Sentry alert on trigger. |
+| **Purchase velocity limit** | Done | Max 3 purchases per user per hour. Sentry alert on trigger. |
+| **Email receipts** | Deferred | Future phase — use LS built-in receipts for now |
+| **Saved payment methods** | Deferred | Future phase — LS handles payment method storage |
 
 ---
 
 ### Phase 3: Subscriptions & Growth (2-3 weeks)
 
-Goal: Recurring revenue, auto-top-up, promotional tools.
+Goal: Recurring revenue, promo tools.
 
-| Task | Details |
-|------|---------|
-| **Subscription plans** | Three tiers: Hobby ($15/mo, 15,000 sparks), Pro ($40/mo, 45,000 sparks), Studio ($80/mo, 100,000 sparks). Monthly reset with no rollover (standard model). |
-| **Subscription models** | New `subscription_plans` table + `user_subscriptions` table (user_id, plan_id, provider_subscription_id, status, current_period_start/end). |
-| **Subscription webhooks** | Handle `invoice.paid` (credit monthly sparks), `customer.subscription.deleted` (cancel), `invoice.payment_failed` (notify user). |
-| **Auto-top-up** | User sets threshold (e.g., "recharge 10,000 sparks when balance < 500"). Requires saved payment method. Triggered by `BillingService` when balance drops below threshold during debit. |
-| **Stripe Customer Portal** | Link to Stripe-hosted portal for subscription management (cancel, change plan, update payment method). |
-| **Promotional credits** | Admin can create promo codes that grant bonus sparks. `promo_codes` table (code, sparks_amount, expires_at, max_uses, uses_count). Credits marked with `expires_at` on `BalanceTransaction`. |
-| **Credit expiration** | Add `expires_at` column to `BalanceTransaction`. Purchased sparks: 12-month expiry. Promo sparks: 30-day expiry. Debit consumes oldest non-expired first (FIFO). |
-| **Secondary provider** | Add `LemonSqueezyGateway` or `PayPalGateway` via `PaymentGateway` abstraction. User selects payment method at checkout. |
-| **Referral credits** | User generates referral link. New user signs up -> both get bonus sparks after first purchase. |
+| Task | Status | Details |
+|------|--------|---------|
+| **Subscription plans** | Done | Three tiers: Hobby ($15/mo), Pro ($40/mo), Studio ($80/mo) |
+| **Subscription models** | Done | `subscription_plans` + `user_subscriptions` tables (migration 053) |
+| **Subscription webhooks** | Done | Handles created, renewed, cancelled, expired, payment_failed, updated |
+| **Promotional credits** | Done | `promo_codes` + `promo_redemptions` tables. Admin create/deactivate, user redeem. |
+| **Auto-top-up** | Deferred | Requires saved payment methods (future phase) |
+| **Credit expiration (FIFO)** | Deferred | Future phase |
+| **Secondary provider** | N/A | Using Lemon Squeezy as primary (no US LLC needed) |
+| **Referral credits** | Deferred | Future phase |
 
 ---
 
-### New Environment Variables (All Phases)
+### Phase 4: Real Lemon Squeezy Integration & Production Readiness
+
+Goal: Connect the mock payment system to real Lemon Squeezy APIs.
+
+| Task | Status | Details |
+|------|--------|---------|
+| **LS env var wiring** | Done | Docker Compose, CI/CD, .env.example all have LS vars |
+| **Admin variant linking** | Done | `PATCH /billing/admin/packs/{id}` and `PATCH /billing/admin/plans/{id}` endpoints |
+| **Test webhook endpoint** | Done | `POST /webhooks/test` for local testing (mock gateway only) |
+| **Mock auto-complete** | Done | Pack checkouts auto-complete with mock gateway (matching subscription behavior) |
+| **Sentry payment alerts** | Done | Subscription payment failures, fraud checks, gateway HTTP errors |
+| **LS account setup** | Manual | See "Lemon Squeezy Setup Guide" below |
+| **Real webhook testing** | Manual | Use ngrok to test real LS webhooks |
+
+---
+
+### Lemon Squeezy Setup Guide
+
+#### 1. Create Account & Store
+
+1. Create account at [lemonsqueezy.com](https://lemonsqueezy.com), verify email
+2. Create a Store (e.g., "Cura AI")
+
+#### 2. Create Products
+
+Create two products with variants matching the database tables:
+
+**Product: "Spark Packs"** (one-time payment)
+
+> Prices set in LS must match the `price_cents` column in `spark_packs`. The spark amounts are controlled by the database, not LS — LS only handles the payment.
+
+| Variant | Price (set in LS) | DB total sparks (base + bonus) |
+|---------|-------------------|-------------------------------|
+| Starter | $10.00 | 7,000 (5,000 + 2,000 bonus) |
+| Creator | $25.00 | 22,000 (15,000 + 7,000 bonus) |
+| Pro | $50.00 | 48,000 (35,000 + 13,000 bonus) |
+| Studio | $100.00 | 105,000 (70,000 + 35,000 bonus) |
+
+**Product: "Subscriptions"** (subscription pricing type)
+
+| Variant | Price | Maps to `subscription_plans` row |
+|---------|-------|----------------------------------|
+| Hobby | $15.00/month | 15,000 sparks/month |
+| Pro | $40.00/month | 45,000 sparks/month |
+| Studio | $80.00/month | 100,000 sparks/month |
+
+#### 3. Link Variant IDs
+
+After creating products in LS, copy each variant ID from the LS dashboard and update the database:
 
 ```bash
-# Phase 1
-PAYMENT_PROVIDER=stripe          # or "lemon_squeezy"
-STRIPE_SECRET_KEY=sk_test_...    # sk_live_... in production
-STRIPE_PUBLISHABLE_KEY=pk_test_...
-STRIPE_WEBHOOK_SECRET=whsec_...
+# Get auth token
+TOKEN=$(curl -s http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"stuart.leal23@gmail.com","password":"password"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
-# Phase 2 (if using LS as secondary)
-LEMON_SQUEEZY_API_KEY=...
-LEMON_SQUEEZY_WEBHOOK_SECRET=...
-LEMON_SQUEEZY_STORE_ID=...
+# Link pack variant IDs
+curl -X PATCH http://localhost:8000/api/billing/admin/packs/1 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"provider_variant_id": "<LS_VARIANT_ID>"}'
+
+# Link plan variant IDs
+curl -X PATCH http://localhost:8000/api/billing/admin/plans/1 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"provider_variant_id": "<LS_VARIANT_ID>"}'
+```
+
+#### 4. API Key & Store ID
+
+1. LS Settings > API Keys > create key with full permissions
+2. Note your Store ID from the LS Dashboard URL or API
+3. Set environment variables:
+
+```bash
+LEMON_SQUEEZY_API_KEY=<your-api-key>
+LEMON_SQUEEZY_STORE_ID=<your-store-id>
+LEMON_SQUEEZY_WEBHOOK_SECRET=<random-secret>
+```
+
+#### 5. Webhook Configuration
+
+In LS Settings > Webhooks:
+
+- **URL**: `https://<backend-url>/webhooks/lemon-squeezy`
+- **Signing secret**: Use the same value as `LEMON_SQUEEZY_WEBHOOK_SECRET`
+- **Events**: `order_created`, `order_refunded`, `subscription_created`, `subscription_updated`, `subscription_cancelled`, `subscription_expired`, `subscription_payment_success`, `subscription_payment_failed`
+
+For local testing, use ngrok:
+
+```bash
+ngrok http 8000
+# Then set the ngrok URL as webhook URL in LS dashboard
+```
+
+---
+
+---
+
+### Phase 5: Webhook Reliability & Payment Safety
+
+Goal: Ensure no money is lost — every successful payment results in credited sparks, every failure is detected and recoverable.
+
+| Task | Priority | Details |
+|------|----------|---------|
+| **Webhook payload hardening** | Critical | Store `payload_raw` (TEXT, the raw bytes before JSON parse) alongside `payload` (JSON). If payload is not valid JSON or exceeds 1MB, store raw only and set `processing_error`. Prevents DB bloat and parse crashes from malformed webhooks. |
+| **Webhook retry/replay** | Critical | Add `retry_count`, `next_retry_at`, `processing_started_at`, `last_error_at` columns to `payment_webhook_events`. New Celery task (every 5min): re-process unprocessed webhooks where `processed=false` AND `retry_count < 5` AND `next_retry_at <= now`. Exponential backoff (5m, 15m, 1h, 4h, 24h). `processing_started_at` makes stuck webhooks obvious. Admin endpoint to manually replay a webhook by ID. |
+| **Admin webhook replay UI** | Critical | Admin panel section showing failed webhooks with "Retry" button. Filter by processed/unprocessed, date range. |
+| **Payment amount verification** | Critical | After `order_created` webhook: verify the payment amount in the webhook matches the pack's `price_cents`. Reject mismatches with Sentry alert. Prevents tampered webhook payloads. |
+| **Idempotency hardening** | High | Add database-level unique constraint test: verify that replaying the same `provider_event_id` returns `already_processed` without side effects. Add integration test for double-delivery under concurrency. |
+| **SKU type on PaymentTransaction** | High | Add `sku_type` (enum: `pack`, `subscription`, `promo`, `invoice`) and `sku_id` columns to `PaymentTransaction`. Currently `pack_id` is nullable which works for packs, but as more purchasable SKU types are added (subscriptions, enterprise invoices), a generic `sku_type + sku_id` is cleaner than adding more nullable FK columns. Backward-compatible: populate `sku_type='pack'` and `sku_id=pack_id` for existing rows. |
+| **Subscription period accuracy** | Medium | Replace `timedelta(days=30)` with proper calendar month calculation (`dateutil.relativedelta(months=1)`). Prevents drift over time. |
+| **Dispute/chargeback handler** | Medium | Implement `order_disputed` webhook handler per the Refund Policy (Section 8): freeze balance, create `DISPUTED` transaction, Sentry alert. Handle dispute won/lost outcomes. |
+| **Refund policy enforcement** | Medium | Implement the deterministic refund rules from Section 8: full refund only if balance covers all sparks, partial refund for partial balance, denial if fully spent (admin override available). |
+
+**Files to modify:**
+- `backend/app/models/payment.py` — Add `payload_raw`, retry columns, `processing_started_at`, `last_error_at` to `PaymentWebhookEvent`. Add `sku_type`, `sku_id` to `PaymentTransaction`.
+- `backend/app/workers/tasks.py` — New `retry_failed_webhooks` Celery task
+- `backend/app/workers/celery_app.py` — Register in beat schedule (every 5min)
+- `backend/app/services/payment_service.py` — Amount verification, dispute handler, admin replay endpoint, refund policy enforcement
+- `backend/app/api/billing.py` — Admin webhook replay endpoint
+- `backend/app/api/webhooks.py` — Raw payload storage before JSON parse
+- New migration for all schema changes
+
+---
+
+### Phase 6: Admin Payment Dashboard
+
+Goal: Full admin visibility and control over all payment operations without raw API calls.
+
+| Task | Priority | Details |
+|------|----------|---------|
+| **Purchase management** | High | Admin table: all purchases with user email, pack, amount, status, date. Filter by status/date/user. "Refund" button per completed purchase. |
+| **Subscription management** | High | Admin table: all subscriptions with user, plan, status, period dates, cancel_at_period_end. No direct actions (subscriptions managed by LS). |
+| **Margin analytics** | High | Dashboard card: total revenue vs COGS, blended margin ratio, per-user breakdown with warning/critical thresholds. Wire up existing `get_margins()` backend method. |
+| **Abandoned checkout analytics** | Medium | Dashboard card: abandoned/expired checkouts, conversion rate, breakdown by pack. Wire up existing `get_abandoned_checkouts()` backend method. |
+| **Promo code management** | Medium | Admin section: create promo codes (code, sparks, expiry, max uses), list existing with usage stats, deactivate button. Wire up existing promo service endpoints. |
+| **Webhook event log** | Medium | Admin table: raw webhook events with provider, event type, processed status, error message. "Retry" button for failed events. |
+| **LS variant linking UI** | Low | Admin section under packs/plans: show current `provider_variant_id`, edit button. Uses the `PATCH /admin/packs/{id}` and `PATCH /admin/plans/{id}` endpoints from Phase 4. |
+
+**Files to create/modify:**
+- `frontend/src/app/admin/page.tsx` — Add payment admin tabs/sections
+- `frontend/src/lib/api.ts` — Add admin billing API functions (`adminBillingApi.getPurchases()`, `.getMargins()`, `.getAbandoned()`, `.getSubscriptions()`, `.refund()`, `.getWebhookEvents()`, `.replayWebhook()`, `.createPromo()`, `.listPromos()`, `.deactivatePromo()`)
+- `frontend/src/types/index.ts` — Add admin billing types
+
+---
+
+### Phase 7: Testing & Hardening
+
+Goal: Comprehensive test coverage ensuring payment reliability before production launch.
+
+| Task | Priority | Details |
+|------|----------|---------|
+| **Payment service unit tests** | Critical | Test `create_checkout()`, `handle_webhook()`, `_handle_order_created()`, `_handle_order_refunded()`, fraud guardrails (new-account cooldown, velocity limit), mock auto-complete, idempotent webhook replay, stale transaction reconciliation. |
+| **Subscription service unit tests** | Critical | Test `create_subscription_checkout()`, all webhook handlers (created, renewed, cancelled, expired, payment_failed, updated), mock auto-complete, cancel flow, period calculations. |
+| **Payment gateway unit tests** | High | Test `MockPaymentGateway` (all methods), `LemonSqueezyGateway.verify_webhook()` with valid/invalid signatures, checkout payload structure. Mock httpx for LS API calls. |
+| **Promo service unit tests** | High | Test redemption (valid code, expired, maxed uses, already redeemed, inactive), admin create/list/deactivate. |
+| **Webhook endpoint integration tests** | High | Test `POST /webhooks/lemon-squeezy` with valid signature, invalid signature, missing signature, duplicate event, malformed payload. Test `POST /webhooks/test` with mock gateway active/inactive. |
+| **Billing API integration tests** | High | Test all billing endpoints with auth, admin-only enforcement, pack listing, checkout flow, purchase history, balance after purchase. |
+| **End-to-end payment flow test** | Medium | Full flow: login → list packs → checkout → mock webhook → verify balance increased → verify transaction in history → verify webhook event recorded. |
+| **Fraud guardrail tests** | Medium | Test new-account cooldown bypass (admin exempt), velocity limit (3rd purchase passes, 4th fails), edge cases (exactly 24h old account, exactly $20 pack). |
+| **Concurrency tests** | Low | Simulate concurrent webhooks for same `purchase_id` — verify only one credits sparks (idempotency under race conditions). |
+
+**Files to create:**
+- `backend/tests/test_payment_service.py`
+- `backend/tests/test_subscription_service.py`
+- `backend/tests/test_payment_gateway.py`
+- `backend/tests/test_promo_service.py`
+- `backend/tests/test_webhook_endpoints.py`
+- `backend/tests/test_billing_endpoints.py`
+
+---
+
+### Phase 8: Real Lemon Squeezy Validation
+
+Goal: Verify the real LS integration works end-to-end with test mode before going to production.
+
+| Task | Priority | Details |
+|------|----------|---------|
+| **Create LS account + store** | Critical | Follow the LS Setup Guide (Phase 4 docs). Create store, products, variants, get API key. |
+| **Set LS env vars locally** | Critical | Set `LEMON_SQUEEZY_API_KEY`, `LEMON_SQUEEZY_WEBHOOK_SECRET`, `LEMON_SQUEEZY_STORE_ID` in `.env`. Verify `get_payment_gateway()` returns `LemonSqueezyGateway` (check backend logs). |
+| **Link variant IDs** | Critical | Use admin endpoints to set `provider_variant_id` on all packs and plans. |
+| **Test pack checkout (LS test mode)** | Critical | Create checkout → verify redirect to LS checkout page → complete with test card → verify webhook received → verify sparks credited. |
+| **Test subscription checkout** | Critical | Same flow for subscription plans. Verify recurring billing setup in LS dashboard. |
+| **Test webhook via ngrok** | Critical | `ngrok http 8000` → set ngrok URL in LS webhook settings → make test purchase → verify full flow. |
+| **Test refund flow** | High | Complete a purchase → admin refund via API → verify LS refund processed → verify sparks reversed. |
+| **Test subscription cancellation** | High | Subscribe → cancel → verify LS subscription cancelled → verify `cancel_at_period_end` set. |
+| **Webhook signature verification** | High | Verify `LemonSqueezyGateway.verify_webhook()` works with real LS signatures. Test with tampered payload (should reject). |
+| **Error scenarios** | Medium | Test: expired checkout, declined card, network timeout during checkout creation. Verify graceful handling. |
+
+**No code changes** — this is manual validation work. Document results in a test report.
+
+---
+
+### Phase 9: Infrastructure & Production Deployment
+
+Goal: Deploy the payment system to production with proper infrastructure configuration.
+
+| Task | Priority | Details |
+|------|----------|---------|
+| **Terraform: Add LS vars to DEV** | Critical | Add `LEMON_SQUEEZY_API_KEY`, `LEMON_SQUEEZY_WEBHOOK_SECRET`, `LEMON_SQUEEZY_STORE_ID` to `infra/environments/dev/` Container App secrets. |
+| **Terraform: Add LS vars to PROD** | Critical | Same for `infra/environments/prod/`. |
+| **GitHub Secrets** | Critical | Add `LEMON_SQUEEZY_API_KEY`, `LEMON_SQUEEZY_WEBHOOK_SECRET`, `LEMON_SQUEEZY_STORE_ID` to GitHub repo secrets. |
+| **LS webhook URL (production)** | Critical | Configure LS webhook to point to production backend URL. Separate webhook endpoint per environment (DEV vs PROD) or use the same LS store with environment-specific webhook URLs. |
+| **LS store for PROD** | Critical | Decide: same LS store (test mode for DEV, live mode for PROD) or separate stores. Recommendation: same store, toggle test/live mode. |
+| **Run migrations on DEV** | Critical | Deploy → `az containerapp exec` → `alembic upgrade head` for payment tables (052, 053, plus any new migrations from Phase 5). |
+| **Run migrations on PROD** | Critical | Same for production database. |
+| **Seed packs + plans in PROD** | Critical | Verify migration seeds correct pack/plan data. Link LS variant IDs to PROD packs/plans. |
+| **deploy-prod.yml: Add LS env vars** | High | Mirror the `deploy-dev.yml` changes — add `--set-env-vars` for LS secrets to all Container App update steps. |
+| **SSL/domain verification** | High | Ensure webhook endpoint is HTTPS with valid cert. LS requires HTTPS for production webhooks. |
+| **Key Vault integration** | Medium | Store LS API key in Azure Key Vault instead of plain env vars. Reference via Container App secret refs. |
+
+**Files to modify:**
+- `infra/environments/dev/main.tf` — Add LS secrets to container app config
+- `infra/environments/prod/main.tf` — Same
+- `.github/workflows/deploy-prod.yml` — Add LS env vars (mirror deploy-dev.yml)
+
+---
+
+### Phase 10: Production Monitoring & Alerting
+
+Goal: Real-time visibility into payment health. Catch issues before users notice.
+
+| Task | Priority | Details |
+|------|----------|---------|
+| **Sentry payment alert rules** | Critical | Configure Sentry alert rules: (1) Any payment webhook failure → immediate notification. (2) Subscription payment failed → immediate notification. (3) Fraud guardrail triggered → immediate notification. (4) >3 failed webhooks in 1h → P1 alert. |
+| **Payment health dashboard** | High | Sentry or custom dashboard: daily revenue, successful vs failed transactions, webhook success rate, average checkout-to-completion time, active subscriptions count. |
+| **Uptime monitoring for webhook endpoint** | High | External uptime monitor (e.g., BetterUptime, UptimeRobot) pinging `/health` and verifying webhook endpoint is reachable. If webhook endpoint goes down, LS queues webhooks (up to 48h) but we need to know. |
+| **Balance anomaly detection** | Medium | Celery task (hourly): flag users whose balance increased without a corresponding `COMPLETED` payment transaction or admin credit. Could indicate a bug crediting free sparks. |
+| **Revenue reconciliation** | Medium | Weekly Celery task: sum all `COMPLETED` transaction amounts, compare against LS dashboard revenue. Flag discrepancies > 1%. |
+| **Subscription churn tracking** | Low | Track monthly churn rate (cancelled/expired subscriptions vs active). Surface in admin dashboard. |
+
+**Files to create/modify:**
+- `backend/app/workers/tasks.py` — Balance anomaly detection task, revenue reconciliation task
+- `backend/app/workers/celery_app.py` — Register new beat tasks
+- Sentry dashboard configuration (manual, in Sentry UI)
+
+---
+
+### Phase 11: Polish & Growth Features
+
+Goal: Quality-of-life improvements and growth tools. Only after production is stable.
+
+| Task | Priority | Details |
+|------|----------|---------|
+| **Dunning for failed payments** | Medium | When subscription payment fails: (1) Set PAST_DUE. (2) After 3 days: send reminder (LS handles this if configured). (3) After 7 days: suspend subscription (stop granting sparks). (4) After 14 days: cancel subscription. Celery task checks daily. |
+| **Subscription pause/resume** | Low | API endpoints to pause and resume subscriptions. Pausing stops spark grants but doesn't cancel. Resume picks up where it left off. |
+| **Partial refunds** | Low | Allow admin to refund a portion of a pack purchase. Calculate prorated sparks to reverse. |
+| **Email receipts** | Low | Use LS built-in receipt emails (configure in LS dashboard). Or custom email via SendGrid/SES for branded receipts. |
+| **Tax/VAT display** | Low | LS handles EU VAT collection automatically. Surface tax info on billing page for affected users. |
+| **Subscription plan upgrades/downgrades** | Low | Allow users to switch plans mid-period. Prorate remaining days. LS supports this via subscription update API. |
+| **Usage-based billing alerts** | Low | Notify users when they've used 50%, 75%, 90% of their subscription sparks for the period. |
+
+---
+
+### End State: "Exceptionally Perfect on PROD"
+
+When all phases are complete, the payment system will have:
+
+| Area | State |
+|------|-------|
+| **Pack purchases** | Users buy sparks via LS checkout, sparks credited instantly via webhook, purchase history visible, admin can refund |
+| **Subscriptions** | 3 tiers, monthly auto-renewal via LS, sparks credited on each period, cancel/pause supported, dunning for failed payments |
+| **Promo codes** | Admin creates codes, users redeem for bonus sparks, usage tracking, expiry support |
+| **Fraud prevention** | New-account cooldown, purchase velocity limits, amount verification, dispute handling, Sentry alerts on all triggers |
+| **Webhook reliability** | HMAC signature verification, idempotent processing, automatic retry with exponential backoff, admin replay UI, zero lost payments |
+| **Admin visibility** | Full dashboard: purchases, subscriptions, margins, abandoned checkouts, webhook events, promo management, refund controls |
+| **Testing** | Unit tests for all services, integration tests for all endpoints, E2E payment flow tests, concurrency tests |
+| **Infrastructure** | LS vars in Terraform (DEV + PROD), GitHub Secrets, Key Vault for sensitive keys, HTTPS webhook endpoints |
+| **Monitoring** | Sentry alerts on failures, payment health dashboard, uptime monitoring, balance anomaly detection, revenue reconciliation |
+| **Reliability** | Mock gateway for local dev, real LS for DEV/PROD, stale transaction expiry, subscription renewal safeguards, graceful error handling |
+
+### Environment Variables
+
+```bash
+# Payments (Lemon Squeezy)
+# Leave blank for mock gateway (local dev without LS account)
+LEMON_SQUEEZY_API_KEY=
+LEMON_SQUEEZY_WEBHOOK_SECRET=
+LEMON_SQUEEZY_STORE_ID=
 ```

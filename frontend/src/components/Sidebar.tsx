@@ -17,6 +17,7 @@ import {
   CreditCard,
   ShieldCheck,
   Zap,
+  AlertTriangle,
 } from 'lucide-react';
 import SightLabLogo from '@/components/SightLabLogo';
 import { useQuery } from '@tanstack/react-query';
@@ -151,9 +152,25 @@ export default function Sidebar() {
       </div>
 
       {balanceData && (
-        <Link href="/billing" className="block mx-4 mt-4 group">
-          <SparkBalance balance={balanceData.balance} reserved={balanceData.reserved ?? 0} />
-        </Link>
+        <div className="mx-4 mt-4 space-y-2">
+          <Link href="/billing" className="block group">
+            <SparkBalance balance={balanceData.balance} reserved={balanceData.reserved ?? 0} />
+          </Link>
+          {(balanceData.available ?? balanceData.balance) < 100 && (
+            <Link
+              href="/billing"
+              className={cn(
+                'flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors',
+                (balanceData.available ?? balanceData.balance) <= 0
+                  ? 'bg-red-500/15 text-red-500 border border-red-500/25 hover:bg-red-500/25'
+                  : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/25 hover:bg-amber-500/25',
+              )}
+            >
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              <span>Low balance — <span className="underline">buy more</span></span>
+            </Link>
+          )}
+        </div>
       )}
 
       <nav className="flex-1 p-4 space-y-1">

@@ -109,28 +109,44 @@ jobs:
           az containerapp update \
             --name cae-imggen-dev-backend \
             --resource-group ${{ secrets.DEV_RESOURCE_GROUP }} \
-            --image "$IMAGE"
+            --image "$IMAGE" \
+            --set-env-vars \
+              "LEMON_SQUEEZY_API_KEY=${{ secrets.LEMON_SQUEEZY_API_KEY }}" \
+              "LEMON_SQUEEZY_WEBHOOK_SECRET=${{ secrets.LEMON_SQUEEZY_WEBHOOK_SECRET }}" \
+              "LEMON_SQUEEZY_STORE_ID=${{ secrets.LEMON_SQUEEZY_STORE_ID }}"
 
       - name: Update celery-worker Container App
         run: |
           az containerapp update \
             --name cae-imggen-dev-celery-worker \
             --resource-group ${{ secrets.DEV_RESOURCE_GROUP }} \
-            --image "$IMAGE"
+            --image "$IMAGE" \
+            --set-env-vars \
+              "LEMON_SQUEEZY_API_KEY=${{ secrets.LEMON_SQUEEZY_API_KEY }}" \
+              "LEMON_SQUEEZY_WEBHOOK_SECRET=${{ secrets.LEMON_SQUEEZY_WEBHOOK_SECRET }}" \
+              "LEMON_SQUEEZY_STORE_ID=${{ secrets.LEMON_SQUEEZY_STORE_ID }}"
 
       - name: Update celery-worker-clustering Container App
         run: |
           az containerapp update \
             --name cae-imggen-dev-celery-clustering \
             --resource-group ${{ secrets.DEV_RESOURCE_GROUP }} \
-            --image "$IMAGE"
+            --image "$IMAGE" \
+            --set-env-vars \
+              "LEMON_SQUEEZY_API_KEY=${{ secrets.LEMON_SQUEEZY_API_KEY }}" \
+              "LEMON_SQUEEZY_WEBHOOK_SECRET=${{ secrets.LEMON_SQUEEZY_WEBHOOK_SECRET }}" \
+              "LEMON_SQUEEZY_STORE_ID=${{ secrets.LEMON_SQUEEZY_STORE_ID }}"
 
       - name: Update celery-worker-generation Container App
         run: |
           az containerapp update \
             --name cae-imggen-dev-celery-generation \
             --resource-group ${{ secrets.DEV_RESOURCE_GROUP }} \
-            --image "$IMAGE"
+            --image "$IMAGE" \
+            --set-env-vars \
+              "LEMON_SQUEEZY_API_KEY=${{ secrets.LEMON_SQUEEZY_API_KEY }}" \
+              "LEMON_SQUEEZY_WEBHOOK_SECRET=${{ secrets.LEMON_SQUEEZY_WEBHOOK_SECRET }}" \
+              "LEMON_SQUEEZY_STORE_ID=${{ secrets.LEMON_SQUEEZY_STORE_ID }}"
 
       - name: Verify deployment
         run: |

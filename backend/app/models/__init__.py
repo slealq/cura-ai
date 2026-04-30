@@ -15,6 +15,17 @@ from app.models.image import Image, ImageMetadata, ImageSource, ImageStatus
 from app.models.job import Job, JobStatus, JobType
 from app.models.lora_evaluation import EvaluationPair, EvaluationStatus, LoraEvaluation
 from app.models.lora_model import LoraModel, LoraModelStatus
+from app.models.payment import (
+    PaymentStatus,
+    PaymentTransaction,
+    PaymentWebhookEvent,
+    PromoCode,
+    PromoRedemption,
+    SparkPack,
+    SubscriptionPlan,
+    SubscriptionStatus,
+    UserSubscription,
+)
 from app.models.pipeline_log import LogCategory, LogLevel, PipelineLog
 from app.models.prompt_preset import PromptPreset
 from app.models.settings import AppSettings
@@ -51,6 +62,15 @@ __all__ = [
     "LoraEvaluation",
     "LoraModel",
     "LoraModelStatus",
+    "PaymentStatus",
+    "PaymentTransaction",
+    "PaymentWebhookEvent",
+    "PromoCode",
+    "PromoRedemption",
+    "SparkPack",
+    "SubscriptionPlan",
+    "SubscriptionStatus",
+    "UserSubscription",
     "LogCategory",
     "LogLevel",
     "PipelineLog",

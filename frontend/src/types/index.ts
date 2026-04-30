@@ -523,6 +523,56 @@ export interface UsageSummary {
   by_operation_detail: OperationUsageDetail[];
 }
 
+export interface SparkPack {
+  id: number;
+  name: string;
+  sparks_amount: number;
+  bonus_sparks: number;
+  price_cents: number;
+  currency: string;
+  is_featured: boolean;
+}
+
+export interface Purchase {
+  id: number;
+  purchase_id: string;
+  pack_name: string;
+  sparks_amount: number;
+  amount_cents: number;
+  currency: string;
+  status: string;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface PurchaseListResponse {
+  items: Purchase[];
+  total: number;
+}
+
+export interface SubscriptionPlan {
+  id: number;
+  name: string;
+  sparks_per_month: number;
+  price_cents: number;
+  currency: string;
+}
+
+export interface UserSubscription {
+  id: number;
+  plan_name: string;
+  sparks_per_month: number;
+  status: string;
+  current_period_start: string | null;
+  current_period_end: string | null;
+  cancel_at_period_end: boolean;
+}
+
+export interface PromoRedeemResult {
+  sparks_granted: number;
+  new_balance: number;
+}
+
 export interface AdminUserBalance {
   user_id: number;
   email: string;

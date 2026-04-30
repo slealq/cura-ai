@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     # Billing
     billing_strict_mode: bool = False
 
+    # Payments (Lemon Squeezy)
+    payment_provider: str = "lemon_squeezy"
+    lemon_squeezy_api_key: str = ""
+    lemon_squeezy_webhook_secret: str = ""
+    lemon_squeezy_store_id: str = ""
+
     # Auth / JWT
     jwt_secret_key: str = "change-me-in-production-jwt-secret"
     jwt_algorithm: str = "HS256"

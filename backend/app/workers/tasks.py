@@ -2138,3 +2138,21 @@ def _create_reconciliation_anomaly(
         anomaly_type, decision.id, decision.operation,
         decision.provider, decision.model,
     )
+
+
+@celery_app.task
+def reconcile_payments():
+    """Daily task: expire stale PENDING payment transactions older than 24h."""
+    db = SessionLocal()
+    try:
+        from app.services.payment_service import PaymentService
+
+        service = PaymentService(db)
+        result = service.reconcile_stale_transactions()
+        logger.info("Payment reconciliation complete: %s", result)
+        return result
+    except Exception:
+        logger.warning("reconcile_payments failed", exc_info=True)
+        db.rollback()
+    finally:
+        db.close()
