@@ -151,6 +151,18 @@ class ImageMetadata(Base):
     embedding_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     tagging_prompt_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    # Prompt text and timing metadata
+    tag_prompt_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    description_prompt_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tagged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    described_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    tagging_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    caption_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Embed timing metadata
+    embedded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    embedding_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # Full-text search vector (managed by DB trigger)
     search_vector = mapped_column(TSVECTOR, nullable=True)
 

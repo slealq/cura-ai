@@ -114,7 +114,7 @@ export default function FolderDetailPage() {
       {/* Breadcrumb + folder info */}
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <Link href="/images" className="hover:text-foreground transition-colors">
-          Folders
+          Images
         </Link>
         <span>/</span>
         <span className="text-foreground">{folder.name}</span>

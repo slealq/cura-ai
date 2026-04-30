@@ -27,21 +27,62 @@ DEFAULT_TRAINING_CONFIGS = {
 }
 
 DEFAULT_GENERATION_CONFIGS = {
+    "nano-banana-pro": {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 3.5, "default_lora_scale": 1.0},
     "flux-dev": {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 3.5, "default_lora_scale": 1.0},
     "qwen-2.5": {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 4.0, "default_lora_scale": 1.0},
 }
 
-DEFAULT_BASE_MODEL = "flux-dev"
+DEFAULT_EDIT_CONFIGS = {
+    "qwen-image-max-edit": {
+        "image_size": "square_hd",
+        "num_images": 1,
+        "output_format": "png",
+        "enable_prompt_expansion": True,
+        "enable_safety_checker": True,
+    },
+    "kling-image": {
+        "resolution": "1K",
+        "aspect_ratio": "auto",
+        "num_images": 1,
+        "output_format": "png",
+    },
+    "wan-25": {
+        "image_size": "square",
+        "num_images": 1,
+        "output_format": "png",
+        "enable_safety_checker": True,
+    },
+    "grok-imagine": {
+        "num_images": 1,
+        "output_format": "jpeg",
+    },
+    "face-swap": {
+        "num_images": 1,
+        "enable_occlusion_prevention": False,
+    },
+}
+
+DEFAULT_BASE_MODEL = "nano-banana-pro"
+DEFAULT_EDIT_MODEL = "qwen-image-max-edit"
 
 DEFAULT_PROVIDER_CONFIG = {
     "vision_provider": "openai",
     "embedding_provider": "openai",
-    "openai_vision_model": "gpt-4o",
+    "openai_vision_model": "gpt-4o-mini",
     "openai_embedding_model": "text-embedding-3-small",
-    "anthropic_vision_model": "claude-sonnet-4-20250514",
+    "anthropic_vision_model": "claude-3-haiku-20240307",
+    "fal_vision_model": "x-ai/grok-4-fast",
     "max_tokens_tagging": 1000,
     "max_tokens_description": 3000,
     "max_tokens_summarization": 500,
+    # Language model settings (text-only tasks: summarization, expansion, suggestions)
+    "language_provider": "openai",
+    "openai_language_model": "gpt-4o-mini",
+    "anthropic_language_model": "claude-3-haiku-20240307",
+    "fal_language_model": "x-ai/grok-4-fast",
+    "max_tokens_expansion": 500,
+    "max_tokens_suggestion": 2000,
+    "vision_temperature": 1.0,
 }
 
 DEFAULT_CLUSTERING_CONFIG = {
@@ -61,35 +102,23 @@ DEFAULT_CLUSTERING_CONFIG = {
 # Factory-default GUIDANCE (user-controlled portion only).
 # The system wraps these with JSON format + error handling instructions.
 DEFAULT_TAG_GUIDANCE = """Tags should categorize the image across these dimensions:
-- Framing: full-body, upper-body, lower-body, feet-close-up, face-close-up, hands-close-up, medium-shot, wide-shot
-- People: single-woman, single-man, multiple-people, couple, group
-- Clothing: nude, semi-nude, clothed, lingerie, swimwear, dress, casual, formal, heels, barefoot
-- Body features: soles-visible, toenails-visible, fingernails-visible, tattoos, piercings
-- Activity: standing, sitting, lying-down, walking, posing, kneeling, bending-over
-- Setting: indoor, outdoor, studio, bedroom, bathroom, beach, nature, urban
-- Content: portrait, candid, artistic, professional, selfie, mirror
+- Subject type: person, animal, object, food, landscape, architecture, vehicle, artwork, text, abstract
+- Framing: close-up, medium-shot, wide-shot, aerial, macro, panoramic
+- People (if present): single-person, couple, group, child, adult
+- Appearance: clothing style, colors, accessories, notable features
+- Activity: standing, sitting, walking, running, eating, working, playing, posing, resting
+- Setting: indoor, outdoor, studio, nature, urban, rural, underwater
+- Scene: portrait, candid, street, product, food, wildlife, sports, event, still-life
+- Mood: bright, dark, warm, cool, dramatic, calm, energetic, moody
+- Style: photography, illustration, painting, digital-art, sketch, 3d-render
 
 Only include tags that are clearly present or relevant."""
 
-DEFAULT_DESCRIPTION_GUIDANCE = """Analyze this image and provide a detailed description organized by sections. The goal is that if someone uses this description to generate an image via AI, the result should match the original image as closely as possible.
+DEFAULT_DESCRIPTION_GUIDANCE = """Analyze this image and write a single flowing description as one continuous block of text. The image could be anything — a photograph, illustration, painting, screenshot, diagram, or any other visual. The goal is that if someone uses this description to generate an image via AI, the result should match the original as closely as possible.
 
-Sections to cover (include all that are relevant):
+Start by identifying what the image depicts, then describe it in detail — what is shown, how it is arranged, the composition and framing, the colors, lighting, textures, and any notable details. Work from the most prominent elements to the finer ones.
 
-**Subject**: Person(s) - clothing, pose, position of hands and legs, action, body position and orientation.
-
-**Face & Hair**: Hair style, color, length. Facial expression, makeup, notable features.
-
-**Body Details**: Nails (fingers/toes) - colors, shape, length. Accessories, jewelry, tattoos.
-
-**Camera**: Camera angle, distance, perspective relative to subject. Framing (close-up, medium shot, full body).
-
-**Background**: Setting description, colors, objects, depth of field.
-
-**Lighting**: Quality, direction, color temperature, shadows.
-
-**Special Focus**: If the image emphasizes feet, describe feet in detail - toenails, nail colors, nail shapes, sole visibility, toe positioning. If adult content, describe what is visible, body positioning, and physical details explicitly.
-
-Be specific, observational, and thorough. Write in plain descriptive language. The description should be long and detailed enough to reproduce the image."""
+Do not use headings, bullet points, or labeled sections. Write in plain, specific, observational language as a single cohesive paragraph. Be thorough enough to reproduce the image."""
 
 # Keep old names as aliases for backward compatibility with imports
 DEFAULT_TAG_PROMPT = DEFAULT_TAG_GUIDANCE
@@ -296,6 +325,17 @@ class SettingsService:
         self.set_setting("base_model", base_model, description="Active base model for generation/training")
         return base_model
 
+    # --- Edit model ---
+
+    def get_edit_model(self) -> str:
+        """Get the default edit model."""
+        return self.get_setting("edit_model", DEFAULT_EDIT_MODEL) or DEFAULT_EDIT_MODEL
+
+    def set_edit_model(self, edit_model: str) -> str:
+        """Set the default edit model."""
+        self.set_setting("edit_model", edit_model, description="Default edit model")
+        return edit_model
+
     # --- Generation / Training config ---
 
     def get_generation_config(self, base_model: str | None = None) -> dict:
@@ -404,6 +444,30 @@ class SettingsService:
             if key in DEFAULT_PROVIDER_CONFIG:
                 current[key] = config[key]
         self.set_setting("provider_config", json.dumps(current), description="Provider configuration")
+        return current
+
+    # --- Edit config ---
+
+    def get_edit_config(self, edit_model: str = "qwen-image-max-edit") -> dict:
+        """Get edit configuration scoped to an edit model."""
+        raw = self.get_setting(f"edit_config:{edit_model}")
+        defaults = DEFAULT_EDIT_CONFIGS.get(edit_model, {})
+        if raw:
+            try:
+                config = json.loads(raw)
+                return {**defaults, **config}
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return dict(defaults)
+
+    def set_edit_config(self, config: dict, edit_model: str = "qwen-image-max-edit") -> dict:
+        """Validate and store edit config scoped to an edit model."""
+        current = self.get_edit_config(edit_model)
+        defaults = DEFAULT_EDIT_CONFIGS.get(edit_model, {})
+        for key in config:
+            if key in defaults:
+                current[key] = config[key]
+        self.set_setting(f"edit_config:{edit_model}", json.dumps(current), description=f"Edit parameters ({edit_model})")
         return current
 
     # --- Prompt getters (compose system format + guidance from active preset) ---

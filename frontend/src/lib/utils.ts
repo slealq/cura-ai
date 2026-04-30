@@ -14,9 +14,18 @@ export function getStoredTimezone(): string {
   }
 }
 
+/** Parse an API date string as UTC. The backend stores UTC but returns naive
+ *  ISO strings (no Z suffix), so JS would otherwise treat them as local time. */
+function parseUTC(date: string): Date {
+  if (date.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(date)) {
+    return new Date(date);
+  }
+  return new Date(date + 'Z');
+}
+
 export function formatDate(date: string | null): string {
   if (!date) return 'N/A';
-  return new Date(date).toLocaleDateString('en-US', {
+  return parseUTC(date).toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
@@ -28,7 +37,7 @@ export function formatDate(date: string | null): string {
 
 export function formatTimestamp(date: string | null): string {
   if (!date) return 'N/A';
-  const d = new Date(date);
+  const d = parseUTC(date);
   const tz = getStoredTimezone();
   const parts = new Intl.DateTimeFormat('en-US', {
     hour: '2-digit',
@@ -46,7 +55,7 @@ export function formatTimestamp(date: string | null): string {
 
 export function formatDateCompact(date: string | null): string {
   if (!date) return 'N/A';
-  const d = new Date(date);
+  const d = parseUTC(date);
   const tz = getStoredTimezone();
   const now = new Date();
 
@@ -69,6 +78,16 @@ export function formatDateCompact(date: string | null): string {
   });
 }
 
+export function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  if (m < 60) return s > 0 ? `${m}m ${s}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
+}
+
 export function formatFileSize(bytes: number | null): string {
   if (!bytes) return 'N/A';
   const units = ['B', 'KB', 'MB', 'GB'];
@@ -79,6 +98,14 @@ export function formatFileSize(bytes: number | null): string {
     i++;
   }
   return `${size.toFixed(1)} ${units[i]}`;
+}
+
+/** Format a number with commas and fixed decimal places (e.g. 10000 → "10,000.00") */
+export function formatNumber(value: number, decimals = 2): string {
+  return value.toLocaleString('en-US', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
 }
 
 export function getStatusColor(status: string): string {

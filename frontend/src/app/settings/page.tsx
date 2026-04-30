@@ -1,13 +1,15 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { imagesApi, settingsApi, clustersApi } from '@/lib/api';
+import { settingsApi, clustersApi } from '@/lib/api';
 import { RotateCcw, Plus, Trash2, Check, Copy, Play, HelpCircle, Eye, EyeOff, Shield, ShieldAlert, ShieldCheck, ShieldX, Loader2, Sun, Moon, Monitor } from 'lucide-react';
 import { toast } from 'sonner';
-import { getStatusColor, cn, formatDate } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { useTheme } from '@/contexts/ThemeContext';
-import type { APIKeyInfo, ClusteringConfig, GenerationConfig, ProviderConfig, ProviderModel, TrainingConfig, PromptPreset } from '@/types';
+import ModelSelector from '@/components/ModelSelector';
+import type { ClusteringConfig, GenerationConfig, ProviderConfig, ProviderModel, TrainingConfig, PromptPreset } from '@/types';
+import { Slider } from '@/components/Slider';
 
 function PromptSuggest({
   promptType,
@@ -101,12 +103,39 @@ function PromptSuggest({
   );
 }
 
+function AutoTextarea({
+  value,
+  onChange,
+  className,
+  ...props
+}: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  const resize = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = el.scrollHeight + 'px';
+  }, []);
+
+  useEffect(() => { resize(); }, [value, resize]);
+
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      onChange={(e) => { onChange?.(e); resize(); }}
+      className={cn('w-full px-4 py-3 border border-border rounded-lg text-sm leading-relaxed overflow-hidden', className)}
+      {...props}
+    />
+  );
+}
+
+type SettingsTab = 'appearance' | 'prompts' | 'vision' | 'language' | 'generation' | 'clustering';
+
 export default function SettingsPage() {
   const queryClient = useQueryClient();
-  const { data: stats } = useQuery({
-    queryKey: ['stats'],
-    queryFn: imagesApi.getStats,
-  });
+  const [activeTab, setActiveTab] = useState<SettingsTab>('appearance');
 
   const { data: presets } = useQuery({
     queryKey: ['presets'],
@@ -221,66 +250,32 @@ export default function SettingsPage() {
     <div className="max-w-6xl mx-auto space-y-8">
       <div>
         <h1 className="text-2xl font-bold">Settings</h1>
-        <p className="text-muted-foreground mt-1">
-          Pipeline configuration and system status
-        </p>
+        <div className="flex gap-1 bg-muted rounded-lg p-1 mt-4 w-fit">
+          {([
+            { key: 'appearance', label: 'Appearance' },
+            { key: 'prompts', label: 'Prompt Library' },
+            { key: 'vision', label: 'Vision Models' },
+            { key: 'language', label: 'Language Models' },
+            { key: 'generation', label: 'Generation & Training' },
+            { key: 'clustering', label: 'Clustering' },
+          ] as const).map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => setActiveTab(key)}
+              className={cn(
+                'px-3 py-1 text-sm rounded-md transition-colors',
+                activeTab === key ? 'bg-background shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Appearance */}
-      <AppearanceSettings />
+      {activeTab === 'appearance' && <AppearanceSettings />}
 
-      {/* Pipeline Stats */}
-      <section className="bg-card rounded-xl border border-border p-6">
-        <h2 className="font-semibold mb-4">Pipeline Statistics</h2>
-        {stats ? (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="p-4 bg-muted/50 rounded-lg">
-              <p className="text-2xl font-bold">{stats.total_images}</p>
-              <p className="text-sm text-muted-foreground">Total Images</p>
-            </div>
-            <div className="p-4 bg-muted/50 rounded-lg">
-              <p className="text-2xl font-bold">{stats.total_clusters}</p>
-              <p className="text-sm text-muted-foreground">Clusters</p>
-            </div>
-            <div className="p-4 bg-muted/50 rounded-lg">
-              <p className="text-2xl font-bold">{stats.clustered}</p>
-              <p className="text-sm text-muted-foreground">Processed</p>
-            </div>
-            <div className="p-4 bg-muted/50 rounded-lg">
-              <p className="text-2xl font-bold text-red-600 dark:text-red-400">{stats.failed}</p>
-              <p className="text-sm text-muted-foreground">Failed</p>
-            </div>
-          </div>
-        ) : (
-          <p className="text-muted-foreground">Loading stats...</p>
-        )}
-
-        {/* Status breakdown */}
-        {stats && (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {[
-              { label: 'Pending', count: stats.pending, status: 'pending' },
-              { label: 'Ingested', count: stats.ingested, status: 'ingested' },
-              { label: 'Tagged', count: stats.tagged, status: 'tagged' },
-              { label: 'Described', count: stats.described, status: 'described' },
-              { label: 'Embedded', count: stats.embedded, status: 'embedded' },
-              { label: 'Clustered', count: stats.clustered, status: 'clustered' },
-            ].map((item) => (
-              <div
-                key={item.label}
-                className={cn(
-                  'px-3 py-1 rounded-full text-sm',
-                  getStatusColor(item.status)
-                )}
-              >
-                {item.label}: {item.count}
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* Prompt Presets */}
+      {activeTab === 'prompts' && (
       <section className="bg-card rounded-xl border border-border p-6">
         <div className="flex items-center justify-between mb-4">
           <div>
@@ -347,10 +342,9 @@ export default function SettingsPage() {
                 {/* Tag prompt */}
                 <div>
                   <label className="block text-sm font-medium mb-1">Tag Instructions</label>
-                  <textarea
+                  <AutoTextarea
                     value={editTagPrompt}
                     onChange={(e) => setEditTagPrompt(e.target.value)}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm font-mono resize-y min-h-[180px]"
                   />
                   <PromptSuggest
                     promptType="tag"
@@ -362,10 +356,9 @@ export default function SettingsPage() {
                 {/* Description prompt */}
                 <div>
                   <label className="block text-sm font-medium mb-1">Description Instructions</label>
-                  <textarea
+                  <AutoTextarea
                     value={editDescPrompt}
                     onChange={(e) => setEditDescPrompt(e.target.value)}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm font-mono resize-y min-h-[180px]"
                   />
                   <PromptSuggest
                     promptType="description"
@@ -435,18 +428,15 @@ export default function SettingsPage() {
           </div>
         </div>
       </section>
+      )}
 
-      {/* API Keys */}
-      <APIKeysSettings />
+      {activeTab === 'vision' && <VisionModelSettings />}
 
-      {/* Provider & Model Selection */}
-      <ProviderModelSettings />
+      {activeTab === 'language' && <LanguageModelSettings />}
 
-      {/* Generation Settings */}
-      <GenerationSettings />
+      {activeTab === 'generation' && <GenerationSettings />}
 
-      {/* Clustering Settings */}
-      <ClusteringSettings />
+      {activeTab === 'clustering' && <ClusteringSettings />}
     </div>
   );
 }
@@ -552,8 +542,18 @@ function Hint({ text }: { text: string }) {
 }
 
 const BASE_MODELS = [
-  { value: 'flux-dev', label: 'Flux' },
-  { value: 'qwen-2.5', label: 'Qwen 2.5' },
+  { value: 'nano-banana-pro', label: 'Nano Banana Pro', hasTraining: false },
+  { value: 'flux-dev', label: 'Flux', hasTraining: true },
+  { value: 'qwen-2.5', label: 'Qwen 2.5', hasTraining: true },
+];
+
+const EDIT_MODELS = [
+  { value: 'qwen-image-max-edit', label: 'Qwen Image Max Edit' },
+  { value: 'kling-image', label: 'Kling Image' },
+  { value: 'wan-25', label: 'Wan 2.5' },
+  { value: 'grok-imagine', label: 'Grok Imagine' },
+  { value: 'nano-banana-pro-edit', label: 'Nano Banana Pro Edit' },
+  { value: 'face-swap', label: 'Face Swap' },
 ];
 
 function GenerationSettings() {
@@ -568,11 +568,26 @@ function GenerationSettings() {
 
   const setBaseModelMutation = useMutation({
     mutationFn: (model: string) => settingsApi.updateBaseModel(model),
-    onSuccess: (data) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['base-model'] });
       // Reset drafts so they reload from the new model's config
       setGenDraft(null);
       setTrainDraft(null);
+    },
+  });
+
+  // Edit model state
+  const { data: editModelData } = useQuery({
+    queryKey: ['edit-model'],
+    queryFn: settingsApi.getEditModel,
+  });
+  const editModel = editModelData?.edit_model ?? 'qwen-image-max-edit';
+
+  const setEditModelMutation = useMutation({
+    mutationFn: (model: string) => settingsApi.updateEditModel(model),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['edit-model'] });
+      toast.success('Default edit model saved');
     },
   });
 
@@ -583,10 +598,12 @@ function GenerationSettings() {
     enabled: !baseModelLoading,
   });
 
+  const modelHasTraining = BASE_MODELS.find((m) => m.value === baseModel)?.hasTraining ?? false;
+
   const { data: trainConfig, isLoading: trainLoading } = useQuery({
     queryKey: ['training-config', baseModel],
     queryFn: () => settingsApi.getTrainingConfig(baseModel),
-    enabled: !baseModelLoading,
+    enabled: !baseModelLoading && modelHasTraining,
   });
 
   const [genDraft, setGenDraft] = useState<GenerationConfig | null>(null);
@@ -638,7 +655,7 @@ function GenerationSettings() {
     },
   });
 
-  if (baseModelLoading || genLoading || trainLoading || !genDraft || !trainDraft) {
+  if (baseModelLoading || genLoading || !genDraft || (modelHasTraining && (trainLoading || !trainDraft))) {
     return (
       <section className="bg-card rounded-xl border border-border p-6">
         <h2 className="font-semibold mb-4">Generation &amp; Training</h2>
@@ -656,50 +673,34 @@ function GenerationSettings() {
       <div className="mb-4">
         <h2 className="font-semibold">Generation &amp; Training</h2>
         <p className="text-sm text-muted-foreground mt-1">
-          Default parameters for image generation and LoRA training. Settings are saved per model.
+          Default parameters for image generation and LoRA training via fal.ai. Training is available for models that support LoRA fine-tuning.
         </p>
       </div>
 
       <div className="space-y-6">
-        {/* Top-level Base Model selector */}
-        <div>
-          <label className="block text-sm font-medium mb-2">Base Model</label>
-          <div className="inline-flex rounded-lg border border-border">
-            {BASE_MODELS.map((m) => (
-              <button
-                key={m.value}
-                onClick={() => {
-                  if (m.value !== baseModel) {
-                    setBaseModelMutation.mutate(m.value);
-                  }
-                }}
-                disabled={setBaseModelMutation.isPending}
-                className={cn(
-                  'px-4 py-2 text-sm font-medium transition-colors first:rounded-l-lg last:rounded-r-lg',
-                  baseModel === m.value
-                    ? 'bg-primary text-primary-foreground'
-                    : 'hover:bg-muted'
-                )}
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        {/* Model selector */}
+        <ModelSelector
+          label="Model"
+          models={BASE_MODELS}
+          value={baseModel}
+          onChange={(v) => {
+            if (v !== baseModel) setBaseModelMutation.mutate(v);
+          }}
+        />
 
-        {/* Training defaults (shown first) */}
+        {/* Training defaults (shown first, only for models that support training) */}
+        {modelHasTraining && trainDraft && (
         <div className="border border-border rounded-lg p-4">
           <h3 className="text-sm font-medium mb-3">Training Defaults</h3>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Steps: {trainDraft.steps ?? 0}</label>
-              <input
-                type="range"
+              <Slider
                 min={100}
                 max={trainStepsMax}
                 step={100}
                 value={trainDraft.steps ?? 1000}
-                onChange={(e) => setTrainDraft({ ...trainDraft, steps: parseInt(e.target.value) })}
+                onChange={(v) => setTrainDraft({ ...trainDraft, steps: v })}
                 className="w-full"
               />
               <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -712,12 +713,11 @@ function GenerationSettings() {
                 <label className="text-xs text-muted-foreground mb-1 block">
                   Learning Rate: {(trainDraft.learning_rate ?? 0.0005).toFixed(4)}
                 </label>
-                <input
-                  type="range"
+                <Slider
                   min={1}
                   max={50}
                   value={Math.round((trainDraft.learning_rate ?? 0.0005) * 10000)}
-                  onChange={(e) => setTrainDraft({ ...trainDraft, learning_rate: parseInt(e.target.value) / 10000 })}
+                  onChange={(v) => setTrainDraft({ ...trainDraft, learning_rate: v / 10000 })}
                   className="w-full"
                 />
                 <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -764,6 +764,7 @@ function GenerationSettings() {
             </button>
           </div>
         </div>
+        )}
 
         {/* Generation defaults (shown second) */}
         <div className="border border-border rounded-lg p-4">
@@ -771,58 +772,53 @@ function GenerationSettings() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Width: {genDraft.width}</label>
-              <input
-                type="range"
+              <Slider
                 min={256}
                 max={2048}
                 step={64}
                 value={genDraft.width}
-                onChange={(e) => setGenDraft({ ...genDraft, width: parseInt(e.target.value) })}
+                onChange={(v) => setGenDraft({ ...genDraft, width: v })}
                 className="w-full"
               />
             </div>
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Height: {genDraft.height}</label>
-              <input
-                type="range"
+              <Slider
                 min={256}
                 max={2048}
                 step={64}
                 value={genDraft.height}
-                onChange={(e) => setGenDraft({ ...genDraft, height: parseInt(e.target.value) })}
+                onChange={(v) => setGenDraft({ ...genDraft, height: v })}
                 className="w-full"
               />
             </div>
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Steps: {genDraft.num_inference_steps}</label>
-              <input
-                type="range"
+              <Slider
                 min={1}
                 max={50}
                 value={genDraft.num_inference_steps}
-                onChange={(e) => setGenDraft({ ...genDraft, num_inference_steps: parseInt(e.target.value) })}
+                onChange={(v) => setGenDraft({ ...genDraft, num_inference_steps: v })}
                 className="w-full"
               />
             </div>
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Guidance: {genDraft.guidance_scale.toFixed(1)}</label>
-              <input
-                type="range"
+              <Slider
                 min={0}
                 max={200}
                 value={Math.round(genDraft.guidance_scale * 10)}
-                onChange={(e) => setGenDraft({ ...genDraft, guidance_scale: parseInt(e.target.value) / 10 })}
+                onChange={(v) => setGenDraft({ ...genDraft, guidance_scale: v / 10 })}
                 className="w-full"
               />
             </div>
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Default LoRA Scale: {genDraft.default_lora_scale.toFixed(1)}</label>
-              <input
-                type="range"
+              <Slider
                 min={0}
                 max={20}
                 value={Math.round(genDraft.default_lora_scale * 10)}
-                onChange={(e) => setGenDraft({ ...genDraft, default_lora_scale: parseInt(e.target.value) / 10 })}
+                onChange={(v) => setGenDraft({ ...genDraft, default_lora_scale: v / 10 })}
                 className="w-full"
               />
             </div>
@@ -844,6 +840,22 @@ function GenerationSettings() {
               Reset
             </button>
           </div>
+        </div>
+
+        {/* Edit model selector */}
+        <div className="border border-border rounded-lg p-4 mt-6">
+          <h3 className="text-sm font-medium mb-3">Default Edit Model</h3>
+          <p className="text-xs text-muted-foreground mb-3">
+            The default model selected when you open the Edit page.
+          </p>
+          <ModelSelector
+            models={EDIT_MODELS}
+            value={editModel}
+            onChange={(v) => {
+              if (v !== editModel) setEditModelMutation.mutate(v);
+            }}
+            size="sm"
+          />
         </div>
       </div>
     </section>
@@ -981,14 +993,11 @@ function ClusteringSettings() {
                   Components (output dims): {draft.umap_n_components}
                   <Hint text="Number of dimensions after reduction. Lower values (5-10) create tighter, more distinct clusters but may lose nuance. Higher values (15-30) preserve more detail. Start with 10-15 for ~1000 images." />
                 </label>
-                <input
-                  type="range"
+                <Slider
                   min={2}
                   max={50}
                   value={draft.umap_n_components}
-                  onChange={(e) =>
-                    update({ umap_n_components: parseInt(e.target.value) })
-                  }
+                  onChange={(v) => update({ umap_n_components: v })}
                   className="w-full"
                 />
                 <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -1002,14 +1011,11 @@ function ClusteringSettings() {
                   Neighbors: {draft.umap_n_neighbors}
                   <Hint text="How many nearby points UMAP considers when building its graph. Low values (5-10) focus on very local structure, creating many small tight clusters. High values (30-50) capture broader patterns, merging similar groups. For ~900 images, 10-20 is a good range." />
                 </label>
-                <input
-                  type="range"
+                <Slider
                   min={2}
                   max={100}
                   value={draft.umap_n_neighbors}
-                  onChange={(e) =>
-                    update({ umap_n_neighbors: parseInt(e.target.value) })
-                  }
+                  onChange={(v) => update({ umap_n_neighbors: v })}
                   className="w-full"
                 />
                 <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -1023,14 +1029,11 @@ function ClusteringSettings() {
                   Min Distance: {draft.umap_min_dist.toFixed(2)}
                   <Hint text="How tightly UMAP packs points together. 0.0 allows maximum compression, producing dense clumps that are easier to cluster. Higher values (0.3-0.5) spread points out more evenly. For clustering, keep this at or near 0.0." />
                 </label>
-                <input
-                  type="range"
+                <Slider
                   min={0}
                   max={100}
                   value={Math.round(draft.umap_min_dist * 100)}
-                  onChange={(e) =>
-                    update({ umap_min_dist: parseInt(e.target.value) / 100 })
-                  }
+                  onChange={(v) => update({ umap_min_dist: v / 100 })}
                   className="w-full"
                 />
                 <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -1070,16 +1073,11 @@ function ClusteringSettings() {
                   Min Cluster Size: {draft.hdbscan_min_cluster_size}
                   <Hint text="The smallest group of images that can form a cluster. Increase this if you're getting too many tiny clusters. Decrease if meaningful small groups are being treated as noise. For ~900 images, try 10-30." />
                 </label>
-                <input
-                  type="range"
+                <Slider
                   min={2}
                   max={100}
                   value={draft.hdbscan_min_cluster_size}
-                  onChange={(e) =>
-                    update({
-                      hdbscan_min_cluster_size: parseInt(e.target.value),
-                    })
-                  }
+                  onChange={(v) => update({ hdbscan_min_cluster_size: v })}
                   className="w-full"
                 />
                 <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -1093,14 +1091,11 @@ function ClusteringSettings() {
                   Min Samples: {draft.hdbscan_min_samples}
                   <Hint text="How conservative the clustering is. Higher values require denser neighborhoods to form a cluster, pushing more borderline images into noise. Lower values are more permissive. Try keeping this at or below min_cluster_size." />
                 </label>
-                <input
-                  type="range"
+                <Slider
                   min={1}
                   max={50}
                   value={draft.hdbscan_min_samples}
-                  onChange={(e) =>
-                    update({ hdbscan_min_samples: parseInt(e.target.value) })
-                  }
+                  onChange={(v) => update({ hdbscan_min_samples: v })}
                   className="w-full"
                 />
                 <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -1151,14 +1146,11 @@ function ClusteringSettings() {
                 Max Clusters: {draft.kmeans_max_clusters}
                 <Hint text="Upper bound for automatic K selection. The algorithm tests K=2 up to this value (capped at 20 for speed) and picks the K with the best silhouette score. Set higher if you expect many distinct groups in your collection." />
               </label>
-              <input
-                type="range"
+              <Slider
                 min={2}
                 max={200}
                 value={draft.kmeans_max_clusters}
-                onChange={(e) =>
-                  update({ kmeans_max_clusters: parseInt(e.target.value) })
-                }
+                onChange={(v) => update({ kmeans_max_clusters: v })}
                 className="w-full max-w-md"
               />
               <div className="flex justify-between text-[10px] text-muted-foreground max-w-md">
@@ -1244,201 +1236,41 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function APIKeysSettings() {
-  const queryClient = useQueryClient();
+const VISION_MODELS = [
+  // OpenAI
+  { id: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'openai' as const, field: 'openai_vision_model' as const },
+  { id: 'gpt-4o', label: 'GPT-4o', provider: 'openai' as const, field: 'openai_vision_model' as const },
+  { id: 'gpt-5-mini', label: 'GPT-5 Mini', provider: 'openai' as const, field: 'openai_vision_model' as const },
+  { id: 'gpt-5.2', label: 'GPT-5.2', provider: 'openai' as const, field: 'openai_vision_model' as const },
+  // Anthropic
+  { id: 'claude-3-haiku-20240307', label: 'Claude Haiku 3', provider: 'anthropic' as const, field: 'anthropic_vision_model' as const },
+  { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', provider: 'anthropic' as const, field: 'anthropic_vision_model' as const },
+  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'anthropic' as const, field: 'anthropic_vision_model' as const },
+  { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'anthropic' as const, field: 'anthropic_vision_model' as const },
+  // fal.ai (OpenRouter)
+  { id: 'x-ai/grok-4-fast', label: 'Grok 4 Fast', provider: 'fal' as const, field: 'fal_vision_model' as const },
+  { id: 'qwen/qwen3-vl-235b-a22b-instruct', label: 'Qwen3 VL 235B', provider: 'fal' as const, field: 'fal_vision_model' as const },
+  { id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'fal' as const, field: 'fal_vision_model' as const },
+];
 
-  const { data: keys, isLoading } = useQuery({
-    queryKey: ['api-keys'],
-    queryFn: settingsApi.getApiKeys,
-  });
+const LANGUAGE_MODELS = [
+  // OpenAI
+  { id: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'openai' as const, field: 'openai_language_model' as const },
+  { id: 'gpt-4o', label: 'GPT-4o', provider: 'openai' as const, field: 'openai_language_model' as const },
+  { id: 'gpt-5-mini', label: 'GPT-5 Mini', provider: 'openai' as const, field: 'openai_language_model' as const },
+  { id: 'gpt-5.2', label: 'GPT-5.2', provider: 'openai' as const, field: 'openai_language_model' as const },
+  // Anthropic
+  { id: 'claude-3-haiku-20240307', label: 'Claude Haiku 3', provider: 'anthropic' as const, field: 'anthropic_language_model' as const },
+  { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', provider: 'anthropic' as const, field: 'anthropic_language_model' as const },
+  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'anthropic' as const, field: 'anthropic_language_model' as const },
+  { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'anthropic' as const, field: 'anthropic_language_model' as const },
+  // fal.ai (OpenRouter)
+  { id: 'x-ai/grok-4-fast', label: 'Grok 4 Fast', provider: 'fal' as const, field: 'fal_language_model' as const },
+  { id: 'qwen/qwen3-vl-235b-a22b-instruct', label: 'Qwen3 VL 235B', provider: 'fal' as const, field: 'fal_language_model' as const },
+  { id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'fal' as const, field: 'fal_language_model' as const },
+];
 
-  const [editingProvider, setEditingProvider] = useState<string | null>(null);
-  const [keyInput, setKeyInput] = useState('');
-  const [showKey, setShowKey] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
-
-  const saveMutation = useMutation({
-    mutationFn: ({ provider, key }: { provider: string; key: string }) =>
-      settingsApi.saveApiKey(provider, key),
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['api-keys'] });
-      setEditingProvider(null);
-      setKeyInput('');
-      setShowKey(false);
-      if (data.status === 'active') {
-        toast.success(`${PROVIDER_LABELS[data.provider] || data.provider} key saved and validated`);
-      } else if (data.status === 'invalid') {
-        toast.error(`Key saved but validation failed: ${data.last_error || 'Invalid key'}`);
-      } else {
-        toast.success(`${PROVIDER_LABELS[data.provider] || data.provider} key saved (status: ${data.status})`);
-      }
-    },
-    onError: () => toast.error('Failed to save API key'),
-  });
-
-  const validateMutation = useMutation({
-    mutationFn: (provider: string) => settingsApi.validateApiKey(provider),
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['api-keys'] });
-      if (data.status === 'active') {
-        toast.success(`${PROVIDER_LABELS[data.provider] || data.provider} key is valid`);
-      } else {
-        toast.error(`Validation result: ${data.status}${data.last_error ? ` - ${data.last_error}` : ''}`);
-      }
-    },
-    onError: () => toast.error('Validation failed'),
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (provider: string) => settingsApi.deleteApiKey(provider),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['api-keys'] });
-      setConfirmDelete(null);
-      toast.success('API key removed');
-    },
-    onError: () => toast.error('Failed to remove key'),
-  });
-
-  if (isLoading) {
-    return (
-      <section className="bg-card rounded-xl border border-border p-6">
-        <h2 className="font-semibold mb-4">API Keys</h2>
-        <p className="text-muted-foreground text-sm">Loading...</p>
-      </section>
-    );
-  }
-
-  return (
-    <section className="bg-card rounded-xl border border-border p-6">
-      <div className="mb-4">
-        <h2 className="font-semibold">API Keys</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          Manage API keys for AI providers. Keys are encrypted at rest and never exposed after saving.
-        </p>
-      </div>
-
-      <div className="space-y-3">
-        {(keys || []).map((key) => (
-          <div
-            key={key.provider}
-            className="border border-border rounded-lg p-4"
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <span className="font-medium text-sm">
-                  {PROVIDER_LABELS[key.provider] || key.provider}
-                </span>
-                <StatusBadge status={key.status} />
-              </div>
-              <div className="flex items-center gap-2">
-                {key.key_suffix && (
-                  <span className="text-xs text-muted-foreground font-mono">
-                    ...{key.key_suffix}
-                  </span>
-                )}
-                {key.status !== 'not_set' && (
-                  <>
-                    <button
-                      onClick={() => validateMutation.mutate(key.provider)}
-                      disabled={validateMutation.isPending}
-                      className="px-2.5 py-1 text-xs border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
-                    >
-                      {validateMutation.isPending && validateMutation.variables === key.provider ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      ) : (
-                        'Validate'
-                      )}
-                    </button>
-                    {confirmDelete === key.provider ? (
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => deleteMutation.mutate(key.provider)}
-                          className="px-2.5 py-1 text-xs bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
-                        >
-                          Confirm
-                        </button>
-                        <button
-                          onClick={() => setConfirmDelete(null)}
-                          className="px-2.5 py-1 text-xs border border-border rounded-lg hover:bg-muted transition-colors"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => setConfirmDelete(key.provider)}
-                        className="px-2.5 py-1 text-xs border border-red-200 text-red-600 dark:border-red-800 dark:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors"
-                      >
-                        Remove
-                      </button>
-                    )}
-                  </>
-                )}
-                <button
-                  onClick={() => {
-                    if (editingProvider === key.provider) {
-                      setEditingProvider(null);
-                      setKeyInput('');
-                      setShowKey(false);
-                    } else {
-                      setEditingProvider(key.provider);
-                      setKeyInput('');
-                      setShowKey(false);
-                    }
-                  }}
-                  className="px-2.5 py-1 text-xs border border-border rounded-lg hover:bg-muted transition-colors"
-                >
-                  {editingProvider === key.provider ? 'Cancel' : key.status === 'not_set' ? 'Add Key' : 'Edit Key'}
-                </button>
-              </div>
-            </div>
-
-            {key.last_validated_at && (
-              <p className="text-[10px] text-muted-foreground mt-1">
-                Last validated: {formatDate(key.last_validated_at)}
-              </p>
-            )}
-
-            {editingProvider === key.provider && (
-              <div className="mt-3 flex gap-2">
-                <div className="relative flex-1">
-                  <input
-                    type={showKey ? 'text' : 'password'}
-                    value={keyInput}
-                    onChange={(e) => setKeyInput(e.target.value)}
-                    placeholder={`Enter ${PROVIDER_LABELS[key.provider] || key.provider} API key...`}
-                    className="w-full px-3 py-1.5 pr-8 border border-border rounded-lg text-sm font-mono"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && keyInput.trim()) {
-                        saveMutation.mutate({ provider: key.provider, key: keyInput.trim() });
-                      }
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowKey(!showKey)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  >
-                    {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                  </button>
-                </div>
-                <button
-                  onClick={() => saveMutation.mutate({ provider: key.provider, key: keyInput.trim() })}
-                  disabled={saveMutation.isPending || !keyInput.trim()}
-                  className="px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
-                >
-                  {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
-                </button>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function ProviderModelSettings() {
+function VisionModelSettings() {
   const queryClient = useQueryClient();
 
   const { data: config, isLoading } = useQuery({
@@ -1452,15 +1284,8 @@ function ProviderModelSettings() {
     if (config && !draft) setDraft(config);
   }, [config, draft]);
 
-  // Fetch models for the selected vision provider
-  const visionProvider = draft?.vision_provider || 'openai';
+  // Fetch embedding models from OpenAI
   const embeddingProvider = draft?.embedding_provider || 'openai';
-
-  const { data: visionModels } = useQuery({
-    queryKey: ['provider-models', visionProvider],
-    queryFn: () => settingsApi.getProviderModels(visionProvider),
-    enabled: !!draft,
-  });
 
   const { data: embeddingModels } = useQuery({
     queryKey: ['provider-models', embeddingProvider],
@@ -1473,120 +1298,267 @@ function ProviderModelSettings() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['provider-config'] });
       setDraft(data);
-      toast.success('Provider settings saved');
+      toast.success('Vision settings saved');
     },
-    onError: () => toast.error('Failed to save provider settings'),
+    onError: () => toast.error('Failed to save vision settings'),
   });
 
   const resetMutation = useMutation({
-    mutationFn: settingsApi.resetProviderConfig,
+    mutationFn: () => settingsApi.updateProviderConfig({
+      vision_provider: 'openai',
+      openai_vision_model: 'gpt-4o-mini',
+      openai_embedding_model: 'text-embedding-3-small',
+      anthropic_vision_model: 'claude-3-haiku-20240307',
+      fal_vision_model: 'x-ai/grok-4-fast',
+      max_tokens_tagging: 1000,
+      max_tokens_description: 3000,
+      vision_temperature: 1.0,
+    }),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['provider-config'] });
       setDraft(data);
-      toast.success('Provider settings reset to defaults');
+      toast.success('Vision settings reset to defaults');
     },
   });
 
   if (isLoading || !draft) {
     return (
       <section className="bg-card rounded-xl border border-border p-6">
-        <h2 className="font-semibold mb-4">Provider &amp; Model Selection</h2>
+        <h2 className="font-semibold mb-4">Vision Models</h2>
         <p className="text-muted-foreground text-sm">Loading...</p>
       </section>
     );
   }
 
-  const visionCapableModels = (visionModels || []).filter((m) =>
-    m.capabilities.includes('vision') || m.capabilities.includes('chat')
-  );
   const embeddingCapableModels = (embeddingModels || []).filter((m) =>
     m.capabilities.includes('embedding')
   );
 
-  const currentVisionModel = visionProvider === 'openai' ? draft.openai_vision_model : draft.anthropic_vision_model;
+  // Derive current vision model from provider + per-provider field
+  const visionProvider = draft.vision_provider || 'openai';
+  const currentVisionModelId = visionProvider === 'openai'
+    ? draft.openai_vision_model
+    : visionProvider === 'fal'
+      ? draft.fal_vision_model
+      : draft.anthropic_vision_model;
+
+  const handleVisionModelChange = (modelId: string) => {
+    const model = VISION_MODELS.find((m) => m.id === modelId);
+    if (!model) return;
+    setDraft({
+      ...draft,
+      vision_provider: model.provider,
+      [model.field]: modelId,
+    });
+  };
 
   return (
     <section className="bg-card rounded-xl border border-border p-6">
       <div className="mb-4">
-        <h2 className="font-semibold">Provider &amp; Model Selection</h2>
+        <h2 className="font-semibold">Vision Models</h2>
         <p className="text-sm text-muted-foreground mt-1">
-          Choose which AI providers and models to use for vision (tagging/description) and embeddings.
+          Models used for image tagging, describing, and embedding. These tasks send images to the AI model.
         </p>
       </div>
 
       <div className="space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Vision Provider */}
-          <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Vision Provider</label>
-            <select
-              value={draft.vision_provider}
-              onChange={(e) => setDraft({ ...draft, vision_provider: e.target.value })}
-              className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
-            >
-              <option value="openai">OpenAI</option>
-              <option value="anthropic">Anthropic</option>
-            </select>
-          </div>
+        {/* Vision Model */}
+        <ModelSelector
+          label="Vision Model"
+          models={VISION_MODELS.map((m) => ({ value: m.id, label: m.label, provider: m.provider }))}
+          value={currentVisionModelId}
+          onChange={(v) => handleVisionModelChange(v)}
+        />
 
-          {/* Vision Model */}
-          <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Vision Model</label>
-            <select
-              value={currentVisionModel}
-              onChange={(e) => {
-                if (draft.vision_provider === 'openai') {
-                  setDraft({ ...draft, openai_vision_model: e.target.value });
-                } else {
-                  setDraft({ ...draft, anthropic_vision_model: e.target.value });
-                }
-              }}
-              className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
-            >
-              {visionCapableModels.length > 0 ? (
-                visionCapableModels.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))
-              ) : (
-                <option value={currentVisionModel}>{currentVisionModel}</option>
-              )}
-            </select>
-          </div>
+        {/* Embedding Model */}
+        <div>
+          <label className="text-xs text-muted-foreground mb-1 block">Embedding Model</label>
+          <select
+            value={draft.openai_embedding_model}
+            onChange={(e) => setDraft({ ...draft, openai_embedding_model: e.target.value })}
+            className="w-full px-3 py-1.5 border border-border rounded-lg text-sm max-w-xs"
+          >
+            {embeddingCapableModels.length > 0 ? (
+              embeddingCapableModels.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))
+            ) : (
+              <option value={draft.openai_embedding_model}>{draft.openai_embedding_model}</option>
+            )}
+          </select>
+        </div>
 
-          {/* Embedding Provider */}
-          <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Embedding Provider</label>
-            <select
-              value={draft.embedding_provider}
-              onChange={(e) => setDraft({ ...draft, embedding_provider: e.target.value })}
-              className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
-            >
-              <option value="openai">OpenAI</option>
-            </select>
-          </div>
-
-          {/* Embedding Model */}
-          <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Embedding Model</label>
-            <select
-              value={draft.openai_embedding_model}
-              onChange={(e) => setDraft({ ...draft, openai_embedding_model: e.target.value })}
-              className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
-            >
-              {embeddingCapableModels.length > 0 ? (
-                embeddingCapableModels.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))
-              ) : (
-                <option value={draft.openai_embedding_model}>{draft.openai_embedding_model}</option>
-              )}
-            </select>
+        {/* Model Parameters */}
+        <div className="border border-border rounded-lg p-4">
+          <h3 className="flex items-center text-sm font-medium mb-3">
+            Model Parameters
+            <Hint text="Control the behavior and output limits of vision AI models." />
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="flex items-center text-xs text-muted-foreground mb-1">
+                Temperature: {(draft.vision_temperature ?? 1.0).toFixed(1)}
+                <Hint text="Controls randomness. Lower values (0.0) produce more deterministic outputs. Higher values (1.5-2.0) increase creativity. Anthropic models are clamped to 0-1. Default: 1.0." />
+              </label>
+              <Slider
+                min={0}
+                max={20}
+                value={Math.round((draft.vision_temperature ?? 1.0) * 10)}
+                onChange={(v) => setDraft({ ...draft, vision_temperature: v / 10 })}
+                className="w-full"
+              />
+              <div className="flex justify-between text-[10px] text-muted-foreground">
+                <span>0.0</span>
+                <span>2.0</span>
+              </div>
+            </div>
+            <div>
+              <label className="flex items-center text-xs text-muted-foreground mb-1">
+                Tagging Tokens: {draft.max_tokens_tagging}
+                <Hint text="Maximum output tokens for image tagging. Default: 1000." />
+              </label>
+              <Slider
+                min={100}
+                max={4000}
+                step={100}
+                value={draft.max_tokens_tagging}
+                onChange={(v) => setDraft({ ...draft, max_tokens_tagging: v })}
+                className="w-full"
+              />
+              <div className="flex justify-between text-[10px] text-muted-foreground">
+                <span>100</span>
+                <span>4000</span>
+              </div>
+            </div>
+            <div>
+              <label className="flex items-center text-xs text-muted-foreground mb-1">
+                Description Tokens: {draft.max_tokens_description}
+                <Hint text="Maximum output tokens for image description. Default: 3000." />
+              </label>
+              <Slider
+                min={500}
+                max={8000}
+                step={100}
+                value={draft.max_tokens_description}
+                onChange={(v) => setDraft({ ...draft, max_tokens_description: v })}
+                className="w-full"
+              />
+              <div className="flex justify-between text-[10px] text-muted-foreground">
+                <span>500</span>
+                <span>8000</span>
+              </div>
+            </div>
           </div>
         </div>
+
+        <div className="flex items-center gap-2 pt-2">
+          <button
+            onClick={() => saveMutation.mutate(draft)}
+            disabled={saveMutation.isPending}
+            className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            {saveMutation.isPending ? 'Saving...' : 'Save'}
+          </button>
+          <button
+            onClick={() => resetMutation.mutate()}
+            disabled={resetMutation.isPending}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Reset to Defaults
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function LanguageModelSettings() {
+  const queryClient = useQueryClient();
+
+  const { data: config, isLoading } = useQuery({
+    queryKey: ['provider-config'],
+    queryFn: settingsApi.getProviderConfig,
+  });
+
+  const [draft, setDraft] = useState<ProviderConfig | null>(null);
+
+  useEffect(() => {
+    if (config && !draft) setDraft(config);
+  }, [config, draft]);
+
+  const saveMutation = useMutation({
+    mutationFn: (cfg: Partial<ProviderConfig>) => settingsApi.updateProviderConfig(cfg),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['provider-config'] });
+      setDraft(data);
+      toast.success('Language settings saved');
+    },
+    onError: () => toast.error('Failed to save language settings'),
+  });
+
+  const resetMutation = useMutation({
+    mutationFn: () => settingsApi.updateProviderConfig({
+      language_provider: 'openai',
+      openai_language_model: 'gpt-4o-mini',
+      anthropic_language_model: 'claude-3-haiku-20240307',
+      fal_language_model: 'x-ai/grok-4-fast',
+      max_tokens_summarization: 500,
+      max_tokens_expansion: 500,
+      max_tokens_suggestion: 2000,
+    }),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['provider-config'] });
+      setDraft(data);
+      toast.success('Language settings reset to defaults');
+    },
+  });
+
+  if (isLoading || !draft) {
+    return (
+      <section className="bg-card rounded-xl border border-border p-6">
+        <h2 className="font-semibold mb-4">Language Models</h2>
+        <p className="text-muted-foreground text-sm">Loading...</p>
+      </section>
+    );
+  }
+
+  // Derive current language model from provider + per-provider field
+  const languageProvider = draft.language_provider || 'openai';
+  const currentLanguageModelId = languageProvider === 'openai'
+    ? draft.openai_language_model
+    : languageProvider === 'fal'
+      ? draft.fal_language_model
+      : draft.anthropic_language_model;
+
+  const handleLanguageModelChange = (modelId: string) => {
+    const model = LANGUAGE_MODELS.find((m) => m.id === modelId);
+    if (!model) return;
+    setDraft({
+      ...draft,
+      language_provider: model.provider,
+      [model.field]: modelId,
+    });
+  };
+
+  return (
+    <section className="bg-card rounded-xl border border-border p-6">
+      <div className="mb-4">
+        <h2 className="font-semibold">Language Models</h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          Models used for text-only tasks: cluster summarization, prompt expansion, and prompt library suggestions.
+        </p>
+      </div>
+
+      <div className="space-y-4">
+        <ModelSelector
+          label="Language Model"
+          models={LANGUAGE_MODELS.map((m) => ({ value: m.id, label: m.label, provider: m.provider }))}
+          value={currentLanguageModelId}
+          onChange={(v) => handleLanguageModelChange(v)}
+        />
 
         {/* Token Limits */}
         <div className="border border-border rounded-lg p-4">
@@ -1597,59 +1569,56 @@ function ProviderModelSettings() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="flex items-center text-xs text-muted-foreground mb-1">
-                Tagging: {draft.max_tokens_tagging}
-                <Hint text="Token limit for image tagging responses. Default: 1000." />
-              </label>
-              <input
-                type="range"
-                min={100}
-                max={4000}
-                step={100}
-                value={draft.max_tokens_tagging}
-                onChange={(e) => setDraft({ ...draft, max_tokens_tagging: parseInt(e.target.value) })}
-                className="w-full"
-              />
-              <div className="flex justify-between text-[10px] text-muted-foreground">
-                <span>100</span>
-                <span>4000</span>
-              </div>
-            </div>
-            <div>
-              <label className="flex items-center text-xs text-muted-foreground mb-1">
-                Description: {draft.max_tokens_description}
-                <Hint text="Token limit for image description responses. Default: 3000." />
-              </label>
-              <input
-                type="range"
-                min={500}
-                max={8000}
-                step={100}
-                value={draft.max_tokens_description}
-                onChange={(e) => setDraft({ ...draft, max_tokens_description: parseInt(e.target.value) })}
-                className="w-full"
-              />
-              <div className="flex justify-between text-[10px] text-muted-foreground">
-                <span>500</span>
-                <span>8000</span>
-              </div>
-            </div>
-            <div>
-              <label className="flex items-center text-xs text-muted-foreground mb-1">
                 Summarization: {draft.max_tokens_summarization}
                 <Hint text="Token limit for cluster summarization responses. Default: 500." />
               </label>
-              <input
-                type="range"
+              <Slider
                 min={100}
                 max={2000}
                 step={50}
                 value={draft.max_tokens_summarization}
-                onChange={(e) => setDraft({ ...draft, max_tokens_summarization: parseInt(e.target.value) })}
+                onChange={(v) => setDraft({ ...draft, max_tokens_summarization: v })}
                 className="w-full"
               />
               <div className="flex justify-between text-[10px] text-muted-foreground">
                 <span>100</span>
                 <span>2000</span>
+              </div>
+            </div>
+            <div>
+              <label className="flex items-center text-xs text-muted-foreground mb-1">
+                Expansion: {draft.max_tokens_expansion}
+                <Hint text="Token limit for prompt expansion (Generate page). Default: 500." />
+              </label>
+              <Slider
+                min={100}
+                max={2000}
+                step={50}
+                value={draft.max_tokens_expansion}
+                onChange={(v) => setDraft({ ...draft, max_tokens_expansion: v })}
+                className="w-full"
+              />
+              <div className="flex justify-between text-[10px] text-muted-foreground">
+                <span>100</span>
+                <span>2000</span>
+              </div>
+            </div>
+            <div>
+              <label className="flex items-center text-xs text-muted-foreground mb-1">
+                Suggestion: {draft.max_tokens_suggestion}
+                <Hint text="Token limit for prompt library AI suggestions. Default: 2000." />
+              </label>
+              <Slider
+                min={500}
+                max={4000}
+                step={100}
+                value={draft.max_tokens_suggestion}
+                onChange={(v) => setDraft({ ...draft, max_tokens_suggestion: v })}
+                className="w-full"
+              />
+              <div className="flex justify-between text-[10px] text-muted-foreground">
+                <span>500</span>
+                <span>4000</span>
               </div>
             </div>
           </div>

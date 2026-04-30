@@ -122,6 +122,7 @@ class StorageService:
     async def _save_local(self, file_data: bytes, object_key: str, subdir: str) -> str:
         """Save file to local filesystem."""
         file_path = self.local_path / subdir / object_key
+        file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_bytes(file_data)
         return str(file_path)
 

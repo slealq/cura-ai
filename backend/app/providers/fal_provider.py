@@ -1,16 +1,22 @@
 """fal.ai provider for LoRA training and image generation."""
 import logging
 import time
+from collections.abc import Callable
 from typing import Any
 
 import fal_client
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.core.config import get_settings
 from app.models.pipeline_log import LogCategory, LogLevel
-from app.providers.base import BaseGenerator, BaseTrainer, GenerationResult, TrainingResult
+from app.providers.base import BaseEditor, BaseGenerator, BaseTrainer, EditResult, GenerationResult, TrainingResult
+from app.providers.tracing import provider_span
 from app.services.log_service import write_log
+
+
+class GenerationCancelledError(Exception):
+    """Raised when a generation task is cancelled during polling."""
+    pass
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -38,6 +44,27 @@ FAL_MODEL_CONFIG = {
         "supports_base64": False,
         "default_steps": 2000,
         "default_guidance": 4.0,
+    },
+    "nano-banana-pro": {
+        "generation_base_endpoint": "fal-ai/nano-banana-pro",
+        "uses_resolution_aspect": True,
+        "supports_lora": False,
+        "supports_steps_guidance": False,
+        "default_safety_tolerance": "4",
+    },
+    "nano-banana-2": {
+        "generation_base_endpoint": "fal-ai/nano-banana-2",
+        "uses_resolution_aspect": True,
+        "supports_lora": False,
+        "supports_steps_guidance": False,
+        "default_safety_tolerance": "4",
+    },
+    "flux-2-pro": {
+        "generation_base_endpoint": "fal-ai/flux-2-pro",
+        "supports_lora": False,
+        "supports_steps_guidance": False,
+        "uses_image_size_presets": True,
+        "default_safety_tolerance": "2",
     },
 }
 
@@ -93,6 +120,7 @@ class FalTrainer(BaseTrainer):
         arguments.update(kwargs)
 
         try:
+            logger.info("FAL REQUEST | endpoint=%s args=%s", endpoint, arguments)
             handle = fal_client.submit(
                 endpoint,
                 arguments=arguments,
@@ -155,6 +183,8 @@ class FalTrainer(BaseTrainer):
                 endpoint,
                 request_id,
             )
+            logger.info("FAL RESPONSE | endpoint=%s request_id=%s result=%s", endpoint, request_id, result)
+            fal_cost = result.get("cost")
 
             lora_url = result.get("diffusers_lora_file", {}).get("url", "")
             if not lora_url:
@@ -168,6 +198,7 @@ class FalTrainer(BaseTrainer):
                 model=endpoint,
                 operation="get_training_result",
                 duration_ms=round(elapsed, 1),
+                provider_cost=fal_cost,
                 success=True,
             )
 
@@ -204,7 +235,6 @@ class FalGenerator(BaseGenerator):
         self.config = FAL_MODEL_CONFIG.get(base_model, FAL_MODEL_CONFIG["flux-dev"])
         self.base_model = base_model
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
     async def generate(
         self,
         prompt: str,
@@ -215,14 +245,60 @@ class FalGenerator(BaseGenerator):
         guidance_scale: float = 3.5,
         seed: int | None = None,
         loras: list[dict] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
+        resolution: str | None = None,
+        aspect_ratio: str | None = None,
+        safety_tolerance: str | None = None,
+        enable_web_search: bool | None = None,
+        image_size: str | None = None,
     ) -> GenerationResult:
-        """Generate an image via fal.ai."""
-        task_start = time.monotonic()
+        """Generate an image via fal.ai.
 
-        # Choose endpoint based on LoRA
-        if loras:
-            endpoint = self.config["generation_lora_endpoint"]
+        Uses submit + manual polling instead of subscribe, so that
+        cancel_check can be evaluated between polls and the remote
+        fal.ai request cancelled promptly.
+        """
+        task_start = time.monotonic()
+        poll_interval = 2.0  # seconds between status polls
+
+        # Choose endpoint and build arguments based on model capabilities
+        if self.config.get("uses_resolution_aspect"):
+            # Resolution/aspect_ratio model (e.g. nano-banana-pro) — no LoRA, no steps/guidance
+            endpoint = self.config["generation_base_endpoint"]
             arguments: dict[str, Any] = {
+                "prompt": prompt,
+                "output_format": "png",
+            }
+            if resolution:
+                arguments["resolution"] = resolution
+            if aspect_ratio:
+                arguments["aspect_ratio"] = aspect_ratio
+            if safety_tolerance is not None:
+                arguments["safety_tolerance"] = safety_tolerance
+            if enable_web_search is not None:
+                arguments["enable_web_search"] = enable_web_search
+            if seed is not None:
+                arguments["seed"] = seed
+        elif self.config.get("uses_image_size_presets"):
+            # Image-size-preset model (e.g. flux-2-pro) — no LoRA, no steps/guidance
+            endpoint = self.config["generation_base_endpoint"]
+            arguments = {
+                "prompt": prompt,
+                "output_format": "png",
+            }
+            if image_size:
+                # Named preset (e.g. "square_hd", "landscape_4_3")
+                arguments["image_size"] = image_size
+            else:
+                # Custom size — send width/height object
+                arguments["image_size"] = {"width": width, "height": height}
+            if safety_tolerance is not None:
+                arguments["safety_tolerance"] = safety_tolerance
+            if seed is not None:
+                arguments["seed"] = seed
+        elif loras:
+            endpoint = self.config["generation_lora_endpoint"]
+            arguments = {
                 "prompt": prompt,
                 "image_size": {"width": width, "height": height},
                 "num_inference_steps": num_inference_steps,
@@ -231,26 +307,51 @@ class FalGenerator(BaseGenerator):
                 "output_format": "png",
                 "enable_safety_checker": False,
             }
+            if seed is not None:
+                arguments["seed"] = seed
         else:
             endpoint = self.config["generation_base_endpoint"]
             arguments = {
                 "prompt": prompt,
                 "image_size": {"width": width, "height": height},
-                "num_inference_steps": num_inference_steps,
-                "guidance_scale": guidance_scale,
                 "output_format": "png",
-                "enable_safety_checker": False,
             }
+            if self.config.get("supports_steps_guidance", True):
+                arguments["num_inference_steps"] = num_inference_steps
+                arguments["guidance_scale"] = guidance_scale
+                arguments["enable_safety_checker"] = False
+            if safety_tolerance is not None:
+                arguments["safety_tolerance"] = safety_tolerance
+            if seed is not None:
+                arguments["seed"] = seed
 
-        if seed is not None:
-            arguments["seed"] = seed
-
+        request_id = None
         try:
-            result = fal_client.subscribe(
-                endpoint,
-                arguments=arguments,
-                with_logs=False,
-            )
+            with provider_span("fal", "generate", endpoint) as _span:  # noqa: F841
+                # Submit (non-blocking) instead of subscribe (blocking)
+                logger.info("FAL REQUEST | endpoint=%s args=%s", endpoint, arguments)
+                handle = fal_client.submit(endpoint, arguments=arguments)
+                request_id = handle.request_id
+
+                # Poll for completion with cancellation checks
+                from fal_client.client import Completed
+                while True:
+                    if cancel_check and cancel_check():
+                        logger.info(f"Generation cancelled during polling (request_id={request_id})")
+                        try:
+                            fal_client.cancel(endpoint, request_id)
+                        except Exception:
+                            pass  # best-effort remote cancel
+                        raise GenerationCancelledError(f"Generation cancelled (request_id={request_id})")
+
+                    status = handle.status(with_logs=False)
+                    if isinstance(status, Completed):
+                        break
+                    time.sleep(poll_interval)
+
+                result = handle.get()
+            logger.info("FAL RESPONSE | endpoint=%s request_id=%s result=%s", endpoint, request_id, result)
+            fal_cost = result.get("cost")
 
             # Extract image URL and download
             images = result.get("images", [])
@@ -277,9 +378,23 @@ class FalGenerator(BaseGenerator):
                 model=endpoint,
                 operation="generate",
                 duration_ms=round(elapsed, 1),
+                provider_cost=fal_cost,
                 success=True,
-                extra={"seed": result_seed, "lora_count": len(loras) if loras else 0, "base_model": self.base_model},
+                extra={"seed": result_seed, "lora_count": len(loras) if loras else 0, "base_model": self.base_model, "request_id": request_id},
             )
+
+            # Build response snapshot (exclude binary image data)
+            fal_response = {k: v for k, v in result.items() if k != "images"}
+            fal_response["image_count"] = len(images)
+            fal_response["image_dimensions"] = [
+                {"width": img.get("width"), "height": img.get("height")}
+                for img in images
+            ]
+
+            # Build request snapshot (redact prompt to first 200 chars for size)
+            request_args = {**arguments}
+            if "prompt" in request_args and len(request_args["prompt"]) > 200:
+                request_args["prompt"] = request_args["prompt"][:200] + "..."
 
             return GenerationResult(
                 image_data=image_data,
@@ -289,10 +404,15 @@ class FalGenerator(BaseGenerator):
                 provider="fal",
                 metadata={
                     "endpoint": endpoint,
+                    "request_id": request_id,
                     "has_nsfw_concepts": result.get("has_nsfw_concepts", []),
+                    "request_arguments": request_args,
+                    "fal_response": fal_response,
                 },
             )
 
+        except GenerationCancelledError:
+            raise
         except Exception as e:
             elapsed = (time.monotonic() - task_start) * 1000
             write_log(
@@ -304,7 +424,240 @@ class FalGenerator(BaseGenerator):
                 operation="generate",
                 duration_ms=round(elapsed, 1),
                 success=False,
-                extra={"error": str(e)},
+                extra={"error": str(e), "request_id": request_id},
+            )
+            raise
+
+    def get_provider_name(self) -> str:
+        return "fal"
+
+
+# --- Edit model configuration ---
+
+FAL_EDIT_MODEL_CONFIG = {
+    "qwen-image-max-edit": {
+        "endpoint": "fal-ai/qwen-image-max/edit",
+        "supports_negative_prompt": True,
+        "supports_prompt_expansion": True,
+        "supports_safety_checker": True,
+        "max_source_images": 3,
+        "max_num_images": 6,
+    },
+    "kling-image": {
+        "endpoint": "fal-ai/kling-image/o3/image-to-image",
+        "supports_negative_prompt": False,
+        "supports_prompt_expansion": False,
+        "supports_safety_checker": False,
+        "max_source_images": 10,
+        "max_num_images": 9,
+        "uses_resolution": True,
+        "uses_aspect_ratio": True,
+    },
+    "wan-25": {
+        "endpoint": "fal-ai/wan-25-preview/image-to-image",
+        "supports_negative_prompt": True,
+        "supports_prompt_expansion": False,
+        "supports_safety_checker": True,
+        "max_source_images": 2,
+        "max_num_images": 4,
+    },
+    "grok-imagine": {
+        "endpoint": "xai/grok-imagine-image/edit",
+        "supports_negative_prompt": False,
+        "supports_prompt_expansion": False,
+        "supports_safety_checker": False,
+        "max_source_images": 1,
+        "max_num_images": 4,
+        "uses_single_image_url": True,
+    },
+    "face-swap": {
+        "endpoint": "half-moon-ai/ai-face-swap/faceswapimage",
+        "supports_negative_prompt": False,
+        "supports_prompt_expansion": False,
+        "supports_safety_checker": False,
+        "max_source_images": 2,
+        "max_num_images": 1,
+        "uses_face_swap": True,
+    },
+    "nano-banana-pro-edit": {
+        "endpoint": "fal-ai/nano-banana-pro/edit",
+        "supports_negative_prompt": False,
+        "supports_prompt_expansion": False,
+        "supports_safety_checker": False,
+        "max_source_images": 14,
+        "max_num_images": 4,
+        "uses_resolution": True,
+        "uses_aspect_ratio": True,
+        "uses_safety_tolerance": True,
+        "uses_web_search": True,
+    },
+}
+
+
+class FalEditor(BaseEditor):
+    """fal.ai image editing provider."""
+
+    def __init__(self, api_key: str | None = None, edit_model: str = "qwen-image-max-edit"):
+        _ensure_fal_key(api_key)
+        self.config = FAL_EDIT_MODEL_CONFIG.get(edit_model, FAL_EDIT_MODEL_CONFIG["qwen-image-max-edit"])
+        self.edit_model = edit_model
+
+    async def edit(
+        self,
+        image_urls: list[str],
+        prompt: str,
+        negative_prompt: str | None = None,
+        image_size: dict | str | None = None,
+        num_images: int = 1,
+        seed: int | None = None,
+        output_format: str = "png",
+        enable_prompt_expansion: bool = True,
+        enable_safety_checker: bool = True,
+        cancel_check: Callable[[], bool] | None = None,
+        **kwargs: Any,
+    ) -> EditResult:
+        """Edit images via fal.ai using submit + manual polling."""
+        task_start = time.monotonic()
+        poll_interval = 2.0
+        endpoint = self.config["endpoint"]
+
+        if self.config.get("uses_face_swap"):
+            # Face swap: source_face_url + target_image_url, no prompt/num_images
+            arguments: dict[str, Any] = {
+                "source_face_url": image_urls[0],
+                "target_image_url": image_urls[1] if len(image_urls) > 1 else image_urls[0],
+            }
+            if kwargs.get("enable_occlusion_prevention"):
+                arguments["enable_occlusion_prevention"] = True
+        else:
+            arguments = {
+                "prompt": prompt,
+                "num_images": num_images,
+                "output_format": output_format,
+            }
+
+            # Grok uses singular image_url, others use image_urls array
+            if self.config.get("uses_single_image_url"):
+                arguments["image_url"] = image_urls[0]
+            else:
+                arguments["image_urls"] = image_urls
+
+            if self.config.get("uses_resolution"):
+                # Kling-style: resolution + aspect_ratio instead of image_size
+                resolution = kwargs.get("resolution", "1K")
+                arguments["resolution"] = resolution
+                aspect_ratio = kwargs.get("aspect_ratio", "auto")
+                arguments["aspect_ratio"] = aspect_ratio
+            elif not self.config.get("uses_single_image_url"):
+                # Qwen/Wan-style: image_size + safety/expansion toggles
+                if self.config["supports_safety_checker"]:
+                    arguments["enable_safety_checker"] = enable_safety_checker
+                if self.config["supports_prompt_expansion"]:
+                    arguments["enable_prompt_expansion"] = enable_prompt_expansion
+                if negative_prompt and self.config["supports_negative_prompt"]:
+                    arguments["negative_prompt"] = negative_prompt
+                if image_size is not None:
+                    arguments["image_size"] = image_size
+
+            if self.config.get("uses_safety_tolerance") and kwargs.get("safety_tolerance") is not None:
+                arguments["safety_tolerance"] = kwargs["safety_tolerance"]
+            if self.config.get("uses_web_search") and kwargs.get("enable_web_search") is not None:
+                arguments["enable_web_search"] = kwargs["enable_web_search"]
+
+            if seed is not None:
+                arguments["seed"] = seed
+
+        request_id = None
+        try:
+            with provider_span("fal", "edit", self.edit_model) as _span:  # noqa: F841
+                logger.info("FAL REQUEST | endpoint=%s args=%s", endpoint, arguments)
+                handle = fal_client.submit(endpoint, arguments=arguments)
+                request_id = handle.request_id
+
+                from fal_client.client import Completed
+                while True:
+                    if cancel_check and cancel_check():
+                        logger.info(f"Edit cancelled during polling (request_id={request_id})")
+                        try:
+                            fal_client.cancel(endpoint, request_id)
+                        except Exception:
+                            pass
+                        raise GenerationCancelledError(f"Edit cancelled (request_id={request_id})")
+
+                    status = handle.status(with_logs=False)
+                    if isinstance(status, Completed):
+                        break
+                    time.sleep(poll_interval)
+
+                result = handle.get()
+            logger.info("FAL RESPONSE | endpoint=%s request_id=%s result=%s", endpoint, request_id, result)
+            fal_cost = result.get("cost")
+
+            # Face swap returns singular "image", others return "images" array
+            if self.config.get("uses_face_swap"):
+                single_image = result.get("image")
+                if not single_image:
+                    raise RuntimeError("No image returned from fal.ai face swap")
+                images_data = [single_image]
+            else:
+                images_data = result.get("images", [])
+                if not images_data:
+                    raise RuntimeError("No images returned from fal.ai edit")
+
+            downloaded: list[bytes] = []
+            widths: list[int] = []
+            heights: list[int] = []
+
+            async with httpx.AsyncClient(timeout=60) as client:
+                for img_info in images_data:
+                    response = await client.get(img_info["url"])
+                    response.raise_for_status()
+                    downloaded.append(response.content)
+                    widths.append(img_info.get("width", 1024))
+                    heights.append(img_info.get("height", 1024))
+
+            result_seed = result.get("seed")
+
+            elapsed = (time.monotonic() - task_start) * 1000
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"fal.ai edit completed ({len(downloaded)} images)",
+                provider="fal",
+                model=endpoint,
+                operation="edit",
+                duration_ms=round(elapsed, 1),
+                provider_cost=fal_cost,
+                success=True,
+                extra={"seed": result_seed, "edit_model": self.edit_model, "request_id": request_id},
+            )
+
+            return EditResult(
+                images=downloaded,
+                widths=widths,
+                heights=heights,
+                seed=result_seed,
+                provider="fal",
+                metadata={
+                    "endpoint": endpoint,
+                    "request_id": request_id,
+                    "has_nsfw_concepts": result.get("has_nsfw_concepts", []),
+                },
+            )
+
+        except GenerationCancelledError:
+            raise
+        except Exception as e:
+            elapsed = (time.monotonic() - task_start) * 1000
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"fal.ai edit failed: {e}",
+                level=LogLevel.ERROR,
+                provider="fal",
+                model=endpoint,
+                operation="edit",
+                duration_ms=round(elapsed, 1),
+                success=False,
+                extra={"error": str(e), "request_id": request_id},
             )
             raise
 

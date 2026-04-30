@@ -12,6 +12,24 @@ from app.db.base import SessionLocal
 from app.models import Image, ImageStatus, Job, JobStatus
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers import get_cluster_summarizer, get_describer, get_embedder, get_tagger
+from app.services.billing_context import (
+    get_trace_id,
+    init_token_container,
+    init_trace,
+    set_billing_deferred,
+    set_billing_image,
+    set_billing_job,
+    set_billing_user,
+    set_session_id,
+    set_trace_id,
+)
+from app.services.billing_decorator import billable
+from app.services.billing_service import (
+    BillingService,
+    InsufficientBalanceError,
+    ZeroCostEstimateError,
+    finalize_job_billing,
+)
 from app.services.cluster_service import get_cluster_service
 from app.services.clustering import get_clustering_service
 from app.services.image_service import get_image_service
@@ -22,6 +40,7 @@ from app.services.settings_service import (
     get_settings_service,
 )
 from app.workers.celery_app import celery_app
+from app.workers.dispatch import dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -61,14 +80,34 @@ def run_async(coro):
         if loop is None or loop.is_closed():
             loop = asyncio.new_event_loop()
             _thread_local.loop = loop
-        return loop.run_until_complete(coro)
+        try:
+            return loop.run_until_complete(coro)
+        except Exception as e:
+            return _unwrap_retry_success(e)
     # There IS a running loop (shouldn't happen in Celery thread-pool, but
     # handle defensively) — create a throwaway loop.
     new_loop = asyncio.new_event_loop()
     try:
         return new_loop.run_until_complete(coro)
+    except Exception as e:
+        return _unwrap_retry_success(e)
     finally:
         new_loop.close()
+
+
+def _unwrap_retry_success(e: Exception):
+    """Handle tenacity RetryError that wraps a *successful* last attempt.
+
+    tenacity 9.x can raise RetryError even when the final retry succeeded
+    (the Future shows state=finished with a returned value). Extract the
+    successful result instead of propagating the error.
+    """
+    if hasattr(e, 'last_attempt'):
+        fut = e.last_attempt
+        if not fut.failed:
+            logger.warning("tenacity RetryError wrapping a successful result — extracting it")
+            return fut.result()
+    raise e
 
 
 def _update_job_status(db: Session, job_id: int | None, status: JobStatus, **kwargs):
@@ -81,6 +120,12 @@ def _update_job_status(db: Session, job_id: int | None, status: JobStatus, **kwa
     job.status = status
     if status == JobStatus.RUNNING:
         job.started_at = datetime.utcnow()
+        if job.created_at:
+            queue_wait_ms = (job.started_at - job.created_at).total_seconds() * 1000
+            logger.info(
+                f"Job {job_id} started after {queue_wait_ms:.0f}ms in queue",
+                extra={"event_type": "queue_wait", "queue_wait_ms": queue_wait_ms, "job_id": job_id, "job_type": job.job_type.value if job.job_type else None},
+            )
     elif status in (JobStatus.COMPLETED, JobStatus.FAILED):
         job.completed_at = datetime.utcnow()
     for key, value in kwargs.items():
@@ -94,22 +139,48 @@ def _assign_folder_on_completion(db: Session, job: Job):
     Reads folder_id / new_folder_name from job.parameters and all_upload_ids
     from job.result. This ensures folders only appear in the UI once all
     images have thumbnails generated.
+
+    Idempotent: safe to call multiple times (uses get-or-create for folder).
     """
     params = job.parameters or {}
     folder_id = params.get("folder_id")
     new_folder_name = params.get("new_folder_name")
-    all_upload_ids = (job.result or {}).get("all_upload_ids", [])
+    all_upload_ids = list(set((job.result or {}).get("all_upload_ids", [])))
 
     if not (folder_id or new_folder_name) or not all_upload_ids:
         return
 
     try:
+        from app.models.folder import Folder
         from app.services.folder_service import get_folder_service
         folder_service = get_folder_service(db, job.user_id)
 
         if new_folder_name:
-            folder = folder_service.create_folder(new_folder_name)
-            folder_id = folder.id
+            # Get-or-create: look up existing folder first to handle race conditions
+            # where both API and Celery worker trigger this concurrently.
+            existing = (
+                db.query(Folder)
+                .filter(Folder.name == new_folder_name, Folder.user_id == job.user_id)
+                .first()
+            )
+            if existing:
+                folder_id = existing.id
+            else:
+                try:
+                    folder = folder_service.create_folder(new_folder_name)
+                    folder_id = folder.id
+                except Exception:
+                    # Another caller may have created it between our check and insert
+                    db.rollback()
+                    existing = (
+                        db.query(Folder)
+                        .filter(Folder.name == new_folder_name, Folder.user_id == job.user_id)
+                        .first()
+                    )
+                    if existing:
+                        folder_id = existing.id
+                    else:
+                        raise
 
         if folder_id:
             folder_service.add_images_to_folder(folder_id, all_upload_ids)
@@ -118,6 +189,39 @@ def _assign_folder_on_completion(db: Session, job: Job):
             logger.info(f"Deferred folder assignment: added {len(all_upload_ids)} images to folder {folder_id} for job {job.id}")
     except Exception as e:
         logger.error(f"Failed deferred folder assignment for job {job.id}: {e}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
+def _init_task_context(user_id, job_id=None, image_id=None, trace_id=None, session_id=None):
+    """Initialize billing and trace context for a Celery task."""
+    set_billing_user(user_id)
+    if job_id is not None:
+        set_billing_job(job_id)
+    if image_id is not None:
+        set_billing_image(image_id)
+    if trace_id:
+        set_trace_id(trace_id)
+    else:
+        init_trace()
+    if session_id:
+        set_session_id(session_id)
+    # Pre-allocate the mutable token container so that asyncio Tasks
+    # (created by run_async/run_until_complete) share the same dict.
+    init_token_container()
+
+    # Sentry trace continuation is handled by _start_worker_trace in
+    # celery_app.py (task_prerun signal). Here we just set Sentry tags.
+    try:
+        import sentry_sdk
+        sentry_sdk.set_tag("app.trace_id", get_trace_id())
+        if job_id is not None:
+            sentry_sdk.set_tag("app.job_id", str(job_id))
+        sentry_sdk.set_tag("app.user_id", str(user_id))
+    except Exception:
+        pass
 
 
 def _finish_ingest_job_item(db: Session, job_id: int | None, *, failed: bool):
@@ -138,36 +242,46 @@ def _finish_ingest_job_item(db: Session, job_id: int | None, *, failed: bool):
         db.commit()
 
         job = db.query(Job).filter(Job.id == job_id).first()
-        if job and job.total_items and job.progress >= job.total_items:
-            # Count how many images from this job actually failed
-            image_ids = (job.result or {}).get("image_ids", [])
-            n_failed = 0
-            if image_ids:
-                n_failed = (
-                    db.query(Image)
-                    .filter(Image.id.in_(image_ids), Image.status == ImageStatus.FAILED)
-                    .count()
-                )
+        if not job or not job.total_items or job.progress < job.total_items:
+            return
 
-            job.completed_at = datetime.utcnow()
-            if n_failed >= job.total_items:
-                job.status = JobStatus.FAILED
-                job.error_message = f"All {n_failed} items failed"
-            elif n_failed > 0:
-                job.status = JobStatus.COMPLETED
-                job.error_message = f"{n_failed}/{job.total_items} items failed"
-            else:
-                job.status = JobStatus.COMPLETED
-            db.commit()
-
-            # Deferred folder assignment — only after all images are ingested
+        # Skip if job already completed (API path may have completed it first)
+        if job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
+            # Job already finalized — still try folder assignment in case it
+            # was skipped or failed on the first attempt (idempotent).
             _assign_folder_on_completion(db, job)
-    except Exception:
-        pass
+            return
+
+        # Count how many images from this job actually failed
+        image_ids = (job.result or {}).get("image_ids", [])
+        n_failed = 0
+        if image_ids:
+            n_failed = (
+                db.query(Image)
+                .filter(Image.id.in_(image_ids), Image.status == ImageStatus.FAILED)
+                .count()
+            )
+
+        job.completed_at = datetime.utcnow()
+        job.result = {**(job.result or {}), "processing_done_at": datetime.utcnow().isoformat()}
+        if n_failed >= job.total_items:
+            job.status = JobStatus.FAILED
+            job.error_message = f"All {n_failed} items failed"
+        elif n_failed > 0:
+            job.status = JobStatus.COMPLETED
+            job.error_message = f"{n_failed}/{job.total_items} items failed"
+        else:
+            job.status = JobStatus.COMPLETED
+        db.commit()
+
+        # Deferred folder assignment — only after all images are ingested
+        _assign_folder_on_completion(db, job)
+    except Exception as e:
+        logger.error(f"Failed to finalize ingest job {job_id}: {e}")
 
 
 @celery_app.task(bind=True)
-def process_ingest(self, image_id: int, user_id: int, job_id: int | None = None) -> dict:
+def process_ingest(self, image_id: int, user_id: int, job_id: int | None = None, trace_id: str | None = None, session_id: str | None = None) -> dict:
     """
     Complete the heavy processing for a fast-ingested image.
 
@@ -254,7 +368,8 @@ def process_ingest(self, image_id: int, user_id: int, job_id: int | None = None)
 
 @celery_app.task(bind=True)
 def process_ingest_batch(
-    self, image_ids: list[int], user_id: int, job_id: int | None = None
+    self, image_ids: list[int], user_id: int, job_id: int | None = None,
+    trace_id: str | None = None, session_id: str | None = None,
 ) -> dict:
     """
     Process a batch of fast-ingested images in a single task.
@@ -301,6 +416,7 @@ def process_ingest_batch(
                     logger.info(
                         f"Batch ingest: image {image_id} already {image.status.value}, skipping"
                     )
+                    _finish_ingest_job_item(db, job_id, failed=False)
                     results.append({"image_id": image_id, "status": "skipped"})
                     continue
 
@@ -383,8 +499,13 @@ def process_ingest_batch(
         db.close()
 
 
-@celery_app.task(bind=True)
-def tag_image(self, image_id: int, user_id: int, tag_prompt: str | None = None, job_id: int | None = None) -> dict:
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
+def tag_image(
+    self, image_id: int, user_id: int, tag_prompt: str | None = None,
+    job_id: int | None = None, provider: str | None = None, model: str | None = None,
+    temperature: float | None = None, max_tokens_override: int | None = None,
+    trace_id: str | None = None, session_id: str | None = None,
+) -> dict:
     """
     Tag an image with categorization tags.
 
@@ -393,6 +514,7 @@ def tag_image(self, image_id: int, user_id: int, tag_prompt: str | None = None, 
     write_log(category=LogCategory.TASK, message=f"Task tag_image started for image {image_id}",
               task_name="tag_image", image_id=image_id, job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
+    _init_task_context(user_id, job_id=job_id, image_id=image_id, trace_id=trace_id, session_id=session_id)
     db = get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -417,8 +539,10 @@ def tag_image(self, image_id: int, user_id: int, tag_prompt: str | None = None, 
             tag_prompt = compose_tag_prompt(tag_prompt)
 
         # Tag image
-        tagger = get_tagger(db=db, user_id=user_id)
+        tagger = get_tagger(provider=provider, model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_override)
+        tag_start = time.monotonic()
         result = run_async(tagger.tag_image(image_data, image.mime_type, tag_prompt))
+        tagging_duration_ms = round((time.monotonic() - tag_start) * 1000)
 
         # Save metadata
         image_service.save_metadata(
@@ -426,6 +550,9 @@ def tag_image(self, image_id: int, user_id: int, tag_prompt: str | None = None, 
             tags=result.tags,
             tagging_model=result.model,
             tagging_prompt_version=result.prompt_version,
+            tag_prompt_text=tag_prompt,
+            tagged_at=datetime.utcnow(),
+            tagging_duration_ms=tagging_duration_ms,
         )
 
         # Update status
@@ -435,13 +562,19 @@ def tag_image(self, image_id: int, user_id: int, tag_prompt: str | None = None, 
         # Auto-chain: re-embed if description exists (embedding depends on tags)
         image = image_service.get_image(image_id)
         if image and image.image_metadata and image.image_metadata.description_long:
-            embed_image.delay(image_id, user_id)
+            dispatch(embed_image, image_id, user_id)
 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(category=LogCategory.TASK, message=f"Task tag_image completed for image {image_id} in {elapsed:.0f}ms ({len(result.tags)} tags)",
                   task_name="tag_image", image_id=image_id, job_id=job_id, duration_ms=round(elapsed, 1), user_id=user_id)
         return {"status": "success", "image_id": image_id, "tags": result.tags}
 
+    except InsufficientBalanceError:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
+        return {"status": "error", "message": "Insufficient credits"}
+    except ZeroCostEstimateError as e:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
+        return {"status": "error", "message": f"Billing config error: {e}"}
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
@@ -453,11 +586,19 @@ def tag_image(self, image_id: int, user_id: int, tag_prompt: str | None = None, 
         image_service.update_status(image_id, ImageStatus.FAILED, err_msg)
         raise
     finally:
+        set_trace_id(None)
+        set_billing_image(None)
+        set_billing_job(None)
         db.close()
 
 
-@celery_app.task(bind=True)
-def describe_image(self, image_id: int, user_id: int, description_prompt: str | None = None, job_id: int | None = None) -> dict:
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
+def describe_image(
+    self, image_id: int, user_id: int, description_prompt: str | None = None,
+    job_id: int | None = None, provider: str | None = None, model: str | None = None,
+    temperature: float | None = None, max_tokens_override: int | None = None,
+    trace_id: str | None = None, session_id: str | None = None,
+) -> dict:
     """
     Generate a detailed description for an image.
 
@@ -466,6 +607,7 @@ def describe_image(self, image_id: int, user_id: int, description_prompt: str | 
     write_log(category=LogCategory.TASK, message=f"Task describe_image started for image {image_id}",
               task_name="describe_image", image_id=image_id, job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
+    _init_task_context(user_id, job_id=job_id, image_id=image_id, trace_id=trace_id, session_id=session_id)
     db = get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -489,14 +631,19 @@ def describe_image(self, image_id: int, user_id: int, description_prompt: str | 
             description_prompt = compose_description_prompt(description_prompt)
 
         # Generate description
-        describer = get_describer(db=db, user_id=user_id)
+        describer = get_describer(provider=provider, model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_override)
+        desc_start = time.monotonic()
         result = run_async(describer.describe_image(image_data, image.mime_type, description_prompt))
+        caption_duration_ms = round((time.monotonic() - desc_start) * 1000)
 
         # Save metadata
         image_service.save_metadata(
             image_id=image_id,
             description_long=result.description,
             caption_model=result.model,
+            description_prompt_text=description_prompt,
+            described_at=datetime.utcnow(),
+            caption_duration_ms=caption_duration_ms,
         )
 
         # Update status
@@ -506,13 +653,19 @@ def describe_image(self, image_id: int, user_id: int, description_prompt: str | 
         # Auto-chain: re-embed if tags exist (embedding depends on description)
         image = image_service.get_image(image_id)
         if image and image.image_metadata and image.image_metadata.tags:
-            embed_image.delay(image_id, user_id)
+            dispatch(embed_image, image_id, user_id)
 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(category=LogCategory.TASK, message=f"Task describe_image completed for image {image_id} in {elapsed:.0f}ms",
                   task_name="describe_image", image_id=image_id, job_id=job_id, duration_ms=round(elapsed, 1), user_id=user_id)
         return {"status": "success", "image_id": image_id}
 
+    except InsufficientBalanceError:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
+        return {"status": "error", "message": "Insufficient credits"}
+    except ZeroCostEstimateError as e:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
+        return {"status": "error", "message": f"Billing config error: {e}"}
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
@@ -524,11 +677,14 @@ def describe_image(self, image_id: int, user_id: int, description_prompt: str | 
         image_service.update_status(image_id, ImageStatus.FAILED, err_msg)
         raise
     finally:
+        set_trace_id(None)
+        set_billing_image(None)
+        set_billing_job(None)
         db.close()
 
 
-@celery_app.task(bind=True)
-def embed_image(self, image_id: int, user_id: int, job_id: int | None = None) -> dict:
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
+def embed_image(self, image_id: int, user_id: int, job_id: int | None = None, trace_id: str | None = None, session_id: str | None = None) -> dict:
     """
     Generate embedding for an image based on its tags and description.
 
@@ -537,6 +693,7 @@ def embed_image(self, image_id: int, user_id: int, job_id: int | None = None) ->
     write_log(category=LogCategory.TASK, message=f"Task embed_image started for image {image_id}",
               task_name="embed_image", image_id=image_id, job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
+    _init_task_context(user_id, job_id=job_id, image_id=image_id, trace_id=trace_id, session_id=session_id)
     db = get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -563,13 +720,17 @@ def embed_image(self, image_id: int, user_id: int, job_id: int | None = None) ->
 
         # Generate embedding
         embedder = get_embedder(db=db, user_id=user_id)
+        embed_start = time.monotonic()
         result = run_async(embedder.embed_text(text))
+        embedding_duration_ms = round((time.monotonic() - embed_start) * 1000)
 
         # Save embedding
         image_service.save_metadata(
             image_id=image_id,
             embedding=result.embedding,
             embedding_model=result.model,
+            embedded_at=datetime.utcnow(),
+            embedding_duration_ms=embedding_duration_ms,
         )
 
         # Update status
@@ -581,6 +742,12 @@ def embed_image(self, image_id: int, user_id: int, job_id: int | None = None) ->
                   task_name="embed_image", image_id=image_id, job_id=job_id, duration_ms=round(elapsed, 1), user_id=user_id)
         return {"status": "success", "image_id": image_id, "dimensions": result.dimensions}
 
+    except InsufficientBalanceError:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
+        return {"status": "error", "message": "Insufficient credits"}
+    except ZeroCostEstimateError as e:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
+        return {"status": "error", "message": f"Billing config error: {e}"}
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         logger.error(f"Failed to embed image {image_id}: {e}")
@@ -591,18 +758,23 @@ def embed_image(self, image_id: int, user_id: int, job_id: int | None = None) ->
         image_service.update_status(image_id, ImageStatus.FAILED, _unwrap_error(e))
         raise
     finally:
+        set_trace_id(None)
+        set_billing_image(None)
+        set_billing_job(None)
         db.close()
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
 def tag_and_describe_image(
-    self, image_id: int, user_id: int, tag_prompt: str | None = None, description_prompt: str | None = None
+    self, image_id: int, user_id: int, tag_prompt: str | None = None, description_prompt: str | None = None,
+    trace_id: str | None = None, session_id: str | None = None,
 ) -> dict:
     """
     Combined task to tag and describe an image.
 
     This is more efficient as it only loads the image once.
     """
+    _init_task_context(user_id, image_id=image_id, trace_id=trace_id, session_id=session_id)
     db = get_db()
     try:
         image_service = get_image_service(db, user_id)
@@ -660,11 +832,13 @@ def tag_and_describe_image(
         image_service.update_status(image_id, ImageStatus.FAILED, _unwrap_error(e))
         raise
     finally:
+        set_trace_id(None)
+        set_billing_image(None)
         db.close()
 
 
 @celery_app.task(bind=True)
-def cluster_all_images(self, user_id: int, job_id: int | None = None) -> dict:
+def cluster_all_images(self, user_id: int, job_id: int | None = None, trace_id: str | None = None, session_id: str | None = None) -> dict:
     """
     Cluster all embedded images.
 
@@ -673,6 +847,7 @@ def cluster_all_images(self, user_id: int, job_id: int | None = None) -> dict:
     write_log(category=LogCategory.TASK, message="Task cluster_all_images started",
               task_name="cluster_all_images", job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
+    _init_task_context(user_id, trace_id=trace_id, session_id=session_id)
     db = get_db()
     try:
         # Update job status
@@ -723,6 +898,13 @@ def cluster_all_images(self, user_id: int, job_id: int | None = None) -> dict:
             result, image_ids, embeddings_array
         )
 
+        # Generate cover composites for each cluster
+        for cluster in clusters:
+            try:
+                cluster_service.generate_cover_composite(cluster.id)
+            except Exception as cover_err:
+                logger.warning(f"Failed to generate cover for cluster {cluster.id}: {cover_err}")
+
         # Update image statuses
         for image_id in image_ids:
             image_service.update_status(image_id, ImageStatus.CLUSTERED)
@@ -744,7 +926,7 @@ def cluster_all_images(self, user_id: int, job_id: int | None = None) -> dict:
         cluster_ids = [c.id for c in clusters]
         if cluster_ids:
             logger.info(f"Auto-dispatching summarization for {len(cluster_ids)} clusters")
-            summarize_clusters.delay(cluster_ids, user_id)
+            dispatch(summarize_clusters, cluster_ids, user_id)
 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(category=LogCategory.TASK,
@@ -775,8 +957,8 @@ def cluster_all_images(self, user_id: int, job_id: int | None = None) -> dict:
         db.close()
 
 
-@celery_app.task(bind=True)
-def summarize_cluster(self, cluster_id: int, user_id: int) -> dict:
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
+def summarize_cluster(self, cluster_id: int, user_id: int, job_id: int | None = None, trace_id: str | None = None, session_id: str | None = None) -> dict:
     """
     Generate AI summary for a cluster.
 
@@ -785,6 +967,7 @@ def summarize_cluster(self, cluster_id: int, user_id: int) -> dict:
     write_log(category=LogCategory.TASK, message=f"Task summarize_cluster started for cluster {cluster_id}",
               task_name="summarize_cluster", user_id=user_id)
     task_start = time.monotonic()
+    _init_task_context(user_id, trace_id=trace_id, session_id=session_id)
     db = get_db()
     try:
         cluster_service = get_cluster_service(db, user_id)
@@ -816,9 +999,30 @@ def summarize_cluster(self, cluster_id: int, user_id: int) -> dict:
 
         # Generate summary
         summarizer = get_cluster_summarizer(db=db, user_id=user_id)
-        result = run_async(
-            summarizer.summarize_cluster(common_tags, descriptions, cluster.size)
+
+        # Resolve provider from settings (mirrors get_cluster_summarizer logic)
+        _settings_svc = get_settings_service(db, user_id)
+        _provider_config = _settings_svc.get_provider_config()
+        _summ_provider = (
+            _provider_config.get("language_provider")
+            or _provider_config.get("vision_provider")
+            or "openai"
         )
+
+        _sample_desc = "\n".join(descriptions[:5]) if descriptions else ""
+
+        with billable(
+            db, user_id, operation="summarize",
+            provider=_summ_provider, model=summarizer.get_model_name(),
+            resource_id=cluster_id, job_id=job_id,
+            prompt_text=_sample_desc,
+        ) as b_summ:
+            if b_summ.skipped:
+                return {"status": "skipped", "cluster_id": cluster_id}
+
+            result = b_summ.call(
+                run_async, summarizer.summarize_cluster(common_tags, descriptions, cluster.size),
+            )
 
         # Update cluster
         cluster_service.update_cluster_summary(
@@ -847,12 +1051,14 @@ def summarize_cluster(self, cluster_id: int, user_id: int) -> dict:
                   duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)}, user_id=user_id)
         raise
     finally:
+        set_trace_id(None)
         db.close()
 
 
-@celery_app.task(bind=True)
-def summarize_clusters(self, cluster_ids: list[int], user_id: int, job_id: int | None = None) -> dict:
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
+def summarize_clusters(self, cluster_ids: list[int], user_id: int, job_id: int | None = None, trace_id: str | None = None, session_id: str | None = None) -> dict:
     """Summarize multiple clusters."""
+    _init_task_context(user_id, job_id=job_id, trace_id=trace_id, session_id=session_id)
     db = get_db()
     try:
         if job_id:
@@ -863,9 +1069,10 @@ def summarize_clusters(self, cluster_ids: list[int], user_id: int, job_id: int |
                 job.total_items = len(cluster_ids)
                 db.commit()
 
+        set_billing_deferred(True)
         results = []
         for i, cluster_id in enumerate(cluster_ids):
-            result = summarize_cluster(cluster_id, user_id)
+            result = summarize_cluster(cluster_id, user_id, job_id=job_id)
             results.append(result)
 
             if job_id:
@@ -881,6 +1088,12 @@ def summarize_clusters(self, cluster_ids: list[int], user_id: int, job_id: int |
                 job.completed_at = datetime.utcnow()
                 db.commit()
 
+        # Aggregate costs from all summarize calls onto the job
+        try:
+            finalize_job_billing(db, user_id, job_id, create_debit=True)
+        except Exception:
+            logger.warning(f"Failed to finalize billing for summarize job {job_id}", exc_info=True)
+
         return {"status": "success", "results": results}
 
     except Exception as e:
@@ -892,12 +1105,19 @@ def summarize_clusters(self, cluster_ids: list[int], user_id: int, job_id: int |
                 db.commit()
         raise
     finally:
+        set_trace_id(None)
+        set_billing_job(None)
         db.close()
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
 def process_image_pipeline(
-    self, image_id: int, user_id: int, tag_prompt: str | None = None, description_prompt: str | None = None, job_id: int | None = None
+    self, image_id: int, user_id: int, tag_prompt: str | None = None,
+    description_prompt: str | None = None, job_id: int | None = None,
+    provider: str | None = None, model: str | None = None,
+    temperature: float | None = None, max_tokens_tag: int | None = None,
+    max_tokens_describe: int | None = None,
+    trace_id: str | None = None, session_id: str | None = None,
 ) -> dict:
     """
     Run full pipeline for a single image: tag -> describe -> embed.
@@ -907,7 +1127,13 @@ def process_image_pipeline(
     write_log(category=LogCategory.TASK, message=f"Task process_image_pipeline started for image {image_id}",
               task_name="process_image_pipeline", image_id=image_id, job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
+    _init_task_context(user_id, job_id=job_id, image_id=image_id, trace_id=trace_id, session_id=session_id)
+    # Only defer billing when we have a job_id — finalize_job_billing needs
+    # job_id to aggregate deferred costs. Without it, inline debits are safer.
+    if job_id:
+        set_billing_deferred(True)
     db = get_db()
+    image_filename = None
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
 
@@ -916,6 +1142,8 @@ def process_image_pipeline(
 
         if not image:
             return {"status": "error", "message": "Image not found"}
+
+        image_filename = image.original_filename
 
         # Get image data once
         image_data = run_async(image_service.get_image_data(image_id))
@@ -934,12 +1162,115 @@ def process_image_pipeline(
             description_prompt = compose_description_prompt(description_prompt)
 
         # Tag
-        tagger = get_tagger(db=db, user_id=user_id)
-        tag_result = run_async(tagger.tag_image(image_data, image.mime_type, tag_prompt))
+        tagger = get_tagger(provider=provider, model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_tag)
+        trace_id = get_trace_id()
+
+        # --- Pipeline-level reservation ---
+        # Compute total estimated sparks (tag + describe + embed) and reserve
+        # once upfront, so the user sees a single combined deduction.
+        describer = get_describer(provider=provider, model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_describe)
+        embedder = get_embedder(db=db, user_id=user_id)
+
+        from app.services.cost_calculator import (
+            estimate_operation_tokens,
+            resolve_catalog_model,
+        )
+        from app.services.cost_calculator import (
+            estimate_sparks as _estimate_sparks,
+        )
+
+        pipeline_reserved = 0
+        try:
+            _tag_prov, _tag_model, _tag_op = resolve_catalog_model(
+                provider or "openai", tagger.get_model_name(), "tag",
+            )
+            _desc_prov, _desc_model, _desc_op = resolve_catalog_model(
+                provider or "openai", describer.get_model_name(), "describe",
+            )
+            _emb_prov, _emb_model, _emb_op = resolve_catalog_model(
+                "openai", embedder.get_model_name(), "embed",
+            )
+
+            tag_in, tag_out = estimate_operation_tokens(
+                _tag_prov, _tag_model, _tag_op,
+                image_width=image.width, image_height=image.height,
+                prompt_text=tag_prompt,
+            )
+            desc_in, desc_out = estimate_operation_tokens(
+                _desc_prov, _desc_model, _desc_op,
+                image_width=image.width, image_height=image.height,
+                prompt_text=description_prompt,
+            )
+            emb_in, emb_out = estimate_operation_tokens(
+                _emb_prov, _emb_model, _emb_op,
+            )
+
+            import math as _math
+
+            tag_sparks, _ = _estimate_sparks(db, _tag_prov, _tag_model, _tag_op, tag_in, tag_out)
+            desc_sparks, _ = _estimate_sparks(db, _desc_prov, _desc_model, _desc_op, desc_in, desc_out)
+            emb_sparks, _ = _estimate_sparks(db, _emb_prov, _emb_model, _emb_op, emb_in, emb_out)
+
+            total_est_dec = (tag_sparks or 0) + (desc_sparks or 0) + (emb_sparks or 0)
+            total_est = int(_math.ceil(total_est_dec))
+            if total_est > 0:
+                svc = BillingService(db, user_id)
+                if not svc.reserve_sparks(total_est):
+                    raise InsufficientBalanceError(
+                        f"User {user_id} has insufficient credits "
+                        f"(need ~{total_est} sparks for pipeline)"
+                    )
+                pipeline_reserved = total_est
+                logger.info(
+                    "PIPELINE_RESERVE | user=%s image=%s total=%d (tag=%s desc=%s emb=%s)",
+                    user_id, image_id, total_est, tag_sparks, desc_sparks, emb_sparks,
+                )
+        except InsufficientBalanceError:
+            raise
+        except Exception as est_err:
+            # If estimation fails, fall back to per-operation reservations
+            logger.warning(
+                "PIPELINE_RESERVE failed, falling back to per-op: %s", est_err,
+            )
+
+        _skip_res = pipeline_reserved > 0
+
+        with billable(
+            db, user_id, operation="tag",
+            provider=provider or "openai", model=tagger.get_model_name(),
+            trace_id=trace_id, resource_id=image_id,
+            image_id=image_id, job_id=job_id,
+            image_width=image.width, image_height=image.height,
+            prompt_text=tag_prompt,
+            skip_reservation=_skip_res,
+        ) as b_tag:
+            if b_tag.skipped:
+                logger.info("Duplicate tag detected for image %s, skipping", image_id)
+                tag_result = type('R', (), {'tags': image.image_metadata.tags if image.image_metadata else [], 'model': tagger.get_model_name(), 'prompt_version': 'cached'})()
+                tagging_duration_ms = 0
+            else:
+                tag_start = time.monotonic()
+                tag_result = b_tag.call(run_async, tagger.tag_image(image_data, image.mime_type, tag_prompt))
+                tagging_duration_ms = round((time.monotonic() - tag_start) * 1000)
 
         # Describe
-        describer = get_describer(db=db, user_id=user_id)
-        description_result = run_async(describer.describe_image(image_data, image.mime_type, description_prompt))
+        with billable(
+            db, user_id, operation="describe",
+            provider=provider or "openai", model=describer.get_model_name(),
+            trace_id=trace_id, resource_id=image_id,
+            image_id=image_id, job_id=job_id,
+            image_width=image.width, image_height=image.height,
+            prompt_text=description_prompt,
+            skip_reservation=_skip_res,
+        ) as b_desc:
+            if b_desc.skipped:
+                logger.info("Duplicate describe detected for image %s, skipping", image_id)
+                description_result = type('R', (), {'description': image.image_metadata.description_long if image.image_metadata else '', 'model': describer.get_model_name()})()
+                caption_duration_ms = 0
+            else:
+                desc_start = time.monotonic()
+                description_result = b_desc.call(run_async, describer.describe_image(image_data, image.mime_type, description_prompt))
+                caption_duration_ms = round((time.monotonic() - desc_start) * 1000)
 
         # Build text for embedding
         text_parts = []
@@ -949,8 +1280,25 @@ def process_image_pipeline(
         text = "\n".join(text_parts)
 
         # Embed
-        embedder = get_embedder(db=db, user_id=user_id)
-        embed_result = run_async(embedder.embed_text(text))
+        with billable(
+            db, user_id, operation="embed",
+            provider="openai", model=embedder.get_model_name(),
+            trace_id=trace_id, resource_id=image_id,
+            image_id=image_id, job_id=job_id,
+            tags=tag_result.tags,
+            description=description_result.description,
+            skip_reservation=_skip_res,
+        ) as b_embed:
+            if b_embed.skipped:
+                logger.info("Duplicate embed detected for image %s, skipping", image_id)
+                embed_result = type('R', (), {'embedding': image.image_metadata.embedding if image.image_metadata else [], 'model': embedder.get_model_name(), 'dimensions': 1536})()
+                embedding_duration_ms = 0
+            else:
+                embed_start_t = time.monotonic()
+                embed_result = b_embed.call(run_async, embedder.embed_text(text))
+                embedding_duration_ms = round((time.monotonic() - embed_start_t) * 1000)
+
+        now = datetime.utcnow()
 
         # Save all metadata at once
         image_service.save_metadata(
@@ -962,6 +1310,14 @@ def process_image_pipeline(
             tagging_prompt_version=tag_result.prompt_version,
             caption_model=description_result.model,
             embedding_model=embed_result.model,
+            tag_prompt_text=tag_prompt,
+            description_prompt_text=description_prompt,
+            tagged_at=now,
+            described_at=now,
+            embedded_at=now,
+            tagging_duration_ms=tagging_duration_ms,
+            caption_duration_ms=caption_duration_ms,
+            embedding_duration_ms=embedding_duration_ms,
         )
 
         # Update status
@@ -977,6 +1333,12 @@ def process_image_pipeline(
             "tags": tag_result.tags,
         }
 
+    except InsufficientBalanceError:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
+        return {"status": "error", "message": "Insufficient credits"}
+    except ZeroCostEstimateError as e:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
+        return {"status": "error", "message": f"Billing config error: {e}"}
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
@@ -988,17 +1350,42 @@ def process_image_pipeline(
         image_service.update_status(image_id, ImageStatus.FAILED, _unwrap_error(e))
         raise
     finally:
+        # Release pipeline-level reservation before finalizing
+        if pipeline_reserved > 0:
+            try:
+                svc = BillingService(db, user_id)
+                svc.release_reservation(pipeline_reserved)
+                logger.info("PIPELINE_RELEASE | user=%s image=%s released=%d", user_id, image_id, pipeline_reserved)
+            except Exception:
+                logger.warning("Failed to release pipeline reservation", exc_info=True)
+
+        # Finalize billing: aggregate deferred usage records into one debit
+        if job_id:
+            try:
+                filename_part = f" {image_filename}" if image_filename else ""
+                finalize_job_billing(
+                    db, user_id, job_id,
+                    description=f"Describe{filename_part}",
+                    create_debit=True,
+                )
+            except Exception:
+                logger.warning(f"Failed to finalize billing for job {job_id}", exc_info=True)
+        set_billing_deferred(False)
+        set_billing_image(None)
+        set_billing_job(None)
+        set_trace_id(None)
         db.close()
 
 
-@celery_app.task(bind=True)
-def run_full_pipeline(self, job_id: int, user_id: int) -> dict:
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
+def run_full_pipeline(self, job_id: int, user_id: int, trace_id: str | None = None, session_id: str | None = None) -> dict:
     """
     Run full pipeline: process all pending images, then cluster and summarize.
     """
     write_log(category=LogCategory.TASK, message="Task run_full_pipeline started",
               task_name="run_full_pipeline", job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
+    _init_task_context(user_id, trace_id=trace_id, session_id=session_id)
     db = get_db()
     try:
         job = db.query(Job).filter(Job.id == job_id).first()
@@ -1024,7 +1411,7 @@ def run_full_pipeline(self, job_id: int, user_id: int) -> dict:
 
         for i, image in enumerate(pending_images):
             try:
-                process_image_pipeline.delay(image.id, user_id)
+                dispatch(process_image_pipeline, image.id, user_id)
                 processed += 1
             except Exception as e:
                 logger.error(f"Failed to queue image {image.id}: {e}")
@@ -1070,11 +1457,12 @@ def run_full_pipeline(self, job_id: int, user_id: int) -> dict:
                 db.commit()
         raise
     finally:
+        set_trace_id(None)
         db.close()
 
 
-@celery_app.task(bind=True, queue='clustering')
-def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int]) -> dict:
+@celery_app.task(bind=True, queue='clustering', acks_late=False, max_retries=0, reject_on_worker_lost=False)
+def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int], trace_id: str | None = None, session_id: str | None = None) -> dict:
     """
     Reprocess a batch of images: reset each to INGESTED, dispatch process_image_pipeline,
     then poll until all images have finished processing.
@@ -1085,6 +1473,7 @@ def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int]) -
     write_log(category=LogCategory.TASK, message=f"Task run_batch_reprocess started ({len(image_ids)} images)",
               task_name="run_batch_reprocess", job_id=job_id, user_id=user_id)
     task_start = time.monotonic()
+    _init_task_context(user_id, trace_id=trace_id, session_id=session_id)
     db = get_db()
     try:
         job = db.query(Job).filter(Job.id == job_id).first()
@@ -1118,7 +1507,7 @@ def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int]) -
             for image_id in image_ids:
                 try:
                     image_service.update_status(image_id, ImageStatus.INGESTED)
-                    process_image_pipeline.delay(image_id, user_id)
+                    dispatch(process_image_pipeline, image_id, user_id)
                     queued += 1
                 except Exception as e:
                     logger.error(f"Failed to queue reprocess for image {image_id}: {e}")
@@ -1167,7 +1556,6 @@ def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int]) -
 
         job = db.query(Job).filter(Job.id == job_id).first()
         if job:
-            job.status = JobStatus.COMPLETED
             job.completed_at = datetime.utcnow()
             job.result = {
                 "total": len(image_ids),
@@ -1177,6 +1565,14 @@ def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int]) -
                 "image_ids": image_ids,
                 "dispatched": True,
             }
+            if failed_count >= len(image_ids):
+                job.status = JobStatus.FAILED
+                job.error_message = f"All {failed_count} images failed"
+            elif failed_count > 0:
+                job.status = JobStatus.COMPLETED
+                job.error_message = f"{failed_count}/{len(image_ids)} images failed"
+            else:
+                job.status = JobStatus.COMPLETED
             db.commit()
 
         elapsed = (time.monotonic() - task_start) * 1000
@@ -1198,11 +1594,153 @@ def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int]) -
             db.commit()
         raise
     finally:
+        set_trace_id(None)
+        db.close()
+
+
+@celery_app.task(bind=True, queue='clustering', acks_late=False, max_retries=0, reject_on_worker_lost=False)
+def run_batch_describe(
+    self, job_id: int, user_id: int, image_ids: list[int],
+    tag_prompt: str | None = None, description_prompt: str | None = None,
+    provider: str | None = None, model: str | None = None,
+    temperature: float | None = None, max_tokens_tag: int | None = None,
+    max_tokens_describe: int | None = None,
+    trace_id: str | None = None, session_id: str | None = None,
+) -> dict:
+    """
+    Describe a batch of images: reset each to INGESTED, dispatch process_image_pipeline
+    with custom prompts and provider/model, then poll until all images have finished.
+    """
+    write_log(category=LogCategory.TASK, message=f"Task run_batch_describe started ({len(image_ids)} images)",
+              task_name="run_batch_describe", job_id=job_id, user_id=user_id)
+    task_start = time.monotonic()
+    _init_task_context(user_id, trace_id=trace_id, session_id=session_id)
+    db = get_db()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+
+        if job and job.status == JobStatus.CANCELLED:
+            logger.info(f"Batch describe job {job_id} already cancelled, skipping")
+            return {"status": "cancelled", "total": len(image_ids)}
+
+        # Idempotency check
+        already_dispatched = False
+        if job and isinstance(job.result, dict) and job.result.get("dispatched"):
+            already_dispatched = True
+            logger.info(f"Batch describe job {job_id} already dispatched, skipping to Phase 2")
+
+        if job and not already_dispatched:
+            job.status = JobStatus.RUNNING
+            job.started_at = datetime.utcnow()
+            job.total_items = len(image_ids)
+            job.result = {"image_ids": image_ids}
+            db.commit()
+
+        image_service = get_image_service(db, user_id)
+        queued = 0
+
+        # Phase 1: Reset images and dispatch pipeline tasks
+        if not already_dispatched:
+            for image_id in image_ids:
+                try:
+                    image_service.update_status(image_id, ImageStatus.INGESTED)
+                    dispatch(
+                        process_image_pipeline,
+                        image_id, user_id, tag_prompt, description_prompt,
+                        provider=provider, model=model,
+                        temperature=temperature, max_tokens_tag=max_tokens_tag,
+                        max_tokens_describe=max_tokens_describe,
+                    )
+                    queued += 1
+                except Exception as e:
+                    logger.error(f"Failed to queue describe for image {image_id}: {e}")
+
+            if job:
+                job.result = {"image_ids": image_ids, "dispatched": True, "queued": queued}
+                db.commit()
+
+        # Phase 2: Poll until all images have finished
+        image_id_set = set(image_ids)
+        poll_interval = 5
+        while True:
+            db.expire_all()
+            job = db.query(Job).filter(Job.id == job_id).first()
+            if job and job.status == JobStatus.CANCELLED:
+                logger.info(f"Batch describe job {job_id} cancelled during polling")
+                return {"status": "cancelled", "total": len(image_ids)}
+
+            done_count = (
+                db.query(Image)
+                .filter(
+                    Image.id.in_(image_id_set),
+                    Image.status != ImageStatus.INGESTED,
+                )
+                .count()
+            )
+
+            if job:
+                job.progress = done_count
+                db.commit()
+
+            if done_count >= len(image_ids):
+                break
+
+            time.sleep(poll_interval)
+
+        # Count outcomes
+        failed_count = (
+            db.query(Image)
+            .filter(Image.id.in_(image_id_set), Image.status == ImageStatus.FAILED)
+            .count()
+        )
+        succeeded = len(image_ids) - failed_count
+
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.completed_at = datetime.utcnow()
+            job.result = {
+                "total": len(image_ids),
+                "queued": queued,
+                "succeeded": succeeded,
+                "failed": failed_count,
+                "image_ids": image_ids,
+                "dispatched": True,
+            }
+            if failed_count >= len(image_ids):
+                job.status = JobStatus.FAILED
+                job.error_message = f"All {failed_count} images failed"
+            elif failed_count > 0:
+                job.status = JobStatus.COMPLETED
+                job.error_message = f"{failed_count}/{len(image_ids)} images failed"
+            else:
+                job.status = JobStatus.COMPLETED
+            db.commit()
+
+        elapsed = (time.monotonic() - task_start) * 1000
+        write_log(category=LogCategory.TASK,
+                  message=f"Task run_batch_describe completed in {elapsed:.0f}ms ({succeeded} succeeded, {failed_count} failed)",
+                  task_name="run_batch_describe", job_id=job_id, duration_ms=round(elapsed, 1), user_id=user_id)
+        return {"status": "success", "total": len(image_ids), "succeeded": succeeded, "failed": failed_count}
+
+    except Exception as e:
+        elapsed = (time.monotonic() - task_start) * 1000
+        logger.error(f"Batch describe failed: {e}")
+        write_log(category=LogCategory.TASK, message=f"Task run_batch_describe failed: {e}",
+                  level=LogLevel.ERROR, task_name="run_batch_describe", job_id=job_id,
+                  duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)}, user_id=user_id)
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.status = JobStatus.FAILED
+            job.error_message = str(e)
+            db.commit()
+        raise
+    finally:
+        set_trace_id(None)
         db.close()
 
 
 @celery_app.task(bind=True)
-def delete_folder_with_images(self, folder_id: int, user_id: int, job_id: int) -> dict:
+def delete_folder_with_images(self, folder_id: int, user_id: int, job_id: int, trace_id: str | None = None, session_id: str | None = None) -> dict:
     """
     Delete a folder and all its images in the background.
 
@@ -1294,3 +1832,327 @@ def cleanup_old_pipeline_logs():
     count = _cleanup(days=7)
     if count:
         logger.info(f"Cleaned up {count} old pipeline log entries")
+
+
+@celery_app.task
+def cleanup_stale_reservations():
+    """Release reservations from stale PENDING decisions (older than 2 hours)."""
+    from datetime import timedelta
+
+    from app.models.cost_decision import CostDecision, DecisionStatus
+    from app.services.billing_service import BillingService
+
+    db = SessionLocal()
+    try:
+        cutoff = datetime.utcnow() - timedelta(hours=2)
+        stale = (
+            db.query(CostDecision)
+            .filter(
+                CostDecision.status == DecisionStatus.PENDING.value,
+                CostDecision.created_at < cutoff,
+                CostDecision.reserved_sparks > 0,
+            )
+            .all()
+        )
+        for decision in stale:
+            released = decision.reserved_sparks
+            svc = BillingService(db, decision.user_id)
+            svc.release_reservation(released)
+            decision.reserved_sparks = 0
+            decision.status = DecisionStatus.FAILED.value
+            decision.error_message = "stale reservation cleanup"
+            decision.updated_at = datetime.utcnow()
+            db.commit()
+            logger.info(
+                "STALE_CLEANUP | decision=%s user=%s released=%d sparks",
+                decision.id, decision.user_id, released,
+            )
+        if stale:
+            logger.info("Cleaned up %d stale reservations", len(stale))
+    except Exception:
+        logger.warning("Failed to clean up stale reservations", exc_info=True)
+        db.rollback()
+    finally:
+        db.close()
+
+
+@celery_app.task
+def monitor_queue_health():
+    """Periodic task to monitor queue depths, oldest pending job age, and completion rate."""
+    import redis as redis_lib
+
+    from app.core.config import get_settings as _get_settings
+
+    _settings = _get_settings()
+    db = SessionLocal()
+    try:
+        # Queue depths from Redis LLEN
+        queue_depths = {}
+        try:
+            r = redis_lib.from_url(_settings.redis_url, socket_timeout=2, socket_connect_timeout=2)
+            for queue_name in ("celery", "clustering", "generation"):
+                queue_depths[queue_name] = r.llen(queue_name)
+            r.close()
+        except Exception as e:
+            logger.warning(f"Failed to read queue depths from Redis: {e}")
+
+        # Oldest pending job age
+        oldest_pending_age_s = None
+        try:
+            oldest_pending = (
+                db.query(Job)
+                .filter(Job.status == JobStatus.PENDING)
+                .order_by(Job.created_at.asc())
+                .first()
+            )
+            if oldest_pending and oldest_pending.created_at:
+                oldest_pending_age_s = (datetime.utcnow() - oldest_pending.created_at).total_seconds()
+        except Exception as e:
+            logger.warning(f"Failed to query oldest pending job: {e}")
+
+        # Completion rate (last hour)
+        completion_rate = None
+        try:
+            from sqlalchemy import func
+
+            one_hour_ago = datetime.utcnow() - __import__("datetime").timedelta(hours=1)
+            completed = (
+                db.query(func.count(Job.id))
+                .filter(Job.status == JobStatus.COMPLETED, Job.completed_at >= one_hour_ago)
+                .scalar()
+            ) or 0
+            failed = (
+                db.query(func.count(Job.id))
+                .filter(Job.status == JobStatus.FAILED, Job.completed_at >= one_hour_ago)
+                .scalar()
+            ) or 0
+            total = completed + failed
+            completion_rate = round(completed / total, 3) if total > 0 else None
+        except Exception as e:
+            logger.warning(f"Failed to compute completion rate: {e}")
+
+        logger.info(
+            "Queue health check",
+            extra={
+                "event_type": "queue_health",
+                "queue_depths": queue_depths,
+                "oldest_pending_age_s": oldest_pending_age_s,
+                "completion_rate": completion_rate,
+                "completed_last_hour": completed if 'completed' in dir() else None,
+                "failed_last_hour": failed if 'failed' in dir() else None,
+            },
+        )
+    except Exception:
+        logger.warning("monitor_queue_health failed", exc_info=True)
+    finally:
+        db.close()
+
+
+@celery_app.task
+def reconcile_billing():
+    """Hourly reconciliation of billing decisions.
+
+    Scans recent CostDecisions and flags anomalies:
+      - stale_decision: PENDING > 30 min with no linked UsageRecord
+      - missing_actual: EXECUTED/CHARGED but no linked UsageRecord
+      - estimate_drift: large delta between estimated_sparks and actual sparks
+      - reservation_leak: reserved_sparks > 0 on non-PENDING decisions
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import func
+
+    from app.models.billing import UsageRecord
+    from app.models.cost_decision import CostDecision, DecisionStatus
+
+    db = SessionLocal()
+    anomalies_created = 0
+    try:
+        now = datetime.utcnow()
+        # Window: look at decisions from the last 2 hours
+        window_start = now - timedelta(hours=2)
+
+        # --- 1. Stale decisions: PENDING > 30 min ---
+        stale_cutoff = now - timedelta(minutes=30)
+        stale_decisions = (
+            db.query(CostDecision)
+            .filter(
+                CostDecision.status == DecisionStatus.PENDING.value,
+                CostDecision.created_at < stale_cutoff,
+                CostDecision.created_at >= window_start,
+            )
+            .all()
+        )
+        for d in stale_decisions:
+            age_min = (now - d.created_at).total_seconds() / 60
+            _create_reconciliation_anomaly(
+                db, d, "stale_decision",
+                {"age_minutes": round(age_min, 1),
+                 "reserved_sparks": d.reserved_sparks or 0},
+            )
+            anomalies_created += 1
+
+        # --- 2. Missing actual: EXECUTED/CHARGED but no UsageRecord ---
+        settled_cutoff = now - timedelta(minutes=10)
+        settled_no_record = (
+            db.query(CostDecision)
+            .outerjoin(UsageRecord, UsageRecord.cost_decision_id == CostDecision.id)
+            .filter(
+                CostDecision.status.in_([
+                    DecisionStatus.EXECUTED.value,
+                    DecisionStatus.CHARGED.value,
+                ]),
+                CostDecision.created_at >= window_start,
+                CostDecision.created_at < settled_cutoff,
+                UsageRecord.id.is_(None),
+            )
+            .all()
+        )
+        for d in settled_no_record:
+            _create_reconciliation_anomaly(
+                db, d, "missing_actual_reconcile",
+                {"status": d.status, "age_minutes": round(
+                    (now - d.created_at).total_seconds() / 60, 1)},
+            )
+            anomalies_created += 1
+
+        # --- 3. Estimate drift: compare estimated vs actual sparks ---
+        drift_threshold_pct = 50  # flag if > 50% drift
+        recent_with_actual = (
+            db.query(CostDecision, UsageRecord)
+            .join(UsageRecord, UsageRecord.cost_decision_id == CostDecision.id)
+            .filter(
+                CostDecision.created_at >= window_start,
+                CostDecision.estimated_sparks.isnot(None),
+                CostDecision.estimated_sparks > 0,
+                UsageRecord.delta_sparks.isnot(None),
+                UsageRecord.delta_sparks > 0,
+            )
+            .all()
+        )
+        drift_count = 0
+        for d, u in recent_with_actual:
+            est = d.estimated_sparks
+            actual = u.delta_sparks
+            delta_pct = abs(actual - est) / est * 100
+            if delta_pct > drift_threshold_pct:
+                _create_reconciliation_anomaly(
+                    db, d, "estimate_drift",
+                    {"estimated_sparks": est, "actual_sparks": actual,
+                     "delta_pct": round(delta_pct, 1)},
+                )
+                anomalies_created += 1
+                drift_count += 1
+
+        # --- 4. Reservation leak: reserved > 0 on non-PENDING decisions ---
+        leaked = (
+            db.query(CostDecision)
+            .filter(
+                CostDecision.status.notin_([DecisionStatus.PENDING.value]),
+                CostDecision.reserved_sparks > 0,
+                CostDecision.created_at >= window_start,
+            )
+            .all()
+        )
+        for d in leaked:
+            _create_reconciliation_anomaly(
+                db, d, "reservation_leak",
+                {"status": d.status, "reserved_sparks": d.reserved_sparks},
+            )
+            anomalies_created += 1
+
+        db.commit()
+
+        # Summary metrics
+        total_decisions_in_window = (
+            db.query(func.count(CostDecision.id))
+            .filter(CostDecision.created_at >= window_start)
+            .scalar()
+        ) or 0
+
+        logger.info(
+            "Billing reconciliation complete: %d decisions in window, "
+            "%d anomalies created (%d stale, %d missing_actual, "
+            "%d estimate_drift, %d reservation_leak)",
+            total_decisions_in_window, anomalies_created,
+            len(stale_decisions), len(settled_no_record),
+            drift_count, len(leaked),
+        )
+
+    except Exception:
+        logger.warning("reconcile_billing failed", exc_info=True)
+        db.rollback()
+    finally:
+        db.close()
+
+
+def _create_reconciliation_anomaly(
+    db,
+    decision,
+    anomaly_type: str,
+    detail: dict,
+) -> None:
+    """Create a BillingAnomaly from reconciliation. Deduplicates by decision_id + type."""
+    from sqlalchemy import Integer as SAInteger
+    from sqlalchemy import cast
+
+    from app.core.otel import billing_meters as _bm
+    from app.models.billing import BillingAnomaly
+
+    # Deduplicate: don't re-flag the same decision for the same anomaly type.
+    existing = (
+        db.query(BillingAnomaly)
+        .filter(
+            BillingAnomaly.anomaly_type == anomaly_type,
+            cast(BillingAnomaly.detail["decision_id"], SAInteger) == decision.id,
+            BillingAnomaly.resolved.is_(False),
+        )
+        .first()
+    )
+    if existing:
+        return
+
+    detail["decision_id"] = decision.id
+    if decision.trace_id:
+        detail["trace_id"] = decision.trace_id
+    anomaly = BillingAnomaly(
+        user_id=decision.user_id,
+        anomaly_type=anomaly_type,
+        provider=decision.provider,
+        model=decision.model,
+        operation=decision.operation,
+        detail=detail,
+    )
+    db.add(anomaly)
+    db.flush()
+
+    _bm.anomaly_total.add(1, {
+        "anomaly_type": anomaly_type,
+        "operation": decision.operation,
+        "provider": decision.provider,
+        "model": decision.model,
+    })
+
+    logger.info(
+        "RECONCILE anomaly | type=%s decision=%s op=%s %s/%s",
+        anomaly_type, decision.id, decision.operation,
+        decision.provider, decision.model,
+    )
+
+
+@celery_app.task
+def reconcile_payments():
+    """Daily task: expire stale PENDING payment transactions older than 24h."""
+    db = SessionLocal()
+    try:
+        from app.services.payment_service import PaymentService
+
+        service = PaymentService(db)
+        result = service.reconcile_stale_transactions()
+        logger.info("Payment reconciliation complete: %s", result)
+        return result
+    except Exception:
+        logger.warning("reconcile_payments failed", exc_info=True)
+        db.rollback()
+    finally:
+        db.close()

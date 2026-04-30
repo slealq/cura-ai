@@ -1,9 +1,18 @@
 'use client';
 
-import { Loader2, AlertCircle, X } from 'lucide-react';
+import { Loader2, AlertCircle, X, Zap, Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { GeneratedImage } from '@/types';
 import { generationApi } from '@/lib/api';
+
+function formatDuration(createdAt: string, completedAt: string): string {
+  const ms = new Date(completedAt).getTime() - new Date(createdAt).getTime();
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${minutes}m${secs > 0 ? ` ${secs}s` : ''}`;
+}
 
 const statusStyles: Record<string, string> = {
   pending: 'bg-gray-100 text-gray-700 dark:bg-gray-900/50 dark:text-gray-300',
@@ -108,17 +117,33 @@ export default function GeneratedImageCard({
         ) : null}
       </div>
 
-      {/* Model badge */}
-      {image.base_model && (
-        <div className="absolute bottom-2 left-2 group-hover:opacity-0 transition-opacity">
+      {/* Model badge + cost/duration */}
+      <div className="absolute bottom-2 left-2 right-2 flex items-end justify-between group-hover:opacity-0 transition-opacity">
+        {image.base_model ? (
           <span className={cn(
             'px-1.5 py-0.5 rounded-full text-[10px] font-semibold',
             modelBadgeStyles[image.base_model] || 'bg-gray-100 text-gray-700 dark:bg-gray-900/50 dark:text-gray-300'
           )}>
             {modelLabels[image.base_model] || image.base_model}
           </span>
-        </div>
-      )}
+        ) : <span />}
+        {image.status === 'completed' && (image.cost_sparks != null || image.completed_at) && (
+          <div className="flex items-center gap-1.5">
+            {image.completed_at && (
+              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-black/50 text-white">
+                <Clock className="h-2.5 w-2.5" />
+                {formatDuration(image.created_at, image.completed_at)}
+              </span>
+            )}
+            {image.cost_sparks != null && (
+              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-black/50 text-amber-300">
+                <Zap className="h-2.5 w-2.5" />
+                {image.cost_sparks}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Prompt preview on hover */}
       <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-3 opacity-0 group-hover:opacity-100 transition-opacity">

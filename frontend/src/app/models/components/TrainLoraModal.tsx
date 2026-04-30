@@ -2,10 +2,11 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { generationApi, foldersApi, clustersApi, settingsApi } from '@/lib/api';
-import { X } from 'lucide-react';
+import { generationApi, foldersApi, clustersApi, settingsApi, billingApi } from '@/lib/api';
+import { X, Zap } from 'lucide-react';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
+import { trackFunnelStep } from '@/lib/observability';
+import ModelSelector from '@/components/ModelSelector';
 import FluxTrainForm, { type FluxTrainData } from './FluxTrainForm';
 import QwenTrainForm, { type QwenTrainData } from './QwenTrainForm';
 
@@ -50,6 +51,13 @@ export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
     enabled: open,
   });
 
+  // Fetch training costs
+  const { data: trainingCosts } = useQuery({
+    queryKey: ['training-costs'],
+    queryFn: billingApi.getTrainingCosts,
+    enabled: open,
+  });
+
   // Initialize base model from settings
   useEffect(() => {
     if (baseModelData && !hasInitialized.current) {
@@ -71,6 +79,7 @@ export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
   const trainMutation = useMutation({
     mutationFn: generationApi.trainLora,
     onSuccess: (data) => {
+      trackFunnelStep('training', 'train_started', { jobId: data.job_id, baseModel });
       toast.success(`Training started! Job #${data.job_id}`);
       queryClient.invalidateQueries({ queryKey: ['lora-models'] });
       queryClient.invalidateQueries({ queryKey: ['jobs'] });
@@ -82,10 +91,12 @@ export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
   });
 
   const handleFluxSubmit = (data: FluxTrainData) => {
+    trackFunnelStep('training', 'config_saved', { baseModel, source: data.folder_id ? 'folder' : 'cluster' });
     trainMutation.mutate(data);
   };
 
   const handleQwenSubmit = (data: QwenTrainData) => {
+    trackFunnelStep('training', 'config_saved', { baseModel, source: data.folder_id ? 'folder' : 'cluster' });
     trainMutation.mutate(data);
   };
 
@@ -118,25 +129,21 @@ export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
             </button>
           </div>
 
-          {/* Base Model Toggle */}
+          {/* Base Model */}
           <div>
-            <label className="block text-sm font-medium mb-1">Base Model *</label>
-            <div className="flex rounded-lg border border-border overflow-hidden">
-              {BASE_MODELS.map((m) => (
-                <button
-                  key={m.value}
-                  onClick={() => setBaseModel(m.value)}
-                  className={cn(
-                    'flex-1 px-3 py-1.5 text-sm font-medium transition-colors',
-                    baseModel === m.value
-                      ? 'bg-primary text-primary-foreground'
-                      : 'hover:bg-muted'
-                  )}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
+            <ModelSelector
+              label="Base Model *"
+              models={BASE_MODELS}
+              value={baseModel}
+              onChange={(v) => setBaseModel(v)}
+              size="sm"
+            />
+            {trainingCosts?.costs[baseModel] != null && trainingCosts.costs[baseModel] > 0 && (
+              <span className="inline-flex items-center gap-0.5 text-xs text-amber-600 dark:text-amber-400 mt-1.5">
+                <Zap className="h-3 w-3" />
+                ~{trainingCosts.costs[baseModel]} sparks per training run
+              </span>
+            )}
           </div>
 
           {/* Model-specific form */}

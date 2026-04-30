@@ -24,9 +24,33 @@ class ImageMetadataResponse(BaseModel):
     tagging_model: str | None = None
     caption_model: str | None = None
     embedding_model: str | None = None
+    tagged_at: datetime | None = None
+    described_at: datetime | None = None
+    embedded_at: datetime | None = None
+    tagging_duration_ms: int | None = None
+    caption_duration_ms: int | None = None
+    embedding_duration_ms: int | None = None
 
     class Config:
         from_attributes = True
+
+
+class ProcessingCostOperation(BaseModel):
+    """Single processing operation cost."""
+
+    operation: str
+    provider: str
+    model: str
+    sparks: float
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+
+class ProcessingCostResponse(BaseModel):
+    """Per-image processing cost breakdown."""
+
+    operations: list[ProcessingCostOperation] = Field(default_factory=list)
+    total_sparks: float = 0
 
 
 class ImageResponse(BaseModel):
@@ -132,6 +156,7 @@ class JobResponse(BaseModel):
     image_id: int | None = None
     image_filename: str | None = None
     image_thumbnail: str | None = None
+    charged_cost: float | None = None
 
     class Config:
         from_attributes = True

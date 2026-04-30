@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { jobsApi } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
+import { trackFunnelStep } from '@/lib/observability';
 import type { Job } from '@/types';
 
 const JOB_TYPE_LABELS: Record<string, string> = {
@@ -16,8 +17,9 @@ const JOB_TYPE_LABELS: Record<string, string> = {
   cluster: 'Clustering',
   summarize_cluster: 'Summarization',
   full_pipeline: 'Full Pipeline',
-  reprocess: 'Reprocess',
-  batch_reprocess: 'Batch Reprocess',
+  reprocess: 'Describe',
+  batch_reprocess: 'Batch Describe',
+  batch_describe: 'Batch Describe',
   lora_train: 'LoRA Training',
   generate_image: 'Image Generation',
   batch_generate: 'Batch Generation',
@@ -31,6 +33,9 @@ function jobLabel(job: Job): string {
 
 // Job types that may create/modify folders — refresh folder list on completion
 const FOLDER_AFFECTING_JOBS = new Set(['ingest', 'folder_delete']);
+
+// Job types that replace/update clusters — refresh cluster list on completion
+const CLUSTER_AFFECTING_JOBS = new Set(['cluster', 'summarize_cluster']);
 
 export function useJobNotifications() {
   const router = useRouter();
@@ -83,11 +88,26 @@ export function useJobNotifications() {
           duration: 3000,
         });
 
+        // Track funnel completion events
+        if (job.job_type === 'ingest') {
+          trackFunnelStep('upload', 'images_visible', { jobId: job.id });
+        }
+        if (job.job_type === 'lora_train') {
+          trackFunnelStep('training', 'training_complete', { jobId: job.id });
+        }
+
         // Refresh folder list when ingest/delete jobs complete (deferred folder assignment)
         if (FOLDER_AFFECTING_JOBS.has(job.job_type)) {
           queryClient.invalidateQueries({ queryKey: ['folders'] });
           queryClient.invalidateQueries({ queryKey: ['images'] });
+          queryClient.invalidateQueries({ queryKey: ['unfiled-images'] });
+          queryClient.invalidateQueries({ queryKey: ['all-images'] });
           queryClient.invalidateQueries({ queryKey: ['stats'] });
+        }
+
+        // Refresh cluster list when clustering completes
+        if (CLUSTER_AFFECTING_JOBS.has(job.job_type)) {
+          queryClient.invalidateQueries({ queryKey: ['clusters'] });
         }
 
         // Clean up sessionStorage tracking for completed folder deletes

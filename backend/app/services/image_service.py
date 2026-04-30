@@ -3,9 +3,11 @@ import logging
 import time
 from datetime import datetime
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import Image, ImageMetadata, ImageSource, ImageStatus
+from app.models.folder import FolderImage
 from app.models.image import STATUS_ORDER
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.services.log_service import write_log
@@ -167,15 +169,14 @@ class ImageService:
         # Generate unique object key
         object_key = self.storage.generate_object_key(filename)
 
-        # Compute MIME type, dimensions, and perceptual hash in a single PIL open
-        mime_type, width, height, perceptual_hash = (
-            self.storage.compute_image_metadata(file_data)
-        )
+        # Detect MIME type only — dimensions and phash are deferred to the
+        # Celery worker (process_ingest_batch) to keep the HTTP handler fast.
+        mime_type = self.storage.get_mime_type(file_data)
 
         # Save raw original to storage (1 write)
         await self.storage.save_image(file_data, object_key, mime_type)
 
-        # Create Image record with metadata already populated
+        # Create PENDING record — Celery will populate width/height/phash
         image = Image(
             user_id=self.user_id,
             source=source,
@@ -185,14 +186,20 @@ class ImageService:
             file_hash=file_hash,
             file_size=len(file_data),
             mime_type=mime_type,
-            width=width,
-            height=height,
-            perceptual_hash=perceptual_hash,
+            width=None,
+            height=None,
+            perceptual_hash=None,
             status=ImageStatus.PENDING,
         )
 
         self.db.add(image)
-        self.db.flush()  # Get the ID without committing — caller batches the commit
+        try:
+            self.db.flush()  # Get the ID without committing — caller batches the commit
+        except IntegrityError:
+            # Concurrent duplicate: another chunk inserted the same file_hash
+            # between our check and this flush. Treat as duplicate.
+            self.db.rollback()
+            return None
 
         return image
 
@@ -206,7 +213,9 @@ class ImageService:
         self,
         status: ImageStatus | None = None,
         min_status: ImageStatus | None = None,
+        max_status: ImageStatus | None = None,
         source: ImageSource | None = None,
+        in_folder: bool | None = None,
         skip: int = 0,
         limit: int = 100,
     ) -> list[Image]:
@@ -221,8 +230,18 @@ class ImageService:
             min_rank = STATUS_ORDER.get(min_status, 0)
             eligible = [s for s, rank in STATUS_ORDER.items() if rank >= min_rank]
             query = query.filter(Image.status.in_(eligible))
+        elif max_status:
+            max_rank = STATUS_ORDER.get(max_status, 6)
+            eligible = [s for s, rank in STATUS_ORDER.items() if rank <= max_rank]
+            query = query.filter(Image.status.in_(eligible))
         if source:
             query = query.filter(Image.source == source)
+        if in_folder is not None:
+            folder_subq = self.db.query(FolderImage.image_id).distinct().subquery()
+            if in_folder:
+                query = query.filter(Image.id.in_(self.db.query(folder_subq.c.image_id)))
+            else:
+                query = query.filter(~Image.id.in_(self.db.query(folder_subq.c.image_id)))
 
         return query.order_by(Image.created_at.desc()).offset(skip).limit(limit).all()
 
@@ -272,6 +291,14 @@ class ImageService:
         caption_model: str | None = None,
         embedding_model: str | None = None,
         tagging_prompt_version: str | None = None,
+        tag_prompt_text: str | None = None,
+        description_prompt_text: str | None = None,
+        tagged_at: datetime | None = None,
+        described_at: datetime | None = None,
+        tagging_duration_ms: int | None = None,
+        caption_duration_ms: int | None = None,
+        embedded_at: datetime | None = None,
+        embedding_duration_ms: int | None = None,
     ) -> ImageMetadata | None:
         """Save or update image metadata."""
         metadata = self.db.query(ImageMetadata).filter(
@@ -298,6 +325,22 @@ class ImageService:
             metadata.embedding_model = embedding_model
         if tagging_prompt_version is not None:
             metadata.tagging_prompt_version = tagging_prompt_version
+        if tag_prompt_text is not None:
+            metadata.tag_prompt_text = tag_prompt_text
+        if description_prompt_text is not None:
+            metadata.description_prompt_text = description_prompt_text
+        if tagged_at is not None:
+            metadata.tagged_at = tagged_at
+        if described_at is not None:
+            metadata.described_at = described_at
+        if tagging_duration_ms is not None:
+            metadata.tagging_duration_ms = tagging_duration_ms
+        if caption_duration_ms is not None:
+            metadata.caption_duration_ms = caption_duration_ms
+        if embedded_at is not None:
+            metadata.embedded_at = embedded_at
+        if embedding_duration_ms is not None:
+            metadata.embedding_duration_ms = embedding_duration_ms
 
         self.db.commit()
         self.db.refresh(metadata)
@@ -307,6 +350,8 @@ class ImageService:
         self,
         status: ImageStatus | None = None,
         min_status: ImageStatus | None = None,
+        max_status: ImageStatus | None = None,
+        in_folder: bool | None = None,
     ) -> int:
         """Count images with optional status filter."""
         query = self.db.query(Image).filter(Image.user_id == self.user_id)
@@ -316,6 +361,16 @@ class ImageService:
             min_rank = STATUS_ORDER.get(min_status, 0)
             eligible = [s for s, rank in STATUS_ORDER.items() if rank >= min_rank]
             query = query.filter(Image.status.in_(eligible))
+        elif max_status:
+            max_rank = STATUS_ORDER.get(max_status, 6)
+            eligible = [s for s, rank in STATUS_ORDER.items() if rank <= max_rank]
+            query = query.filter(Image.status.in_(eligible))
+        if in_folder is not None:
+            folder_subq = self.db.query(FolderImage.image_id).distinct().subquery()
+            if in_folder:
+                query = query.filter(Image.id.in_(self.db.query(folder_subq.c.image_id)))
+            else:
+                query = query.filter(~Image.id.in_(self.db.query(folder_subq.c.image_id)))
         return query.count()
 
     async def get_image_data(self, image_id: int) -> bytes | None:
@@ -333,6 +388,17 @@ class ImageService:
             self.db.commit()
             return True
         return False
+
+    def delete_images_batch(self, image_ids: list[int]) -> int:
+        """Delete multiple images. Returns count of deleted images."""
+        images = self.db.query(Image).filter(
+            Image.id.in_(image_ids), Image.user_id == self.user_id
+        ).all()
+        count = len(images)
+        for image in images:
+            self.db.delete(image)
+        self.db.commit()
+        return count
 
 
 def get_image_service(db: Session, user_id: int) -> ImageService:

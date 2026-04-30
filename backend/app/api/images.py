@@ -1,26 +1,32 @@
 """Image API endpoints."""
 import logging
+import time
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, lazyload
 
 from app.core.config import get_settings
 from app.core.security import get_current_user, get_current_user_from_token_param
 from app.db.base import get_db
 from app.models import Image, ImageSource, ImageStatus, Job, JobStatus, JobType
+from app.models.pipeline_log import LogCategory
 from app.models.user import User
 from app.schemas import (
     BatchUploadResponse,
     ImageListResponse,
     ImageResponse,
     PipelineStats,
+    ProcessingCostOperation,
+    ProcessingCostResponse,
     StepResponse,
     UploadResponse,
 )
 from app.services.folder_service import get_folder_service
 from app.services.image_service import get_image_service
+from app.services.log_service import write_log
+from app.workers.dispatch import dispatch
 from app.workers.tasks import (
     describe_image,
     embed_image,
@@ -91,6 +97,7 @@ async def upload_images_batch(
     finish ingesting (in _finish_ingest_job_item). This prevents empty folders
     from appearing in the UI before thumbnails are ready.
     """
+    chunk_start = time.monotonic()
     image_service = get_image_service(db, current_user.id)
 
     # Create or load the INGEST job for tracking
@@ -109,6 +116,7 @@ async def upload_images_batch(
         job = Job(
             job_type=JobType.INGEST,
             status=JobStatus.RUNNING,
+            started_at=datetime.utcnow(),
             total_items=total_items or len(files),
             progress=0,
             user_id=current_user.id,
@@ -177,22 +185,44 @@ async def upload_images_batch(
     # Re-fetch job in case a rollback detached it
     job = db.query(Job).filter(Job.id == job.id).first()
 
-    # Track image IDs on the job so workers can count failures at completion
-    # image_ids: new (non-duplicate) images that need Celery processing
-    # all_upload_ids: all uploaded image IDs (including duplicates) for folder assignment
+    # Chunk timing data
+    chunk_elapsed_ms = round((time.monotonic() - chunk_start) * 1000)
+    now_iso = datetime.utcnow().isoformat()
+    n_new = len(new_image_ids)
+    n_dup = sum(1 for u in uploaded if u.status == "duplicate")
+    n_fail = len(failed)
+
+    # Track image IDs + observability counters on the job with row lock
+    # to serialize parallel chunk writers (fixes race on job.result merge)
     all_chunk_ids = [u.image_id for u in uploaded if u.image_id > 0]
-    existing_ids = (job.result or {}).get("image_ids", [])
-    existing_all = (job.result or {}).get("all_upload_ids", [])
-    job.result = {
-        **(job.result or {}),
-        "image_ids": existing_ids + new_image_ids,
-        "all_upload_ids": existing_all + all_chunk_ids,
+    locked_job = db.query(Job).options(lazyload(Job.image)).filter(Job.id == job.id).with_for_update().first()
+    prev = locked_job.result or {}
+    chunk_idx = prev.get("chunks_received", 0)
+    locked_job.result = {
+        **prev,
+        "image_ids": prev.get("image_ids", []) + new_image_ids,
+        "all_upload_ids": prev.get("all_upload_ids", []) + all_chunk_ids,
+        "first_chunk_at": prev.get("first_chunk_at", now_iso),
+        "last_chunk_at": now_iso,
+        "total_received": prev.get("total_received", 0) + len(files),
+        "new_count": prev.get("new_count", 0) + n_new,
+        "duplicate_count": prev.get("duplicate_count", 0) + n_dup,
+        "failed_count": prev.get("failed_count", 0) + n_fail,
+        "chunks_received": chunk_idx + 1,
+        "chunk_timings": prev.get("chunk_timings", []) + [{
+            "chunk_idx": chunk_idx,
+            "n_files": len(files),
+            "n_new": n_new,
+            "n_dup": n_dup,
+            "n_fail": n_fail,
+            "api_ms": chunk_elapsed_ms,
+        }],
     }
     db.commit()
 
     # Dispatch a single batch Celery task for all new images in this chunk
     if new_image_ids:
-        process_ingest_batch.delay(new_image_ids, current_user.id, job.id)
+        dispatch(process_ingest_batch, new_image_ids, current_user.id, job.id)
 
     # Immediately count items that won't go through Celery (duplicates + failures).
     # Only new images are counted by _finish_ingest_job_item in the Celery task.
@@ -209,12 +239,27 @@ async def upload_images_batch(
 
         # Check if job is done (e.g. all items in this chunk were duplicates/failures
         # and no Celery tasks remain from earlier chunks)
-        if job.progress >= job.total_items:
+        if job.progress >= job.total_items and job.status not in (
+            JobStatus.COMPLETED, JobStatus.FAILED,
+        ):
             job.status = JobStatus.COMPLETED
             job.completed_at = datetime.utcnow()
+            job.result = {**(job.result or {}), "processing_done_at": datetime.utcnow().isoformat()}
             db.commit()
             from app.workers.tasks import _assign_folder_on_completion
             _assign_folder_on_completion(db, job)
+
+    write_log(
+        category=LogCategory.TASK,
+        message=(
+            f"Upload chunk {chunk_idx + 1}: {len(files)} files "
+            f"({n_new} new, {n_dup} dup, {n_fail} fail) in {chunk_elapsed_ms}ms"
+        ),
+        task_name="upload_images_batch",
+        job_id=job.id,
+        duration_ms=chunk_elapsed_ms,
+        user_id=current_user.id,
+    )
 
     logger.info(
         f"Batch upload chunk done: job_id={job.id}, "
@@ -234,7 +279,9 @@ async def upload_images_batch(
 async def list_images(
     status: ImageStatus | None = None,
     min_status: ImageStatus | None = None,
+    max_status: ImageStatus | None = None,
     source: ImageSource | None = None,
+    in_folder: bool | None = None,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -245,11 +292,13 @@ async def list_images(
     images = image_service.get_images(
         status=status,
         min_status=min_status,
+        max_status=max_status,
         source=source,
+        in_folder=in_folder,
         skip=skip,
         limit=limit,
     )
-    total = image_service.count_images(status=status, min_status=min_status)
+    total = image_service.count_images(status=status, min_status=min_status, max_status=max_status, in_folder=in_folder)
 
     return ImageListResponse(
         items=[ImageResponse.model_validate(img) for img in images],
@@ -297,6 +346,68 @@ async def get_image_folders(image_id: int, db: Session = Depends(get_db), curren
     folder_service = get_folder_service(db, current_user.id)
     folders = folder_service.get_image_folders(image_id)
     return [{"id": f.id, "name": f.name} for f in folders]
+
+
+@router.get("/{image_id}/processing-costs", response_model=ProcessingCostResponse)
+async def get_processing_costs(
+    image_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get per-image processing cost breakdown from usage records."""
+    from app.models.billing import UsageRecord
+    from app.models.pipeline_log import PipelineLog
+
+    # Verify image belongs to user
+    image_service = get_image_service(db, current_user.id)
+    image = image_service.get_image(image_id)
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    # Join UsageRecord → PipelineLog where PipelineLog.image_id matches
+    records = (
+        db.query(UsageRecord)
+        .join(PipelineLog, UsageRecord.pipeline_log_id == PipelineLog.id)
+        .filter(
+            PipelineLog.image_id == image_id,
+            PipelineLog.user_id == current_user.id,
+        )
+        .order_by(UsageRecord.created_at)
+        .all()
+    )
+
+    # Always compute fractional sparks from charged_cost to avoid per-operation
+    # ceiling inflation (delta_sparks is math.ceil'd per-decision, which overstates
+    # individual costs — e.g. 0.54+1.25+0.01=1.80 displayed as 1+2+1=4).
+    usd_to_sparks = 1000
+
+    operations = []
+    total_sparks = 0.0
+    for r in records:
+        sparks = round(float(r.charged_cost) * usd_to_sparks, 2)
+        total_sparks += sparks
+        operations.append(ProcessingCostOperation(
+            operation=r.operation,
+            provider=r.provider,
+            model=r.model,
+            sparks=sparks,
+            input_tokens=r.input_tokens,
+            output_tokens=r.output_tokens,
+        ))
+
+    return ProcessingCostResponse(operations=operations, total_sparks=round(total_sparks, 2))
+
+
+class BatchDeleteRequest(BaseModel):
+    image_ids: list[int]
+
+
+@router.post("/batch-delete")
+async def batch_delete_images(request: BatchDeleteRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Delete multiple images."""
+    image_service = get_image_service(db, current_user.id)
+    deleted = image_service.delete_images_batch(request.image_ids)
+    return {"status": "deleted", "deleted": deleted}
 
 
 @router.delete("/{image_id}")
@@ -360,6 +471,11 @@ class ReprocessRequest(BaseModel):
 
     tag_prompt: str | None = None
     description_prompt: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    temperature: float | None = None
+    max_tokens_tag: int | None = None
+    max_tokens_describe: int | None = None
 
 
 @router.post("/{image_id}/reprocess", response_model=StepResponse)
@@ -378,6 +494,11 @@ async def reprocess_image(
 
     tag_prompt = request.tag_prompt if request else None
     description_prompt = request.description_prompt if request else None
+    provider = request.provider if request else None
+    model = request.model if request else None
+    temperature = request.temperature if request else None
+    max_tokens_tag = request.max_tokens_tag if request else None
+    max_tokens_describe = request.max_tokens_describe if request else None
 
     # Create job record
     job = Job(
@@ -385,7 +506,7 @@ async def reprocess_image(
         status=JobStatus.PENDING,
         image_id=image_id,
         total_items=1,
-        parameters={"tag_prompt": tag_prompt, "description_prompt": description_prompt},
+        parameters={"tag_prompt": tag_prompt, "description_prompt": description_prompt, "provider": provider, "model": model, "temperature": temperature, "max_tokens_tag": max_tokens_tag, "max_tokens_describe": max_tokens_describe},
         user_id=current_user.id,
     )
     db.add(job)
@@ -394,7 +515,7 @@ async def reprocess_image(
 
     # Reset status and queue for reprocessing
     image_service.update_status(image_id, ImageStatus.INGESTED)
-    task = process_image_pipeline.delay(image_id, tag_prompt=tag_prompt, description_prompt=description_prompt, job_id=job.id, user_id=current_user.id)
+    task = dispatch(process_image_pipeline, image_id, tag_prompt=tag_prompt, description_prompt=description_prompt, provider=provider, model=model, temperature=temperature, max_tokens_tag=max_tokens_tag, max_tokens_describe=max_tokens_describe, job_id=job.id, user_id=current_user.id)
     job.celery_task_id = task.id
     db.commit()
 
@@ -405,12 +526,20 @@ class TagRequest(BaseModel):
     """Request to tag an image."""
 
     tag_prompt: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
 
 
 class DescribeRequest(BaseModel):
     """Request to describe an image."""
 
     description_prompt: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
 
 
 TAG_ALLOWED = {ImageStatus.INGESTED, ImageStatus.TAGGED, ImageStatus.DESCRIBED, ImageStatus.EMBEDDED, ImageStatus.CLUSTERED, ImageStatus.FAILED}
@@ -436,20 +565,24 @@ async def tag_image_endpoint(
         raise HTTPException(status_code=400, detail=f"Image status '{image.status}' does not allow tagging")
 
     tag_prompt = request.tag_prompt if request else None
+    provider = request.provider if request else None
+    model = request.model if request else None
+    temperature = request.temperature if request else None
+    max_tokens = request.max_tokens if request else None
 
     job = Job(
         job_type=JobType.TAG,
         status=JobStatus.PENDING,
         image_id=image_id,
         total_items=1,
-        parameters={"tag_prompt": tag_prompt} if tag_prompt else {},
+        parameters={"tag_prompt": tag_prompt, "provider": provider, "model": model, "temperature": temperature, "max_tokens": max_tokens},
         user_id=current_user.id,
     )
     db.add(job)
     db.commit()
     db.refresh(job)
 
-    task = tag_image.delay(image_id, tag_prompt=tag_prompt, job_id=job.id, user_id=current_user.id)
+    task = dispatch(tag_image, image_id, tag_prompt=tag_prompt, provider=provider, model=model, temperature=temperature, max_tokens_override=max_tokens, job_id=job.id, user_id=current_user.id)
     job.celery_task_id = task.id
     db.commit()
 
@@ -474,20 +607,24 @@ async def describe_image_endpoint(
         raise HTTPException(status_code=400, detail=f"Image status '{image.status}' does not allow describing")
 
     description_prompt = request.description_prompt if request else None
+    provider = request.provider if request else None
+    model = request.model if request else None
+    temperature = request.temperature if request else None
+    max_tokens = request.max_tokens if request else None
 
     job = Job(
         job_type=JobType.DESCRIBE,
         status=JobStatus.PENDING,
         image_id=image_id,
         total_items=1,
-        parameters={"description_prompt": description_prompt} if description_prompt else {},
+        parameters={"description_prompt": description_prompt, "provider": provider, "model": model, "temperature": temperature, "max_tokens": max_tokens},
         user_id=current_user.id,
     )
     db.add(job)
     db.commit()
     db.refresh(job)
 
-    task = describe_image.delay(image_id, description_prompt=description_prompt, job_id=job.id, user_id=current_user.id)
+    task = dispatch(describe_image, image_id, description_prompt=description_prompt, provider=provider, model=model, temperature=temperature, max_tokens_override=max_tokens, job_id=job.id, user_id=current_user.id)
     job.celery_task_id = task.id
     db.commit()
 
@@ -521,7 +658,7 @@ async def embed_image_endpoint(
     db.commit()
     db.refresh(job)
 
-    task = embed_image.delay(image_id, job_id=job.id, user_id=current_user.id)
+    task = dispatch(embed_image, image_id, job_id=job.id, user_id=current_user.id)
     job.celery_task_id = task.id
     db.commit()
 

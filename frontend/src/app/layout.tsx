@@ -1,17 +1,55 @@
 'use client';
 
 import './globals.css';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryCache, QueryClient, QueryClientProvider, MutationCache } from '@tanstack/react-query';
 import { useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { Toaster } from 'sonner';
+import { AxiosError } from 'axios';
+import { Toaster, toast } from 'sonner';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
 import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { UploadProvider } from '@/contexts/UploadContext';
 import { useJobNotifications } from '@/hooks/useJobNotifications';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
+import { initSentry } from '@/lib/sentry';
+import { setUser, trackNavigation, captureError } from '@/lib/observability';
+
+function SentryInit() {
+  const didInit = useRef(false);
+  useEffect(() => {
+    if (!didInit.current) {
+      didInit.current = true;
+      initSentry();
+    }
+  }, []);
+  return null;
+}
+
+function SentryUserSync() {
+  const { user } = useAuth();
+  const pathname = usePathname();
+  const prevPathRef = useRef(pathname);
+
+  useEffect(() => {
+    if (user) {
+      setUser({ id: user.id, email: user.email });
+    } else {
+      setUser(null);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    const prev = prevPathRef.current;
+    if (prev !== pathname) {
+      trackNavigation(prev, pathname);
+      prevPathRef.current = pathname;
+    }
+  }, [pathname]);
+
+  return null;
+}
 
 function AppShell({ children }: { children: React.ReactNode }) {
   const { resolvedTheme } = useTheme();
@@ -19,6 +57,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <>
+      <SentryUserSync />
       <div className="flex h-screen">
         <Sidebar />
         <div className="flex-1 flex flex-col overflow-hidden">
@@ -75,6 +114,34 @@ export default function RootLayout({
   const [queryClient] = useState(
     () =>
       new QueryClient({
+        queryCache: new QueryCache({
+          onError: (error, query) => {
+            const axiosErr = error as AxiosError;
+            const status = axiosErr.response?.status;
+            // Skip 401s — handled by Axios interceptor refresh logic
+            if (status === 401) return;
+            // Skip background refetch failures when cached data exists (stale-while-revalidate)
+            if (query.state.data !== undefined) return;
+            // Toast user-facing error
+            const message = error.message || 'Something went wrong';
+            toast.error(message);
+            // Report 5xx errors to Sentry
+            if (status && status >= 500) {
+              captureError(error, { queryKey: query.queryKey, status });
+            }
+          },
+        }),
+        mutationCache: new MutationCache({
+          onError: (error) => {
+            // Don't toast — mutations have per-component onError toasts.
+            // Just report 5xx to Sentry.
+            const axiosErr = error as AxiosError;
+            const status = axiosErr.response?.status;
+            if (status && status >= 500) {
+              captureError(error, { status });
+            }
+          },
+        }),
         defaultOptions: {
           queries: {
             staleTime: 30000,
@@ -87,8 +154,9 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <title>Cura.ai</title>
-        <meta name="description" content="AI-powered image tagging, description, clustering, and semantic search" />
+        <title>SightLab</title>
+        <meta name="description" content="SightLab — AI-powered image intelligence, tagging, and generation" />
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
         <script
           dangerouslySetInnerHTML={{
             __html: `
@@ -115,6 +183,7 @@ export default function RootLayout({
           <ThemeProvider>
             <AuthProvider>
               <UploadProvider>
+                <SentryInit />
                 <AuthGate>{children}</AuthGate>
               </UploadProvider>
             </AuthProvider>

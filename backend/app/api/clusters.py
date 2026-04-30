@@ -24,6 +24,7 @@ from app.schemas import (
 )
 from app.services.cluster_service import get_cluster_service
 from app.services.storage import get_storage_service
+from app.workers.dispatch import dispatch
 from app.workers.tasks import cluster_all_images, summarize_cluster, summarize_clusters
 
 logger = logging.getLogger(__name__)
@@ -216,7 +217,7 @@ async def trigger_cluster_summarization(
         raise HTTPException(status_code=404, detail="Cluster not found")
 
     # Queue summarization task
-    summarize_cluster.delay(cluster_id, current_user.id)
+    dispatch(summarize_cluster, cluster_id, current_user.id)
 
     return {"status": "queued", "cluster_id": cluster_id, "message": "Summarization queued"}
 
@@ -240,7 +241,7 @@ async def trigger_reclustering(
     db.refresh(job)
 
     # Queue clustering task
-    task = cluster_all_images.delay(job.id, current_user.id)
+    task = dispatch(cluster_all_images, current_user.id, job_id=job.id)
 
     # Update job with task ID
     job.celery_task_id = task.id
@@ -275,7 +276,7 @@ async def trigger_all_cluster_summarization(db: Session = Depends(get_db), curre
     db.refresh(job)
 
     # Queue task
-    task = summarize_clusters.delay(cluster_ids, job.id, current_user.id)
+    task = dispatch(summarize_clusters, cluster_ids, job.id, current_user.id)
     job.celery_task_id = task.id
     db.commit()
 

@@ -5,17 +5,25 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutGrid,
   FolderOpen,
-  Folder,
   Settings,
   Activity,
   Upload,
   Bug,
   Sparkles,
+  Pencil,
+  Eye,
   Box,
   LogOut,
+  CreditCard,
+  ShieldCheck,
+  Zap,
+  AlertTriangle,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import SightLabLogo from '@/components/SightLabLogo';
+import { useQuery } from '@tanstack/react-query';
+import { cn, formatNumber } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
+import { billingApi } from '@/lib/api';
 
 const ENV_LABEL = process.env.NEXT_PUBLIC_ENV_LABEL || 'local';
 
@@ -36,28 +44,93 @@ const BADGE_COLORS: Record<string, { bg: string; text: string; border: string; d
 
 const navigation = [
   { name: 'Upload', href: '/upload', icon: Upload },
-  { name: 'Folders', href: '/images', icon: FolderOpen },
-  { name: 'Clusters', href: '/', icon: LayoutGrid },
+  { name: 'Images', href: '/images', icon: FolderOpen },
+  { name: 'Clusters', href: '/clusters', icon: LayoutGrid },
   { name: 'Models', href: '/models', icon: Box },
+  { name: 'Vision', href: '/vision', icon: Eye },
   { name: 'Generate', href: '/generate', icon: Sparkles },
+  { name: 'Edit', href: '/edit', icon: Pencil },
   { name: 'Jobs', href: '/jobs', icon: Activity },
+  { name: 'Billing', href: '/billing', icon: CreditCard },
   { name: 'Debug', href: '/debug', icon: Bug },
   { name: 'Settings', href: '/settings', icon: Settings },
 ];
+
+function getSparkTier(balance: number) {
+  if (balance <= 0) return { label: 'Empty', color: 'text-red-500', bg: 'bg-red-500', glow: 'shadow-red-500/40', barBg: 'bg-red-500/15', pct: 0 };
+  if (balance < 50) return { label: 'Low', color: 'text-orange-400', bg: 'bg-orange-400', glow: 'shadow-orange-400/40', barBg: 'bg-orange-400/15', pct: Math.max(5, (balance / 50) * 15) };
+  if (balance < 500) return { label: 'Warm', color: 'text-amber-400', bg: 'bg-amber-400', glow: 'shadow-amber-400/30', barBg: 'bg-amber-400/15', pct: 15 + ((balance - 50) / 450) * 25 };
+  if (balance < 2000) return { label: 'Charged', color: 'text-yellow-400', bg: 'bg-yellow-400', glow: 'shadow-yellow-400/30', barBg: 'bg-yellow-400/10', pct: 40 + ((balance - 500) / 1500) * 25 };
+  if (balance < 5000) return { label: 'Supercharged', color: 'text-emerald-400', bg: 'bg-emerald-400', glow: 'shadow-emerald-400/30', barBg: 'bg-emerald-400/10', pct: 65 + ((balance - 2000) / 3000) * 20 };
+  return { label: 'Overloaded', color: 'text-cyan-400', bg: 'bg-cyan-400', glow: 'shadow-cyan-400/40', barBg: 'bg-cyan-400/10', pct: Math.min(100, 85 + ((balance - 5000) / 10000) * 15) };
+}
+
+function SparkBalance({ balance, reserved }: { balance: number; reserved: number }) {
+  const displayBalance = reserved > 0 ? balance - reserved : balance;
+  const tier = getSparkTier(displayBalance);
+  return (
+    <div className={cn(
+      'rounded-lg border border-border px-3 py-2.5 transition-all',
+      'hover:border-border/80 hover:bg-muted/30',
+      tier.barBg,
+    )}>
+      <div className="flex items-center justify-between mb-1.5">
+        <div className="flex items-center gap-1.5">
+          <Zap className={cn('h-3.5 w-3.5', tier.color, displayBalance > 0 && 'drop-shadow-sm')} />
+          <span className={cn('text-[11px] font-semibold uppercase tracking-wider', tier.color)}>
+            {tier.label}
+          </span>
+        </div>
+        <span className="text-xs text-muted-foreground font-medium">
+          sparks
+        </span>
+      </div>
+      <div className="text-lg font-bold tracking-tight leading-none mb-1.5">
+        {formatNumber(displayBalance)}
+      </div>
+      {reserved > 0 && (
+        <div className="text-[10px] text-muted-foreground mb-1" title={`${formatNumber(reserved)} sparks reserved for in-progress operations`}>
+          {formatNumber(reserved)} reserved
+        </div>
+      )}
+      <div className="h-1 rounded-full bg-muted/50 overflow-hidden">
+        <div
+          className={cn('h-full rounded-full transition-all duration-700 ease-out', tier.bg)}
+          style={{ width: `${tier.pct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
 
 export default function Sidebar() {
   const pathname = usePathname();
   const { user, logout } = useAuth();
 
+  const { data: balanceData } = useQuery({
+    queryKey: ['billing', 'balance'],
+    queryFn: billingApi.getBalance,
+    refetchInterval: 30000,
+    enabled: !!user,
+  });
+
+  const isAdmin = user?.role === 'admin';
+
+  // Build navigation with conditional admin item
+  const navItems = [
+    ...navigation,
+    ...(isAdmin ? [{ name: 'Admin', href: '/admin', icon: ShieldCheck }] : []),
+  ];
+
   return (
     <aside className="w-64 bg-card border-r border-border flex flex-col">
       <div className="p-6 border-b border-border">
-        <Link href="/" className="flex items-center gap-2">
-          <Folder className="h-8 w-8 text-primary" />
+        <Link href="/generate" className="flex items-center gap-2">
+          <SightLabLogo size="sm" />
           <div>
-            <h1 className="font-semibold text-lg">Cura.ai</h1>
+            <h1 className="font-semibold text-lg">SightLab</h1>
             <p className="text-xs text-muted-foreground">
-              Image Intelligence
+              See more. Create more.
             </p>
             {ENV_BADGE[ENV_LABEL] && (() => {
               const colors = BADGE_COLORS[ENV_BADGE[ENV_LABEL]!.color];
@@ -78,8 +151,30 @@ export default function Sidebar() {
         </Link>
       </div>
 
+      {balanceData && (
+        <div className="mx-4 mt-4 space-y-2">
+          <Link href="/billing" className="block group">
+            <SparkBalance balance={balanceData.balance} reserved={balanceData.reserved ?? 0} />
+          </Link>
+          {(balanceData.available ?? balanceData.balance) < 100 && (
+            <Link
+              href="/billing"
+              className={cn(
+                'flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors',
+                (balanceData.available ?? balanceData.balance) <= 0
+                  ? 'bg-red-500/15 text-red-500 border border-red-500/25 hover:bg-red-500/25'
+                  : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/25 hover:bg-amber-500/25',
+              )}
+            >
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              <span>Low balance — <span className="underline">buy more</span></span>
+            </Link>
+          )}
+        </div>
+      )}
+
       <nav className="flex-1 p-4 space-y-1">
-        {navigation.map((item) => {
+        {navItems.map((item) => {
           const isActive =
             pathname === item.href ||
             (item.href !== '/' && pathname.startsWith(item.href));
@@ -104,22 +199,24 @@ export default function Sidebar() {
 
       <div className="p-4 border-t border-border">
         {user && (
-          <div className="flex items-center justify-between">
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium truncate">
-                {user.display_name || user.email}
-              </p>
-              {user.display_name && (
-                <p className="text-xs text-muted-foreground truncate">{user.email}</p>
-              )}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium truncate">
+                  {user.display_name || user.email}
+                </p>
+                {user.display_name && (
+                  <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+                )}
+              </div>
+              <button
+                onClick={logout}
+                className="ml-2 p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
+                title="Sign out"
+              >
+                <LogOut className="h-4 w-4" />
+              </button>
             </div>
-            <button
-              onClick={logout}
-              className="ml-2 p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
-              title="Sign out"
-            >
-              <LogOut className="h-4 w-4" />
-            </button>
           </div>
         )}
       </div>

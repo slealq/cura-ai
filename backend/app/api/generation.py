@@ -16,6 +16,7 @@ from app.models.user import User
 from app.services.evaluation_service import get_evaluation_service
 from app.services.generation_service import get_generation_service
 from app.services.settings_service import get_settings_service
+from app.workers.dispatch import dispatch
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -24,6 +25,18 @@ router = APIRouter(prefix="/generation", tags=["generation"])
 
 
 # --- Schemas ---
+
+
+class ExpandPromptRequest(BaseModel):
+    """Request to expand a terse prompt into a detailed image generation prompt."""
+
+    prompt: str = Field(..., min_length=1)
+
+
+class ExpandPromptResponse(BaseModel):
+    """Response with the expanded prompt."""
+
+    expanded_prompt: str
 
 
 class TrainLoraRequest(BaseModel):
@@ -80,6 +93,11 @@ class GenerateRequest(BaseModel):
     guidance_scale: float = Field(3.5, ge=0.0, le=20.0)
     seed: int | None = None
     num_images: int = Field(1, ge=1, le=8)
+    resolution: str | None = None
+    aspect_ratio: str | None = None
+    safety_tolerance: str | None = None
+    enable_web_search: bool | None = None
+    image_size: str | None = None
 
     @model_validator(mode="after")
     def normalize_loras(self) -> "GenerateRequest":
@@ -173,6 +191,7 @@ class GeneratedImageResponse(BaseModel):
     thumbnail_uri_small: str | None
     thumbnail_uri_medium: str | None
     job_id: int | None
+    cost_sparks: float | None = None
     created_at: str
     completed_at: str | None
 
@@ -298,6 +317,17 @@ def _gen_to_response(gen, db: Session) -> GeneratedImageResponse:
         lora_name = gen.lora_model.name if gen.lora_model else f"LoRA #{gen.lora_model_id}"
         loras_list.append(LoraUsed(lora_model_id=gen.lora_model_id, lora_model_name=lora_name, lora_scale=gen.lora_scale or 1.0))
 
+    # Get per-image cost from job (split evenly for batch jobs)
+    cost_sparks: float | None = None
+    if gen.job_id:
+        job = db.query(Job).filter(Job.id == gen.job_id).first()
+        if job:
+            total_items = max(job.total_items, 1)
+            if job.charged_sparks is not None:
+                cost_sparks = round(job.charged_sparks / total_items, 1)
+            elif job.charged_cost is not None:
+                cost_sparks = round(float(job.charged_cost) / total_items, 1)
+
     return GeneratedImageResponse(
         id=gen.id,
         prompt=gen.prompt,
@@ -319,9 +349,112 @@ def _gen_to_response(gen, db: Session) -> GeneratedImageResponse:
         thumbnail_uri_small=gen.thumbnail_uri_small,
         thumbnail_uri_medium=gen.thumbnail_uri_medium,
         job_id=gen.job_id,
+        cost_sparks=cost_sparks,
         created_at=gen.created_at.isoformat(),
         completed_at=gen.completed_at.isoformat() if gen.completed_at else None,
     )
+
+
+# --- Prompt Expansion ---
+
+
+@router.post("/expand-prompt", response_model=ExpandPromptResponse)
+async def expand_prompt(
+    request: ExpandPromptRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Expand a terse prompt into a detailed image generation prompt using AI."""
+    from openai import AsyncOpenAI
+
+    from app.providers import _resolve_config
+    from app.services.billing_context import (
+        init_trace,
+        set_billing_user,
+        set_trace_id,
+    )
+    from app.services.billing_decorator import billable
+    from app.services.billing_service import BillingService, InsufficientBalanceError, ZeroCostEstimateError
+
+    try:
+        BillingService(db, current_user.id).check_balance_or_raise()
+    except InsufficientBalanceError:
+        raise HTTPException(status_code=402, detail="Insufficient credits")
+
+    keys, _ = _resolve_config(db, current_user.id)
+    openai_key = keys.get("openai")
+    if not openai_key:
+        raise HTTPException(status_code=400, detail="OpenAI API key not configured on the platform.")
+
+    # Use language model settings from provider config
+    settings_svc = get_settings_service(db, current_user.id)
+    provider_config = settings_svc.get_provider_config()
+    expansion_model = provider_config.get("openai_language_model", "gpt-4o-mini")
+    expansion_max_tokens = provider_config.get("max_tokens_expansion", 500)
+
+    client = AsyncOpenAI(api_key=openai_key)
+
+    set_billing_user(current_user.id)
+    init_trace()
+
+    try:
+        with billable(
+            db, current_user.id, operation="expand_prompt",
+            provider="openai", model=expansion_model,
+            prompt_text=request.prompt,
+            request_snapshot={"prompt": request.prompt[:500], "model": expansion_model},
+            defer_debit=False,
+        ) as b_expand:
+            # No idempotency skip for expand_prompt — each call is intentionally unique
+
+            response = await client.chat.completions.create(
+                model=expansion_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a prompt engineer for AI image generation. "
+                            "The user will give you a short, terse image idea. "
+                            "Expand it into a single vivid paragraph suitable for an image generation model. "
+                            "Add details about composition, lighting, style, mood, colors, and textures "
+                            "while preserving the user's original intent. "
+                            "Return ONLY the expanded prompt text with no commentary or explanation."
+                        ),
+                    },
+                    {"role": "user", "content": request.prompt},
+                ],
+                max_tokens=expansion_max_tokens,
+            )
+
+            expanded = response.choices[0].message.content or ""
+            usage = response.usage
+
+            # Record billing via set_actual (direct OpenAI response, not ContextVar)
+            if usage:
+                b_expand.set_actual(
+                    input_tokens=usage.prompt_tokens,
+                    output_tokens=usage.completion_tokens,
+                    response_snapshot={
+                        "model": response.model,
+                        "usage": {"prompt_tokens": usage.prompt_tokens, "completion_tokens": usage.completion_tokens, "total_tokens": usage.total_tokens},
+                        "expanded_length": len(expanded),
+                    },
+                )
+
+            return ExpandPromptResponse(expanded_prompt=expanded.strip())
+
+    except (InsufficientBalanceError, ZeroCostEstimateError) as e:
+        if isinstance(e, InsufficientBalanceError):
+            raise HTTPException(status_code=402, detail="Insufficient credits")
+        raise HTTPException(status_code=422, detail="Billing configuration error — cannot price this operation")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to expand prompt: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to expand prompt: {str(e)}")
+    finally:
+        set_billing_user(None)
+        set_trace_id(None)
 
 
 # --- LoRA Routes ---
@@ -336,7 +469,7 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db), c
         raise HTTPException(status_code=400, detail="Provide either folder_id or cluster_id, not both")
 
     image_count = 0
-    job_params: dict = {"trigger_word": request.trigger_word or ""}
+    job_params: dict = {"trigger_word": request.trigger_word or "", "base_model": request.base_model}
 
     if request.folder_id:
         from app.models.folder import Folder, FolderImage
@@ -425,7 +558,7 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db), c
 
     # Dispatch Celery task
     from app.workers.generation_tasks import train_lora as train_lora_task
-    task = train_lora_task.delay(lora.id, job.id, current_user.id)
+    task = dispatch(train_lora_task, lora.id, job.id, current_user.id)
 
     job.celery_task_id = task.id
     db.commit()
@@ -689,7 +822,7 @@ async def recover_lora_training(lora_id: int, db: Session = Depends(get_db), cur
                     db.commit()
             # Dispatch best-effort weights download
             from app.workers.generation_tasks import download_lora_weights as dl_task
-            dl_task.delay(lora_id, current_user.id)
+            dispatch(dl_task, lora_id, current_user.id)
             return {"status": "recovered", "lora_url": result.lora_url, "request_id": request_id}
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Training completed but failed to fetch result: {e}")
@@ -708,7 +841,7 @@ async def recover_lora_training(lora_id: int, db: Session = Depends(get_db), cur
     else:
         # Still running — re-dispatch celery task to resume polling
         from app.workers.generation_tasks import train_lora as train_lora_task
-        task = train_lora_task.delay(lora_id, lora.job_id, current_user.id)
+        task = dispatch(train_lora_task, lora_id, lora.job_id, current_user.id)
         if lora.job_id:
             job = db.query(Job).filter(Job.id == lora.job_id).first()
             if job:
@@ -754,7 +887,7 @@ async def retry_lora_training(lora_id: int, db: Session = Depends(get_db), curre
 
     # Dispatch
     from app.workers.generation_tasks import train_lora as train_lora_task
-    task = train_lora_task.delay(lora_id, job.id, current_user.id)
+    task = dispatch(train_lora_task, lora_id, job.id, current_user.id)
 
     job.celery_task_id = task.id
     db.commit()
@@ -785,7 +918,7 @@ async def download_lora_weights_endpoint(lora_id: int, db: Session = Depends(get
         raise HTTPException(status_code=400, detail="Weights already downloaded")
 
     from app.workers.generation_tasks import download_lora_weights as dl_task
-    dl_task.delay(lora_id, current_user.id)
+    dispatch(dl_task, lora_id, current_user.id)
     return {"status": "download_started"}
 
 
@@ -807,7 +940,7 @@ async def download_all_lora_weights(db: Session = Depends(get_db), current_user:
 
     from app.workers.generation_tasks import download_lora_weights as dl_task
     for model in models:
-        dl_task.delay(model.id, current_user.id)
+        dispatch(dl_task, model.id, current_user.id)
 
     return {"status": "downloads_queued", "count": len(models)}
 
@@ -891,14 +1024,40 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
     settings_service.get_generation_config()
     provider = settings.default_generation_provider
 
-    # Build generation_params
-    gen_params: dict = {
-        "width": request.width,
-        "height": request.height,
-        "num_inference_steps": request.num_inference_steps,
-        "guidance_scale": request.guidance_scale,
-        "seed": request.seed,
-    }
+    # Build generation_params — only include params the model actually supports
+    from app.providers.fal_provider import FAL_MODEL_CONFIG
+    model_config = FAL_MODEL_CONFIG.get(effective_base_model, {})
+
+    gen_params: dict = {}
+
+    # Width/height: included for models that use image_size dict (not resolution/aspect or preset models)
+    # For image_size_preset models: store width/height only when custom (no preset selected)
+    if model_config.get("uses_image_size_presets"):
+        if not request.image_size:
+            # Custom size mode — send width/height instead of preset
+            gen_params["width"] = request.width
+            gen_params["height"] = request.height
+    elif not model_config.get("uses_resolution_aspect"):
+        gen_params["width"] = request.width
+        gen_params["height"] = request.height
+
+    # Steps/guidance: only for models that support them
+    if model_config.get("supports_steps_guidance", True):
+        gen_params["num_inference_steps"] = request.num_inference_steps
+        gen_params["guidance_scale"] = request.guidance_scale
+
+    if request.seed is not None:
+        gen_params["seed"] = request.seed
+    if request.resolution:
+        gen_params["resolution"] = request.resolution
+    if request.aspect_ratio:
+        gen_params["aspect_ratio"] = request.aspect_ratio
+    if request.safety_tolerance:
+        gen_params["safety_tolerance"] = request.safety_tolerance
+    if request.enable_web_search is not None:
+        gen_params["enable_web_search"] = request.enable_web_search
+    if request.image_size:
+        gen_params["image_size"] = request.image_size
     if loras_for_params:
         gen_params["loras"] = loras_for_params
 
@@ -911,6 +1070,7 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
             parameters={
                 "prompt": request.prompt[:200],
                 "num_images": request.num_images,
+                "base_model": effective_base_model,
                 "lora_model_id": first_lora_id,
                 **({"loras": loras_for_params} if loras_for_params else {}),
             },
@@ -944,10 +1104,10 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
     from app.workers.generation_tasks import generate_image as gen_task
 
     if request.num_images == 1:
-        task = gen_task.delay(gen_ids[0], job.id, current_user.id)
+        task = dispatch(gen_task, gen_ids[0], job.id, current_user.id)
         job.celery_task_id = task.id
     else:
-        task = batch_generate.delay(gen_ids, job.id, current_user.id)
+        task = dispatch(batch_generate, gen_ids, job.id, current_user.id)
         job.celery_task_id = task.id
 
     db.commit()
@@ -976,10 +1136,12 @@ async def list_generated_images(
         status=status_filter,
         skip=skip,
         limit=limit,
+        mode="generate",
     )
     total = gen_service.count_generated_images(
         lora_model_id=lora_model_id,
         status=status_filter,
+        mode="generate",
     )
     return GeneratedImageListResponse(
         items=[_gen_to_response(g, db) for g in items],
@@ -1256,7 +1418,7 @@ async def start_evaluation(lora_id: int, request: StartEvaluationRequest, db: Se
 
     # Dispatch Celery task
     from app.workers.generation_tasks import evaluate_lora as evaluate_task
-    task = evaluate_task.delay(evaluation.id, job.id, current_user.id)
+    task = dispatch(evaluate_task, evaluation.id, job.id, current_user.id)
 
     job.celery_task_id = task.id
     db.commit()

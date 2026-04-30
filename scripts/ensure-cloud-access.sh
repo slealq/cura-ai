@@ -62,14 +62,20 @@ fi
 
 # 5. Check Container App status (informational)
 echo ""
-echo "--- Container App Replicas ---"
+echo "--- Container App Status ---"
 for APP in "${APPS[@]}"; do
-    REPLICAS=$(az containerapp show --resource-group "$RG" --name "$APP" \
-        --query "properties.template.scale.minReplicas" -o tsv 2>/dev/null || echo "0")
-    if [ "$REPLICAS" != "0" ]; then
-        echo "[OK] $APP running (minReplicas=$REPLICAS)"
+    ACTIVE_REVISIONS=$(az containerapp revision list --resource-group "$RG" --name "$APP" \
+        --query "length([?properties.active])" -o tsv 2>/dev/null || echo "0")
+    if [ "$ACTIVE_REVISIONS" = "0" ]; then
+        echo "[--] $APP has no active revisions (stopped via cura azure stop)"
     else
-        echo "[--] $APP scaled to 0"
+        REPLICAS=$(az containerapp show --resource-group "$RG" --name "$APP" \
+            --query "properties.template.scale.minReplicas" -o tsv 2>/dev/null || echo "0")
+        if [ "$REPLICAS" != "0" ]; then
+            echo "[OK] $APP running (minReplicas=$REPLICAS)"
+        else
+            echo "[--] $APP scaled to 0"
+        fi
     fi
 done
 echo ""

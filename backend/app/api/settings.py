@@ -8,14 +8,14 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_admin
 from app.db.base import get_db
 from app.models.api_key import APIProvider
 from app.models.user import User
-from app.services.api_key_service import get_api_key_service
 from app.services.settings_service import (
     DEFAULT_CLUSTERING_CONFIG,
     DEFAULT_DESCRIPTION_PROMPT,
+    DEFAULT_EDIT_CONFIGS,
     DEFAULT_GENERATION_CONFIG,
     DEFAULT_GENERATION_CONFIGS,
     DEFAULT_PROVIDER_CONFIG,
@@ -117,9 +117,16 @@ class ProviderConfigResponse(BaseModel):
     openai_vision_model: str
     openai_embedding_model: str
     anthropic_vision_model: str
+    fal_vision_model: str
     max_tokens_tagging: int
     max_tokens_description: int
     max_tokens_summarization: int
+    language_provider: str
+    openai_language_model: str
+    anthropic_language_model: str
+    fal_language_model: str
+    max_tokens_expansion: int
+    max_tokens_suggestion: int
 
 
 class ProviderConfigUpdateRequest(BaseModel):
@@ -130,9 +137,16 @@ class ProviderConfigUpdateRequest(BaseModel):
     openai_vision_model: str | None = None
     openai_embedding_model: str | None = None
     anthropic_vision_model: str | None = None
+    fal_vision_model: str | None = None
     max_tokens_tagging: int | None = None
     max_tokens_description: int | None = None
     max_tokens_summarization: int | None = None
+    language_provider: str | None = None
+    openai_language_model: str | None = None
+    anthropic_language_model: str | None = None
+    fal_language_model: str | None = None
+    max_tokens_expansion: int | None = None
+    max_tokens_suggestion: int | None = None
 
 
 class ProviderModelInfo(BaseModel):
@@ -318,11 +332,25 @@ async def reset_prompt_settings(
 async def suggest_prompt(request: PromptSuggestRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Use AI to suggest edits to a prompt based on a change request."""
     try:
-        key_service = get_api_key_service(db, current_user.id)
-        openai_key = key_service.resolve_key(APIProvider.OPENAI)
+        from app.core.config import get_settings
+        from app.services.billing_service import BillingService, InsufficientBalanceError
+
+        try:
+            BillingService(db, current_user.id).check_balance_or_raise()
+        except InsufficientBalanceError:
+            raise HTTPException(status_code=402, detail="Insufficient credits")
+
+        app_settings = get_settings()
+        openai_key = app_settings.openai_api_key
         if not openai_key:
-            raise HTTPException(status_code=400, detail="OpenAI API key not set. Configure it in Settings > API Keys.")
+            raise HTTPException(status_code=400, detail="OpenAI API key not configured on the platform.")
         client = AsyncOpenAI(api_key=openai_key)
+
+        # Use language model settings from provider config
+        settings_service = get_settings_service(db, current_user.id)
+        provider_config = settings_service.get_provider_config()
+        suggestion_model = provider_config.get("openai_language_model", "gpt-4o-mini")
+        suggestion_max_tokens = provider_config.get("max_tokens_suggestion", 2000)
 
         system_prompt = (
             f"You are helping edit an AI prompt for image {request.prompt_type} generation. "
@@ -332,7 +360,7 @@ async def suggest_prompt(request: PromptSuggestRequest, db: Session = Depends(ge
         )
 
         response = await client.chat.completions.create(
-            model="gpt-4o",
+            model=suggestion_model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {
@@ -343,7 +371,7 @@ async def suggest_prompt(request: PromptSuggestRequest, db: Session = Depends(ge
                     ),
                 },
             ],
-            max_tokens=2000,
+            max_tokens=suggestion_max_tokens,
         )
 
         suggested = response.choices[0].message.content or ""
@@ -367,45 +395,105 @@ def _api_key_to_response(key) -> APIKeyResponse:
     )
 
 
-@router.get("/api-keys", response_model=list[APIKeyResponse])
-async def list_api_keys(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """List all stored API keys (returns metadata only, never the actual key)."""
-    service = get_api_key_service(db, current_user.id)
-    keys = service.get_all_keys()
+ENV_VAR_MAP = {
+    APIProvider.OPENAI: app_settings.openai_api_key,
+    APIProvider.ANTHROPIC: app_settings.anthropic_api_key,
+    APIProvider.FAL: app_settings.fal_api_key,
+    # Sentry has no env var fallback — always stored in DB
+}
 
-    # Build response including providers with no stored key
-    stored = {k.provider: k for k in keys}
-    result = []
+
+@router.get("/api-keys", response_model=list[APIKeyResponse])
+async def list_api_keys(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """List platform API key status for all providers (admin only)."""
+    from app.services.api_key_service import get_api_key_service
+
+    service = get_api_key_service(db, current_user.id)
+    results = []
     for provider in APIProvider:
-        if provider.value in stored:
-            result.append(_api_key_to_response(stored[provider.value]))
+        key = service.get_key(provider)
+        if key:
+            results.append(_api_key_to_response(key))
         else:
-            result.append(APIKeyResponse(
-                provider=provider.value,
-                key_suffix=None,
-                status="not_set",
-                last_validated_at=None,
-                last_error=None,
-            ))
-    return result
+            env_val = ENV_VAR_MAP.get(provider) or None
+            if env_val:
+                results.append(APIKeyResponse(
+                    provider=provider.value,
+                    key_suffix=env_val[-4:] if len(env_val) >= 4 else env_val,
+                    status="env_var",
+                    last_validated_at=None,
+                    last_error="Configured via environment variable",
+                ))
+            else:
+                results.append(APIKeyResponse(
+                    provider=provider.value,
+                    key_suffix=None,
+                    status="not_configured",
+                    last_validated_at=None,
+                    last_error=None,
+                ))
+    return results
 
 
 @router.put("/api-keys/{provider}", response_model=APIKeyResponse)
-async def save_api_key(provider: str, request: APIKeySaveRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Save or update an API key (validates first)."""
+async def save_api_key(
+    provider: str,
+    request: APIKeySaveRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Save and validate a platform API key (admin only)."""
+    from app.services.api_key_service import get_api_key_service
+
     try:
         api_provider = APIProvider(provider)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
     service = get_api_key_service(db, current_user.id)
-    api_key, result = await service.validate_and_save_key(api_provider, request.key)
-    return _api_key_to_response(api_key)
+    key, _result = await service.validate_and_save_key(api_provider, request.key)
+    return _api_key_to_response(key)
+
+
+@router.post("/api-keys/{provider}/validate", response_model=APIKeyResponse)
+async def validate_api_key(
+    provider: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Re-validate an existing platform API key (admin only)."""
+    from app.services.api_key_service import get_api_key_service
+
+    try:
+        api_provider = APIProvider(provider)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+
+    service = get_api_key_service(db, current_user.id)
+    existing = service.get_key(api_provider)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"No stored key for {provider}")
+
+    decrypted = service.get_decrypted_key(api_provider)
+    if not decrypted:
+        raise HTTPException(status_code=500, detail="Failed to decrypt stored key")
+
+    key, _result = await service.validate_and_save_key(api_provider, decrypted)
+    return _api_key_to_response(key)
 
 
 @router.delete("/api-keys/{provider}", status_code=204)
-async def delete_api_key(provider: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Remove a stored API key."""
+async def delete_api_key(
+    provider: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Delete a platform API key (admin only)."""
+    from app.services.api_key_service import get_api_key_service
+
     try:
         api_provider = APIProvider(provider)
     except ValueError:
@@ -413,24 +501,22 @@ async def delete_api_key(provider: str, db: Session = Depends(get_db), current_u
 
     service = get_api_key_service(db, current_user.id)
     if not service.delete_key(api_provider):
-        raise HTTPException(status_code=404, detail="No stored key for this provider")
+        raise HTTPException(status_code=404, detail=f"No stored key for {provider}")
 
 
-@router.post("/api-keys/{provider}/validate", response_model=APIKeyResponse)
-async def validate_api_key(provider: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Re-validate an existing stored key."""
-    try:
-        api_provider = APIProvider(provider)
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+@router.get("/sentry-dsn")
+async def get_sentry_dsn(db: Session = Depends(get_db)):
+    """Get the Sentry DSN for client-side initialization (public, no auth required).
 
-    service = get_api_key_service(db, current_user.id)
-    key_value = service.resolve_key(api_provider)
-    if not key_value:
-        raise HTTPException(status_code=404, detail="No key configured for this provider")
+    Sentry DSNs are write-only ingestion URLs and safe to expose to clients.
+    """
+    from app.models.api_key import APIKey
 
-    api_key, result = await service.validate_and_save_key(api_provider, key_value)
-    return _api_key_to_response(api_key)
+    key = db.query(APIKey).filter(APIKey.provider == "sentry", APIKey.status == "active").first()
+    if key:
+        from app.services.encryption import decrypt_api_key
+        return {"dsn": decrypt_api_key(key.encrypted_key)}
+    return {"dsn": None}
 
 
 # --- Provider config endpoints ---
@@ -478,11 +564,9 @@ async def get_provider_models(provider: str, db: Session = Depends(get_db), curr
 
 
 CURATED_OPENAI_VISION_MODELS = [
-    ProviderModelInfo(id="gpt-4o", name="GPT-4o", capabilities=["vision", "chat"]),
     ProviderModelInfo(id="gpt-4o-mini", name="GPT-4o Mini", capabilities=["vision", "chat"]),
-    ProviderModelInfo(id="gpt-4.1", name="GPT-4.1", capabilities=["vision", "chat"]),
-    ProviderModelInfo(id="gpt-5", name="GPT-5", capabilities=["vision", "chat"]),
-    ProviderModelInfo(id="gpt-5.1", name="GPT-5.1", capabilities=["vision", "chat"]),
+    ProviderModelInfo(id="gpt-4o", name="GPT-4o", capabilities=["vision", "chat"]),
+    ProviderModelInfo(id="gpt-5-mini", name="GPT-5 Mini", capabilities=["vision", "chat"]),
     ProviderModelInfo(id="gpt-5.2", name="GPT-5.2", capabilities=["vision", "chat"]),
 ]
 
@@ -498,6 +582,8 @@ async def _get_openai_models(db: Session, user_id: int) -> list[ProviderModelInf
 
     key_service = get_aks(db, user_id)
     api_key = key_service.resolve_key(APIProvider.OPENAI)
+    if not api_key:
+        api_key = app_settings.openai_api_key or None
     if not api_key:
         return CURATED_OPENAI_VISION_MODELS + FALLBACK_EMBEDDING_MODELS
 
@@ -527,20 +613,29 @@ async def _get_openai_models(db: Session, user_id: int) -> list[ProviderModelInf
 def _get_anthropic_models() -> list[ProviderModelInfo]:
     """Return curated list of Anthropic Claude models with vision support."""
     return [
-        ProviderModelInfo(id="claude-sonnet-4-20250514", name="Claude Sonnet 4", capabilities=["vision", "chat"]),
-        ProviderModelInfo(id="claude-haiku-4-20250414", name="Claude Haiku 4", capabilities=["vision", "chat"]),
-        ProviderModelInfo(id="claude-3-5-sonnet-20241022", name="Claude 3.5 Sonnet", capabilities=["vision", "chat"]),
-        ProviderModelInfo(id="claude-3-5-haiku-20241022", name="Claude 3.5 Haiku", capabilities=["vision", "chat"]),
-        ProviderModelInfo(id="claude-3-haiku-20240307", name="Claude 3 Haiku", capabilities=["vision", "chat"]),
+        ProviderModelInfo(id="claude-3-haiku-20240307", name="Claude Haiku 3", capabilities=["vision", "chat"]),
+        ProviderModelInfo(id="claude-haiku-4-5-20251001", name="Claude Haiku 4.5", capabilities=["vision", "chat"]),
+        ProviderModelInfo(id="claude-sonnet-4-6", name="Claude Sonnet 4.6", capabilities=["vision", "chat"]),
+        ProviderModelInfo(id="claude-opus-4-6", name="Claude Opus 4.6", capabilities=["vision", "chat"]),
     ]
 
 
 def _get_fal_models() -> list[ProviderModelInfo]:
-    """Return supported fal.ai endpoints."""
+    """Return supported fal.ai endpoints and OpenRouter vision models."""
     return [
+        # OpenRouter vision models
+        ProviderModelInfo(id="x-ai/grok-4-fast", name="Grok 4 Fast", capabilities=["vision", "chat"]),
+        ProviderModelInfo(id="qwen/qwen3-vl-235b-a22b-instruct", name="Qwen3 VL 235B", capabilities=["vision", "chat"]),
+        ProviderModelInfo(id="google/gemini-2.5-flash", name="Gemini 2.5 Flash", capabilities=["vision", "chat"]),
+        # Generation/training endpoints
         ProviderModelInfo(id="fal-ai/flux/dev", name="Flux.1 Dev", capabilities=["generation"]),
         ProviderModelInfo(id="fal-ai/flux-lora", name="Flux LoRA", capabilities=["generation", "lora"]),
         ProviderModelInfo(id="fal-ai/flux-lora-fast-training", name="Flux LoRA Fast Training", capabilities=["training"]),
+        # Generation endpoints (no LoRA)
+        ProviderModelInfo(id="fal-ai/nano-banana-pro", name="Nano Banana Pro", capabilities=["generation"]),
+        # Edit endpoints
+        ProviderModelInfo(id="qwen-image-max-edit", name="Qwen Image Max Edit", capabilities=["edit"]),
+        ProviderModelInfo(id="nano-banana-pro-edit", name="Nano Banana Pro Edit", capabilities=["edit"]),
     ]
 
 
@@ -622,6 +717,32 @@ async def update_base_model(request: BaseModelRequest, db: Session = Depends(get
     return {"base_model": service.set_base_model(request.base_model)}
 
 
+class EditModelRequest(BaseModel):
+    """Request to set the default edit model."""
+
+    edit_model: str
+
+
+class EditModelResponse(BaseModel):
+    """Response with the default edit model."""
+
+    edit_model: str
+
+
+@router.get("/edit-model", response_model=EditModelResponse)
+async def get_edit_model(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Get the default edit model."""
+    service = get_settings_service(db, current_user.id)
+    return {"edit_model": service.get_edit_model()}
+
+
+@router.put("/edit-model", response_model=EditModelResponse)
+async def update_edit_model(request: EditModelRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Set the default edit model."""
+    service = get_settings_service(db, current_user.id)
+    return {"edit_model": service.set_edit_model(request.edit_model)}
+
+
 @router.get("/generation", response_model=GenerationConfigResponse)
 async def get_generation_config(base_model: str | None = None, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get current generation configuration, optionally scoped to a base model."""
@@ -695,3 +816,51 @@ async def reset_training_config(base_model: str | None = None, db: Session = Dep
         return DEFAULT_TRAINING_CONFIGS.get(base_model, DEFAULT_TRAINING_CONFIG)
     service.delete_setting("training_config")
     return DEFAULT_TRAINING_CONFIG
+
+
+# --- Edit config endpoints ---
+
+
+class EditConfigResponse(BaseModel):
+    """Current edit configuration."""
+
+    image_size: str | dict = "square_hd"
+    num_images: int = 1
+    output_format: str = "png"
+    enable_prompt_expansion: bool = True
+    enable_safety_checker: bool = True
+
+
+class EditConfigUpdateRequest(BaseModel):
+    """Partial update for edit configuration."""
+
+    image_size: str | dict | None = None
+    num_images: int | None = None
+    output_format: str | None = None
+    enable_prompt_expansion: bool | None = None
+    enable_safety_checker: bool | None = None
+
+
+@router.get("/edit", response_model=EditConfigResponse)
+async def get_edit_config(edit_model: str = "qwen-image-max-edit", db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Get current edit configuration for a specific edit model."""
+    service = get_settings_service(db, current_user.id)
+    return service.get_edit_config(edit_model)
+
+
+@router.put("/edit", response_model=EditConfigResponse)
+async def update_edit_config(
+    request: EditConfigUpdateRequest, edit_model: str = "qwen-image-max-edit", db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
+):
+    """Update edit configuration for a specific edit model."""
+    service = get_settings_service(db, current_user.id)
+    update = {k: v for k, v in request.model_dump().items() if v is not None}
+    return service.set_edit_config(update, edit_model)
+
+
+@router.post("/edit/reset", response_model=EditConfigResponse)
+async def reset_edit_config(edit_model: str = "qwen-image-max-edit", db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Reset edit configuration to defaults."""
+    service = get_settings_service(db, current_user.id)
+    service.delete_setting(f"edit_config:{edit_model}")
+    return DEFAULT_EDIT_CONFIGS.get(edit_model, {})

@@ -5,6 +5,28 @@ export interface ImageMetadata {
   tagging_model: string | null;
   caption_model: string | null;
   embedding_model: string | null;
+  tag_prompt_text: string | null;
+  description_prompt_text: string | null;
+  tagged_at: string | null;
+  described_at: string | null;
+  embedded_at: string | null;
+  tagging_duration_ms: number | null;
+  caption_duration_ms: number | null;
+  embedding_duration_ms: number | null;
+}
+
+export interface ProcessingCostOperation {
+  operation: string;
+  provider: string;
+  model: string;
+  sparks: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+}
+
+export interface ProcessingCostResponse {
+  operations: ProcessingCostOperation[];
+  total_sparks: number;
 }
 
 export interface Image {
@@ -76,6 +98,8 @@ export interface Job {
   image_id: number | null;
   image_filename: string | null;
   image_thumbnail: string | null;
+  charged_cost: number | null;
+  charged_sparks: number | null;
 }
 
 export interface StepResponse {
@@ -302,6 +326,7 @@ export interface GeneratedImage {
   thumbnail_uri_small: string | null;
   thumbnail_uri_medium: string | null;
   job_id: number | null;
+  cost_sparks: number | null;
   created_at: string;
   completed_at: string | null;
 }
@@ -327,6 +352,14 @@ export interface TrainingConfig {
   learning_rate?: number;
 }
 
+export interface EditConfig {
+  image_size: string | { width: number; height: number };
+  num_images: number;
+  output_format: string;
+  enable_prompt_expansion: boolean;
+  enable_safety_checker: boolean;
+}
+
 export interface APIKeyInfo {
   provider: string;
   key_suffix: string | null;
@@ -341,9 +374,17 @@ export interface ProviderConfig {
   openai_vision_model: string;
   openai_embedding_model: string;
   anthropic_vision_model: string;
+  fal_vision_model: string;
   max_tokens_tagging: number;
   max_tokens_description: number;
   max_tokens_summarization: number;
+  language_provider: string;
+  openai_language_model: string;
+  anthropic_language_model: string;
+  fal_language_model: string;
+  max_tokens_expansion: number;
+  max_tokens_suggestion: number;
+  vision_temperature: number;
 }
 
 export interface ProviderModel {
@@ -441,4 +482,435 @@ export interface TokenResponse {
   refresh_token: string;
   token_type: string;
   user: AuthUser;
+}
+
+// --- Billing types ---
+
+export interface UserBalance {
+  balance: number;
+  reserved: number;
+  available: number;
+  currency: string;
+}
+
+export interface BalanceTransaction {
+  id: number;
+  amount: number;
+  transaction_type: string;
+  description: string;
+  reference_id: number | null;
+  created_by: number | null;
+  created_at: string;
+}
+
+export interface TransactionListResponse {
+  items: BalanceTransaction[];
+  total: number;
+}
+
+export interface OperationUsageDetail {
+  operation: string;
+  count: number;
+  total_sparks: number;
+  avg_sparks: number;
+}
+
+export interface UsageSummary {
+  total_cost: number;
+  by_operation: Record<string, number>;
+  by_provider: Record<string, number>;
+  record_count: number;
+  by_operation_detail: OperationUsageDetail[];
+}
+
+export interface SparkPack {
+  id: number;
+  name: string;
+  sparks_amount: number;
+  bonus_sparks: number;
+  price_cents: number;
+  currency: string;
+  is_featured: boolean;
+}
+
+export interface Purchase {
+  id: number;
+  purchase_id: string;
+  pack_name: string;
+  sparks_amount: number;
+  amount_cents: number;
+  currency: string;
+  status: string;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface PurchaseListResponse {
+  items: Purchase[];
+  total: number;
+}
+
+export interface SubscriptionPlan {
+  id: number;
+  name: string;
+  sparks_per_month: number;
+  price_cents: number;
+  currency: string;
+}
+
+export interface UserSubscription {
+  id: number;
+  plan_name: string;
+  sparks_per_month: number;
+  status: string;
+  current_period_start: string | null;
+  current_period_end: string | null;
+  cancel_at_period_end: boolean;
+}
+
+export interface PromoRedeemResult {
+  sparks_granted: number;
+  new_balance: number;
+}
+
+export interface AdminUserBalance {
+  user_id: number;
+  email: string;
+  display_name: string | null;
+  balance: number;
+  total_spent: number;
+  last_activity: string | null;
+}
+
+export interface CostCatalogEntry {
+  id: number;
+  provider: string;
+  model: string;
+  operation: string;
+  cost_per_input_token: number | null;
+  cost_per_output_token: number | null;
+  cost_per_call: number | null;
+  platform_markup: number;
+  pricing_rules?: Record<string, unknown> | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ModelBulkUpdateRequest {
+  provider: string;
+  model: string;
+  cost_per_input_token: number;
+  cost_per_output_token: number;
+  cost_per_call: number;
+  operations: { operation: string; platform_markup: number }[];
+}
+
+export interface GenerationCosts {
+  costs: Record<string, Record<string, number>>;
+  expand_prompt_cost: number;
+  variable_pricing_models?: string[];
+}
+
+export interface GenerationEstimateResponse {
+  estimated_sparks: number;
+  base_model: string;
+}
+
+export interface VisionCostsEstimationBasis {
+  width: number;
+  height: number;
+  source: 'provided' | 'folder_avg' | 'default';
+}
+
+export interface VisionCosts {
+  costs: Record<string, Record<string, Record<string, number>>>;
+  estimation_basis?: VisionCostsEstimationBasis | null;
+}
+
+export interface EditCosts {
+  costs: Record<string, number>;
+}
+
+export interface TrainingCosts {
+  costs: Record<string, number>;
+}
+
+export interface PlatformUsageSummary {
+  total_raw_cost: number;
+  total_charged: number;
+  margin: number;
+  by_provider: Record<string, number>;
+  by_operation: Record<string, number>;
+  record_count: number;
+}
+
+export interface BillingLogEntry {
+  id: number;
+  user_id: number;
+  user_email: string;
+  user_display_name: string | null;
+  pipeline_log_id: number | null;
+  operation: string;
+  provider: string;
+  model: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  raw_cost: number;
+  charged_cost: number;
+  detail: {
+    cost_per_input_token: number;
+    cost_per_output_token: number;
+    cost_per_call: number;
+    input_cost: number;
+    output_cost: number;
+    call_cost: number;
+    platform_markup: number;
+    sparks: number;
+  } | null;
+  created_at: string;
+}
+
+export interface BillingLogListResponse {
+  items: BillingLogEntry[];
+  total: number;
+  skip: number;
+  limit: number;
+}
+
+// --- Reconciliation / Anomalies / Metrics types ---
+
+export interface ReconciliationRow {
+  operation: string;
+  provider: string;
+  model: string;
+  total_decisions: number;
+  avg_estimated_sparks: number;
+  avg_actual_sparks: number;
+  avg_delta: number;
+  avg_delta_pct: number;
+  min_delta: number;
+  max_delta: number;
+  total_estimated: number;
+  total_actual: number;
+}
+
+export interface ReconciliationResponse {
+  items: ReconciliationRow[];
+  threshold_pct: number;
+  threshold_violations: number;
+}
+
+export interface AnomalyEntry {
+  id: number;
+  user_id: number | null;
+  anomaly_type: string;
+  provider: string | null;
+  model: string | null;
+  operation: string | null;
+  detail: Record<string, unknown> | null;
+  resolved: boolean;
+  created_at: string;
+}
+
+export interface AnomalyListResponse {
+  items: AnomalyEntry[];
+  total: number;
+  skip: number;
+  limit: number;
+}
+
+export interface AnomalyGroupSummary {
+  anomaly_type: string;
+  provider: string | null;
+  model: string | null;
+  operation: string | null;
+  count: number;
+}
+
+export interface AnomalySummaryResponse {
+  groups: AnomalyGroupSummary[];
+  total_unresolved: number;
+  last_24h_count: number;
+}
+
+export interface OperationMetric {
+  operation: string;
+  count: number;
+  avg_sparks: number;
+  failure_count: number;
+}
+
+export interface ProviderMetric {
+  provider: string;
+  count: number;
+  avg_sparks: number;
+  failure_count: number;
+}
+
+export interface MetricAlert {
+  level: string;
+  message: string;
+}
+
+export interface MetricsResponse {
+  hours: number;
+  total_operations: number;
+  ops_per_hour: number;
+  failure_rate: number;
+  cancel_rate: number;
+  pending_decisions: number;
+  avg_delta_pct: number;
+  catalog_miss_count: number;
+  anomalies_by_type: Record<string, number>;
+  by_operation: OperationMetric[];
+  by_provider: ProviderMetric[];
+  alerts: MetricAlert[];
+}
+
+export interface EvaluationCostsResponse {
+  breakdown: {
+    generate_per_image: number;
+    describe_per_image: number;
+    embed_per_image: number;
+    vision_eval_per_image: number;
+    creative_prompts: number;
+    assessment: number;
+    per_reference_pair: number;
+    per_creative_pair: number;
+  };
+  totals: {
+    reference: number;
+    creative: number;
+    overhead: number;
+    total: number;
+  };
+  params: {
+    base_model: string;
+    sample_count: number;
+    creative_count: number;
+  };
+  providers: {
+    generation: string;
+    vision: string;
+    evaluation: string;
+    embedding: string;
+  };
+}
+
+export interface SummarizeCostsResponse {
+  per_cluster: number;
+  cluster_count: number;
+  total: number;
+  provider: string;
+  estimated_input_tokens: number;
+  estimated_output_tokens: number;
+}
+
+// --- Operations Monitor types ---
+
+export interface CostDecisionEntry {
+  id: number;
+  trace_id: string | null;
+  user_id: number;
+  job_id: number | null;
+  operation: string;
+  provider: string;
+  model: string;
+  catalog_entry_id: number | null;
+  catalog_match_tier: string | null;
+  estimated_input_tokens: number | null;
+  estimated_output_tokens: number | null;
+  estimated_sparks: number | null;
+  cost_per_input_token: number | null;
+  cost_per_output_token: number | null;
+  cost_per_call: number | null;
+  platform_markup: number | null;
+  billing_model: string | null;
+  image_id: number | null;
+  resource_id: number | null;
+  request_snapshot: Record<string, unknown> | null;
+  response_snapshot: Record<string, unknown> | null;
+  status: string;
+  error_message: string | null;
+  idempotency_key: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DecisionListResponse {
+  items: CostDecisionEntry[];
+  total: number;
+  skip: number;
+  limit: number;
+}
+
+export interface TraceUsageRecord {
+  id: number;
+  user_id: number;
+  operation: string;
+  provider: string;
+  model: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  raw_cost: number;
+  charged_cost: number;
+  cost_decision_id: number | null;
+  delta_sparks: number | null;
+  created_at: string;
+}
+
+export interface TracePipelineLog {
+  id: number;
+  category: string;
+  message: string;
+  provider: string | null;
+  model: string | null;
+  operation: string | null;
+  duration_ms: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  success: boolean | null;
+  created_at: string;
+}
+
+export interface TraceTransaction {
+  id: number;
+  amount: number;
+  transaction_type: string;
+  description: string;
+  created_at: string;
+}
+
+export interface TraceResponse {
+  trace_id: string;
+  decisions: CostDecisionEntry[];
+  usage_records: TraceUsageRecord[];
+  pipeline_logs: TracePipelineLog[];
+  transactions: TraceTransaction[];
+}
+
+// --- Scatter / Trend types ---
+
+export interface ScatterPoint {
+  estimated_sparks: number;
+  actual_sparks: number;
+  operation: string;
+  provider: string;
+  created_at: string;
+}
+
+export interface ScatterResponse {
+  items: ScatterPoint[];
+}
+
+export interface TrendBucket {
+  hour: string;
+  total: number;
+  by_type: Record<string, number>;
+}
+
+export interface TrendResponse {
+  items: TrendBucket[];
+  hours: number;
 }

@@ -1,13 +1,22 @@
 import axios from 'axios';
 import type {
+  AdminUserBalance,
+  AnomalyListResponse,
+  AnomalySummaryResponse,
   APIKeyInfo,
   AuthUser,
   BatchJobImage,
   BatchUploadResponse,
+  BillingLogListResponse,
   Cluster,
   ClusterDetail,
   ClusteringConfig,
   ClusterListResponse,
+  CostCatalogEntry,
+  DecisionListResponse,
+  EditConfig,
+  EditCosts,
+  EvaluationCostsResponse,
   EvaluationListResponse,
   Folder,
   FolderBrief,
@@ -15,6 +24,8 @@ import type {
   GeneratedImage,
   GeneratedImageListResponse,
   GenerationConfig,
+  GenerationCosts,
+  GenerationEstimateResponse,
   Image,
   ImageListResponse,
   Job,
@@ -24,14 +35,33 @@ import type {
   LoraEvaluation,
   LoraListResponse,
   LoraModel,
+  MetricsResponse,
+  ModelBulkUpdateRequest,
   PipelineStats,
+  PlatformUsageSummary,
+  ProcessingCostResponse,
   PromptPreset,
   ProviderConfig,
   ProviderModel,
+  ReconciliationResponse,
+  ScatterResponse,
   SearchResponse,
   StepResponse,
+  SummarizeCostsResponse,
+  TrendResponse,
   TokenResponse,
+  TraceResponse,
   TrainingConfig,
+  TrainingCosts,
+  TransactionListResponse,
+  UsageSummary,
+  UserBalance,
+  VisionCosts,
+  SparkPack,
+  PurchaseListResponse,
+  SubscriptionPlan,
+  UserSubscription,
+  PromoRedeemResult,
 } from '@/types';
 
 const apiBaseURL = process.env.NEXT_PUBLIC_API_URL
@@ -45,11 +75,40 @@ const api = axios.create({
   },
 });
 
-// Attach Bearer token to all requests
+// Generate a session_id once per browser session, persist in localStorage
+function getSessionId(): string {
+  let sid = localStorage.getItem('session_id');
+  if (!sid) {
+    sid = crypto.randomUUID();
+    localStorage.setItem('session_id', sid);
+  }
+  return sid;
+}
+
+// Store the last trace_id from a response for Sentry breadcrumbs
+let lastTraceId: string | null = null;
+export function getLastTraceId(): string | null {
+  return lastTraceId;
+}
+
+// Augment Axios config to carry request timing metadata
+declare module 'axios' {
+  interface InternalAxiosRequestConfig {
+    metadata?: { startTime: number };
+  }
+}
+
+// Attach Bearer token + correlation headers + timing to all requests
 api.interceptors.request.use((config) => {
+  config.metadata = { startTime: Date.now() };
   const token = localStorage.getItem('access_token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
+  }
+  // Correlation IDs
+  config.headers['X-Session-Id'] = getSessionId();
+  if (!config.headers['X-Trace-Id']) {
+    config.headers['X-Trace-Id'] = crypto.randomUUID().replace(/-/g, '');
   }
   return config;
 });
@@ -67,10 +126,40 @@ function addRefreshSubscriber(cb: (token: string) => void) {
   refreshSubscribers.push(cb);
 }
 
+// Slow request threshold (ms)
+const SLOW_REQUEST_THRESHOLD = 2000;
+
 // Extract meaningful error messages + handle 401 with token refresh
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // Capture correlation IDs from response headers
+    const traceId = response.headers['x-trace-id'];
+    if (traceId) lastTraceId = traceId;
+
+    // Track slow requests
+    const startTime = response.config.metadata?.startTime;
+    if (startTime) {
+      const duration = Date.now() - startTime;
+      if (duration > SLOW_REQUEST_THRESHOLD) {
+        import('@/lib/observability').then(({ trackSlowRequest }) => {
+          trackSlowRequest(response.config.url || '', response.config.method || 'get', duration);
+        });
+      }
+    }
+
+    return response;
+  },
   async (error) => {
+    // Track slow failed requests
+    const startTime = error.config?.metadata?.startTime;
+    if (startTime) {
+      const duration = Date.now() - startTime;
+      if (duration > SLOW_REQUEST_THRESHOLD) {
+        import('@/lib/observability').then(({ trackSlowRequest }) => {
+          trackSlowRequest(error.config?.url || '', error.config?.method || 'get', duration);
+        });
+      }
+    }
     const originalRequest = error.config;
 
     // If 401 and not already retrying, try refreshing the token
@@ -121,6 +210,12 @@ api.interceptors.response.use(
       });
     }
 
+    // Handle 402 Insufficient Credits
+    if (error.response?.status === 402) {
+      error.message = 'Out of sparks! Please add more to continue.';
+      return Promise.reject(error);
+    }
+
     if (error.response?.data?.detail) {
       error.message = error.response.data.detail;
     }
@@ -143,11 +238,18 @@ export const imagesApi = {
   list: async (params?: {
     status?: string;
     min_status?: string;
+    max_status?: string;
     source?: string;
+    in_folder?: boolean;
     skip?: number;
     limit?: number;
   }): Promise<ImageListResponse> => {
     const { data } = await api.get('/images', { params });
+    return data;
+  },
+
+  batchDelete: async (imageIds: number[]): Promise<{ deleted: number }> => {
+    const { data } = await api.post('/images/batch-delete', { image_ids: imageIds });
     return data;
   },
 
@@ -301,7 +403,7 @@ export const imagesApi = {
 
   reprocess: async (
     id: number,
-    options?: { tag_prompt?: string; description_prompt?: string }
+    options?: { tag_prompt?: string; description_prompt?: string; provider?: string; model?: string; temperature?: number; max_tokens_tag?: number; max_tokens_describe?: number }
   ): Promise<StepResponse> => {
     const { data } = await api.post(`/images/${id}/reprocess`, options || {});
     return data;
@@ -309,7 +411,7 @@ export const imagesApi = {
 
   tagImage: async (
     id: number,
-    options?: { tag_prompt?: string }
+    options?: { tag_prompt?: string; provider?: string; model?: string; temperature?: number; max_tokens?: number }
   ): Promise<StepResponse> => {
     const { data } = await api.post(`/images/${id}/tag`, options || {});
     return data;
@@ -317,7 +419,7 @@ export const imagesApi = {
 
   describeImage: async (
     id: number,
-    options?: { description_prompt?: string }
+    options?: { description_prompt?: string; provider?: string; model?: string; temperature?: number; max_tokens?: number }
   ): Promise<StepResponse> => {
     const { data } = await api.post(`/images/${id}/describe`, options || {});
     return data;
@@ -343,6 +445,11 @@ export const imagesApi = {
 
   getFolders: async (imageId: number): Promise<FolderBrief[]> => {
     const { data } = await api.get(`/images/${imageId}/folders`);
+    return data;
+  },
+
+  getProcessingCosts: async (imageId: number): Promise<ProcessingCostResponse> => {
+    const { data } = await api.get(`/images/${imageId}/processing-costs`);
     return data;
   },
 };
@@ -390,7 +497,7 @@ export const foldersApi = {
 
   listImages: async (
     id: number,
-    params?: { status?: string; min_status?: string; skip?: number; limit?: number }
+    params?: { status?: string; min_status?: string; max_status?: string; skip?: number; limit?: number }
   ): Promise<ImageListResponse> => {
     const { data } = await api.get(`/folders/${id}/images`, { params });
     return data;
@@ -398,6 +505,37 @@ export const foldersApi = {
 
   reprocess: async (id: number): Promise<{ job_id: number; total: number }> => {
     const { data } = await api.post(`/folders/${id}/reprocess`);
+    return data;
+  },
+
+  describe: async (
+    id: number,
+    params: {
+      provider?: string;
+      model?: string;
+      tag_prompt?: string;
+      description_prompt?: string;
+      temperature?: number;
+      max_tokens_tag?: number;
+      max_tokens_describe?: number;
+    }
+  ): Promise<{ status: string; job_id: number; total: number; message: string }> => {
+    const { data } = await api.post(`/folders/${id}/describe`, params);
+    return data;
+  },
+
+  autoPromptQuestions: async (
+    id: number
+  ): Promise<{ questions: string[]; sample_analysis: string }> => {
+    const { data } = await api.post(`/folders/${id}/auto-prompt/questions`);
+    return data;
+  },
+
+  autoPromptGenerate: async (
+    id: number,
+    params: { answers: string[]; sample_analysis: string }
+  ): Promise<{ tag_prompt: string; description_prompt: string; explanation: string }> => {
+    const { data } = await api.post(`/folders/${id}/auto-prompt/generate`, params);
     return data;
   },
 };
@@ -677,6 +815,16 @@ export const settingsApi = {
     return data;
   },
 
+  getEditModel: async (): Promise<{ edit_model: string }> => {
+    const { data } = await api.get('/settings/edit-model');
+    return data;
+  },
+
+  updateEditModel: async (edit_model: string): Promise<{ edit_model: string }> => {
+    const { data } = await api.put('/settings/edit-model', { edit_model });
+    return data;
+  },
+
   getGenerationConfig: async (baseModel?: string): Promise<GenerationConfig> => {
     const { data } = await api.get('/settings/generation', {
       params: baseModel ? { base_model: baseModel } : undefined,
@@ -719,7 +867,29 @@ export const settingsApi = {
     return data;
   },
 
-  // API Keys
+  // Edit config
+  getEditConfig: async (editModel?: string): Promise<EditConfig> => {
+    const { data } = await api.get('/settings/edit', {
+      params: editModel ? { edit_model: editModel } : undefined,
+    });
+    return data;
+  },
+
+  updateEditConfig: async (config: Partial<EditConfig>, editModel?: string): Promise<EditConfig> => {
+    const { data } = await api.put('/settings/edit', config, {
+      params: editModel ? { edit_model: editModel } : undefined,
+    });
+    return data;
+  },
+
+  resetEditConfig: async (editModel?: string): Promise<EditConfig> => {
+    const { data } = await api.post('/settings/edit/reset', null, {
+      params: editModel ? { edit_model: editModel } : undefined,
+    });
+    return data;
+  },
+
+  // Platform API keys (admin)
   getApiKeys: async (): Promise<APIKeyInfo[]> => {
     const { data } = await api.get('/settings/api-keys');
     return data;
@@ -730,13 +900,13 @@ export const settingsApi = {
     return data;
   },
 
-  deleteApiKey: async (provider: string): Promise<void> => {
-    await api.delete(`/settings/api-keys/${provider}`);
-  },
-
   validateApiKey: async (provider: string): Promise<APIKeyInfo> => {
     const { data } = await api.post(`/settings/api-keys/${provider}/validate`);
     return data;
+  },
+
+  deleteApiKey: async (provider: string): Promise<void> => {
+    await api.delete(`/settings/api-keys/${provider}`);
   },
 
   // Provider config
@@ -758,6 +928,12 @@ export const settingsApi = {
   // Model discovery
   getProviderModels: async (provider: string): Promise<ProviderModel[]> => {
     const { data } = await api.get(`/settings/models/${provider}`);
+    return data;
+  },
+
+  // Sentry DSN (public, no auth)
+  getSentryDsn: async (): Promise<{ dsn: string | null }> => {
+    const { data } = await api.get('/settings/sentry-dsn');
     return data;
   },
 };
@@ -845,6 +1021,12 @@ export const generationApi = {
     return data;
   },
 
+  // Prompt expansion
+  expandPrompt: async (prompt: string): Promise<{ expanded_prompt: string }> => {
+    const { data } = await api.post('/generation/expand-prompt', { prompt });
+    return data;
+  },
+
   // Generation
   generate: async (params: {
     prompt: string;
@@ -859,6 +1041,11 @@ export const generationApi = {
     guidance_scale?: number;
     seed?: number;
     num_images?: number;
+    resolution?: string;
+    aspect_ratio?: string;
+    safety_tolerance?: string;
+    enable_web_search?: boolean;
+    image_size?: string;
   }): Promise<{ status: string; job_id: number; generated_image_ids: number[] }> => {
     const { data } = await api.post('/generation/generate', params);
     return data;
@@ -932,6 +1119,129 @@ export const generationApi = {
   },
 };
 
+// Edit API
+export const editApi = {
+  edit: async (params: {
+    prompt?: string;
+    negative_prompt?: string;
+    source_image_ids?: number[];
+    source_generated_ids?: number[];
+    source_upload_keys?: string[];
+    edit_model?: string;
+    image_size?: string | { width: number; height: number };
+    num_images?: number;
+    seed?: number;
+    output_format?: string;
+    enable_prompt_expansion?: boolean;
+    enable_safety_checker?: boolean;
+    resolution?: string;
+    aspect_ratio?: string;
+    enable_occlusion_prevention?: boolean;
+    safety_tolerance?: string;
+    enable_web_search?: boolean;
+  }): Promise<{ status: string; job_id: number; generated_image_ids: number[] }> => {
+    const { data } = await api.post('/edit', params);
+    return data;
+  },
+
+  uploadSource: async (file: File): Promise<{ object_key: string }> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const { data } = await api.post('/edit/upload-source', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return data;
+  },
+
+  listImages: async (params?: {
+    skip?: number;
+    limit?: number;
+  }): Promise<GeneratedImageListResponse> => {
+    const { data } = await api.get('/edit/images', { params });
+    return data;
+  },
+
+  getImage: async (id: number): Promise<GeneratedImage> => {
+    const { data } = await api.get(`/edit/images/${id}`);
+    return data;
+  },
+
+  deleteImage: async (id: number): Promise<void> => {
+    await api.delete(`/edit/images/${id}`);
+  },
+
+  getImageUrl: (id: number): string => {
+    return authUrl(`/api/edit/images/${id}/file`);
+  },
+
+  getThumbnailUrl: (filename: string): string => {
+    return authUrl(`/api/edit/thumbnails/${filename}`);
+  },
+};
+
+// Vision API
+export const visionApi = {
+  analyze: async (params: {
+    source_image_id?: number;
+    source_generated_id?: number;
+    source_upload_key?: string;
+    provider: string;
+    model?: string;
+    mode: 'tag' | 'describe' | 'custom';
+    custom_prompt?: string;
+    tag_prompt?: string;
+    description_prompt?: string;
+    temperature?: number;
+    max_tokens?: number;
+  }): Promise<{ id: number; mode: string; tags?: string[]; description?: string; model: string; duration_ms?: number; cost_sparks?: number | null }> => {
+    const { data } = await api.post('/vision/analyze', params);
+    return data;
+  },
+
+  listResults: async (skip = 0, limit = 50): Promise<{
+    items: Array<{
+      id: number;
+      mode: string;
+      provider: string;
+      model: string;
+      prompt_text?: string;
+      result_tags?: string[];
+      result_text?: string;
+      duration_ms?: number;
+      cost_sparks?: number | null;
+      source_image_id?: number;
+      source_generated_id?: number;
+      source_object_key?: string;
+      source_thumbnail_url?: string | null;
+      source_full_url?: string | null;
+      created_at: string;
+    }>;
+    total: number;
+    skip: number;
+    limit: number;
+  }> => {
+    const { data } = await api.get('/vision/results', { params: { skip, limit } });
+    return data;
+  },
+
+  deleteResult: async (id: number): Promise<void> => {
+    await api.delete(`/vision/results/${id}`);
+  },
+
+  uploadSource: async (file: File): Promise<{ object_key: string }> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const { data } = await api.post('/vision/upload-source', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return data;
+  },
+
+  sourceImageUrl: (objectKey: string): string => {
+    return authUrl(`/api/vision/sources/${objectKey}`);
+  },
+};
+
 // Logs API
 export const logsApi = {
   list: async (params?: {
@@ -977,6 +1287,287 @@ export const authApi = {
 
   me: async (): Promise<AuthUser> => {
     const { data } = await api.get('/auth/me');
+    return data;
+  },
+};
+
+// Billing API
+export const billingApi = {
+  getBalance: async (): Promise<UserBalance> => {
+    const { data } = await api.get('/billing/balance');
+    return data;
+  },
+
+  getTransactions: async (skip = 0, limit = 50): Promise<TransactionListResponse> => {
+    const { data } = await api.get('/billing/transactions', { params: { skip, limit } });
+    return data;
+  },
+
+  getGenerationCosts: async (): Promise<GenerationCosts> => {
+    const { data } = await api.get('/billing/generation-costs');
+    return data;
+  },
+
+  estimateGenerationCost: async (params: {
+    base_model: string;
+    resolution?: string;
+    enable_web_search?: boolean;
+    width?: number;
+    height?: number;
+    image_size?: string;
+    with_lora?: boolean;
+  }): Promise<GenerationEstimateResponse> => {
+    const { data } = await api.post('/billing/generation-estimate', params);
+    return data;
+  },
+
+  getVisionCosts: async (): Promise<VisionCosts> => {
+    const { data } = await api.get('/billing/vision-costs');
+    return data;
+  },
+
+  getVisionCostsEstimate: async (params: {
+    width?: number;
+    height?: number;
+    folder_id?: number;
+  }): Promise<VisionCosts> => {
+    const { data } = await api.post('/billing/vision-costs', params);
+    return data;
+  },
+
+  getEditCosts: async (): Promise<EditCosts> => {
+    const { data } = await api.get('/billing/edit-costs');
+    return data;
+  },
+
+  getTrainingCosts: async (): Promise<TrainingCosts> => {
+    const { data } = await api.get('/billing/training-costs');
+    return data;
+  },
+
+  getUsage: async (startDate?: string, endDate?: string): Promise<UsageSummary> => {
+    const { data } = await api.get('/billing/usage', {
+      params: { start_date: startDate, end_date: endDate },
+    });
+    return data;
+  },
+
+  // Admin endpoints
+  adminGetUsers: async (): Promise<AdminUserBalance[]> => {
+    const { data } = await api.get('/billing/admin/users');
+    return data;
+  },
+
+  adminGetUserUsage: async (userId: number, startDate?: string, endDate?: string): Promise<UsageSummary> => {
+    const { data } = await api.get(`/billing/admin/users/${userId}/usage`, {
+      params: { start_date: startDate, end_date: endDate },
+    });
+    return data;
+  },
+
+  adminAddCredits: async (userId: number, amount: number, description: string): Promise<UserBalance> => {
+    const { data } = await api.post(`/billing/admin/users/${userId}/credits`, { amount, description });
+    return data;
+  },
+
+  adminGetSummary: async (startDate?: string, endDate?: string): Promise<PlatformUsageSummary> => {
+    const { data } = await api.get('/billing/admin/summary', {
+      params: { start_date: startDate, end_date: endDate },
+    });
+    return data;
+  },
+
+  adminGetCatalog: async (): Promise<CostCatalogEntry[]> => {
+    const { data } = await api.get('/billing/admin/catalog');
+    return data;
+  },
+
+  adminCreateCatalogEntry: async (entry: Omit<CostCatalogEntry, 'id' | 'is_active' | 'created_at' | 'updated_at'>): Promise<CostCatalogEntry> => {
+    const { data } = await api.post('/billing/admin/catalog', entry);
+    return data;
+  },
+
+  adminUpdateCatalogEntry: async (id: number, entry: Omit<CostCatalogEntry, 'id' | 'is_active' | 'created_at' | 'updated_at'>): Promise<CostCatalogEntry> => {
+    const { data } = await api.put(`/billing/admin/catalog/${id}`, entry);
+    return data;
+  },
+
+  adminDeleteCatalogEntry: async (id: number): Promise<void> => {
+    await api.delete(`/billing/admin/catalog/${id}`);
+  },
+
+  adminBulkUpdateModel: async (data: ModelBulkUpdateRequest): Promise<CostCatalogEntry[]> => {
+    const { data: result } = await api.put('/billing/admin/catalog/model-bulk', data);
+    return result;
+  },
+
+  adminGetLogs: async (params?: {
+    skip?: number;
+    limit?: number;
+    user_search?: string;
+    provider?: string;
+    operation?: string;
+    start_date?: string;
+    end_date?: string;
+  }): Promise<BillingLogListResponse> => {
+    const { data } = await api.get('/billing/admin/logs', { params });
+    return data;
+  },
+
+  adminSearchOperations: async (params?: {
+    skip?: number;
+    limit?: number;
+    trace_id?: string;
+    job_id?: number;
+    user_id?: number;
+    image_id?: number;
+    operation?: string;
+    status?: string;
+    start_date?: string;
+    end_date?: string;
+  }): Promise<DecisionListResponse> => {
+    const { data } = await api.get('/billing/admin/operations', { params });
+    return data;
+  },
+
+  adminGetTrace: async (traceId: string): Promise<TraceResponse> => {
+    const { data } = await api.get(`/billing/admin/trace/${traceId}`);
+    return data;
+  },
+
+  adminGetReconciliation: async (params?: {
+    start_date?: string;
+    end_date?: string;
+    operation?: string;
+    provider?: string;
+    threshold_pct?: number;
+  }): Promise<ReconciliationResponse> => {
+    const { data } = await api.get('/billing/admin/reconciliation', { params });
+    return data;
+  },
+
+  adminGetAnomalies: async (params?: {
+    skip?: number;
+    limit?: number;
+    anomaly_type?: string;
+    resolved?: boolean;
+    provider?: string;
+    operation?: string;
+    start_date?: string;
+    end_date?: string;
+  }): Promise<AnomalyListResponse> => {
+    const { data } = await api.get('/billing/admin/anomalies', { params });
+    return data;
+  },
+
+  adminGetAnomalySummary: async (): Promise<AnomalySummaryResponse> => {
+    const { data } = await api.get('/billing/admin/anomalies/summary');
+    return data;
+  },
+
+  adminResolveAnomaly: async (id: number): Promise<void> => {
+    await api.patch(`/billing/admin/anomalies/${id}/resolve`);
+  },
+
+  adminCreateCatalogFromAnomaly: async (id: number): Promise<CostCatalogEntry> => {
+    const { data } = await api.post(`/billing/admin/anomalies/${id}/create-catalog-entry`);
+    return data;
+  },
+
+  adminGetMetrics: async (hours: number = 24): Promise<MetricsResponse> => {
+    const { data } = await api.get('/billing/admin/metrics', { params: { hours } });
+    return data;
+  },
+
+  adminGetScatterData: async (params?: {
+    hours?: number;
+    operation?: string;
+    limit?: number;
+  }): Promise<ScatterResponse> => {
+    const { data } = await api.get('/billing/admin/decisions/scatter', { params });
+    return data;
+  },
+
+  adminGetAnomalyTrend: async (hours: number = 168): Promise<TrendResponse> => {
+    const { data } = await api.get('/billing/admin/anomalies/trend', { params: { hours } });
+    return data;
+  },
+
+  getEvaluationCosts: async (params: {
+    base_model?: string;
+    sample_count?: number;
+    creative_count?: number;
+    vision_eval_provider?: string;
+  }): Promise<EvaluationCostsResponse> => {
+    const { data } = await api.get('/billing/evaluation-costs', { params });
+    return data;
+  },
+
+  getSummarizeCosts: async (clusterCount: number = 1): Promise<SummarizeCostsResponse> => {
+    const { data } = await api.get('/billing/summarize-costs', { params: { cluster_count: clusterCount } });
+    return data;
+  },
+
+  // --- Spark Packs & Checkout ---
+
+  getPacks: async (): Promise<SparkPack[]> => {
+    const { data } = await api.get('/billing/packs');
+    return data;
+  },
+
+  createCheckout: async (packId: number, successUrl?: string, cancelUrl?: string): Promise<{ checkout_url: string; purchase_id: string }> => {
+    const { data } = await api.post('/billing/checkout', {
+      pack_id: packId,
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+    });
+    return data;
+  },
+
+  getPurchases: async (skip = 0, limit = 50): Promise<PurchaseListResponse> => {
+    const { data } = await api.get('/billing/purchases', { params: { skip, limit } });
+    return data;
+  },
+
+  // --- Subscriptions ---
+
+  getSubscriptionPlans: async (): Promise<SubscriptionPlan[]> => {
+    const { data } = await api.get('/billing/subscription/plans');
+    return data;
+  },
+
+  getSubscription: async (): Promise<UserSubscription | null> => {
+    try {
+      const { data } = await api.get('/billing/subscription');
+      return data;
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.status === 404) return null;
+      throw err;
+    }
+  },
+
+  createSubscriptionCheckout: async (
+    planId: number,
+    successUrl?: string,
+    cancelUrl?: string,
+  ): Promise<{ checkout_url: string }> => {
+    const { data } = await api.post('/billing/subscription/checkout', {
+      plan_id: planId,
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+    });
+    return data;
+  },
+
+  cancelSubscription: async (): Promise<{ status: string }> => {
+    const { data } = await api.post('/billing/subscription/cancel');
+    return data;
+  },
+
+  // --- Promo Codes ---
+
+  redeemPromo: async (code: string): Promise<PromoRedeemResult> => {
+    const { data } = await api.post('/billing/promo/redeem', { code });
     return data;
   },
 };

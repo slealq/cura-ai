@@ -17,12 +17,26 @@ from app.models.generated_image import GeneratedImage, GenerationStatus
 from app.models.lora_evaluation import EvaluationStatus
 from app.models.lora_model import LoraModelStatus
 from app.models.pipeline_log import LogCategory, LogLevel
-from app.providers import get_describer, get_embedder, get_evaluator, get_generator, get_trainer
+from app.providers import get_describer, get_editor, get_embedder, get_evaluator, get_generator, get_trainer
+from app.providers.fal_provider import GenerationCancelledError
+from app.services.billing_context import (
+    get_trace_id,
+    init_token_container,
+    init_trace,
+    make_idempotency_key,
+    set_billing_job,
+    set_billing_user,
+    set_session_id,
+    set_trace_id,
+)
+from app.services.billing_decorator import billable
+from app.services.billing_service import InsufficientBalanceError, ZeroCostEstimateError, finalize_job_billing
 from app.services.evaluation_service import get_evaluation_service
 from app.services.generation_service import get_generation_service
 from app.services.image_service import get_image_service
 from app.services.log_service import write_log
 from app.workers.celery_app import celery_app
+from app.workers.dispatch import dispatch
 from app.workers.tasks import run_async as _run_async
 
 logger = logging.getLogger(__name__)
@@ -43,6 +57,12 @@ def _update_job_status(db: Session, job_id: int | None, status: JobStatus, **kwa
     job.status = status
     if status == JobStatus.RUNNING:
         job.started_at = datetime.utcnow()
+        if job.created_at:
+            queue_wait_ms = (job.started_at - job.created_at).total_seconds() * 1000
+            logger.info(
+                f"Job {job_id} started after {queue_wait_ms:.0f}ms in queue",
+                extra={"event_type": "queue_wait", "queue_wait_ms": queue_wait_ms, "job_id": job_id, "job_type": job.job_type.value if job.job_type else None},
+            )
     elif status in (JobStatus.COMPLETED, JobStatus.FAILED):
         job.completed_at = datetime.utcnow()
     for key, value in kwargs.items():
@@ -58,6 +78,33 @@ def _unwrap_error(e: Exception) -> str:
         except Exception as inner:
             return str(inner)
     return str(e)
+
+
+def _init_task_context(user_id, job_id=None, trace_id=None, session_id=None):
+    """Initialize billing and trace context for a Celery task."""
+    set_billing_user(user_id)
+    if job_id is not None:
+        set_billing_job(job_id)
+    if trace_id:
+        set_trace_id(trace_id)
+    else:
+        init_trace()
+    if session_id:
+        set_session_id(session_id)
+    # Pre-allocate the mutable token container so that asyncio Tasks
+    # (created by run_async/run_until_complete) share the same dict.
+    init_token_container()
+
+    # Sentry trace continuation is handled by _start_worker_trace in
+    # celery_app.py (task_prerun signal). Here we just set Sentry tags.
+    try:
+        import sentry_sdk
+        sentry_sdk.set_tag("app.trace_id", get_trace_id())
+        if job_id is not None:
+            sentry_sdk.set_tag("app.job_id", str(job_id))
+        sentry_sdk.set_tag("app.user_id", str(user_id))
+    except Exception:
+        pass
 
 
 def _download_lora_weights(db: Session, lora_model_id: int, lora_url: str, user_id: int) -> None:
@@ -164,7 +211,7 @@ def _collect_example_prompts(db: Session, lora_model_id: int, user_id: int) -> N
 
 
 @celery_app.task(bind=True)
-def download_lora_weights(self, lora_model_id: int, user_id: int | None = None) -> dict:
+def download_lora_weights(self, lora_model_id: int, user_id: int | None = None, trace_id: str | None = None, session_id: str | None = None) -> dict:
     """Download and store LoRA weights for an existing completed model."""
     db = _get_db()
     try:
@@ -191,7 +238,7 @@ def download_lora_weights(self, lora_model_id: int, user_id: int | None = None) 
 
 
 @celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
-def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int | None = None) -> dict:
+def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int | None = None, trace_id: str | None = None, session_id: str | None = None) -> dict:
     """
     Train a LoRA model from folder images via fal.ai.
 
@@ -205,6 +252,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
     4. Save result URL to LoraModel record
     """
     task_start = time.monotonic()
+    _init_task_context(user_id, job_id=job_id, trace_id=trace_id, session_id=session_id)
     db = _get_db()
     try:
         # --- GUARD: Never re-submit training for already-completed models ---
@@ -409,31 +457,49 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
                 provider_metadata={"request_id": request_id, "base_model": lora.base_model},
             )
 
-        # Poll for completion
-        poll_interval = 15  # seconds
-        while True:
-            # Check for cancellation
-            db.expire_all()
-            if job_id:
-                job = db.query(Job).filter(Job.id == job_id).first()
-                if job and job.status == JobStatus.CANCELLED:
-                    logger.info(f"LoRA training job {job_id} cancelled")
-                    gen_service.update_lora_status(lora_model_id, LoraModelStatus.FAILED, "Cancelled by user")
-                    return {"status": "cancelled"}
+        # --- Billing decision for training ---
+        _train_billing_ctx = None
 
-            status_info = _run_async(trainer.check_training_status(request_id))
-            status_type = status_info.get("status", "")
+        with billable(
+            db, user_id, operation="train",
+            provider=lora.training_provider or "fal",
+            model=lora.base_model or "flux-dev",
+            resource_id=lora_model_id, job_id=job_id,
+            defer_debit=False,
+        ) as b_train:
+            if b_train.skipped:
+                logger.info("Duplicate train detected for %s, skipping", lora_model_id)
+                _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
+                return {"status": "skipped", "lora_model_id": lora_model_id}
 
-            if status_type == "Completed":
-                break
-            elif "error" in status_type.lower() or status_info.get("error"):
-                error_msg = status_info.get("error", "Training failed")
-                raise Exception(error_msg)
+            _train_billing_ctx = b_train
 
-            time.sleep(poll_interval)
+            # Poll for completion
+            poll_interval = 15  # seconds
+            while True:
+                # Check for cancellation
+                db.expire_all()
+                if job_id:
+                    job = db.query(Job).filter(Job.id == job_id).first()
+                    if job and job.status == JobStatus.CANCELLED:
+                        logger.info(f"LoRA training job {job_id} cancelled")
+                        b_train.cancel()
+                        gen_service.update_lora_status(lora_model_id, LoraModelStatus.FAILED, "Cancelled by user")
+                        return {"status": "cancelled"}
 
-        # Get result
-        result = _run_async(trainer.get_training_result(request_id))
+                status_info = _run_async(trainer.check_training_status(request_id))
+                status_type = status_info.get("status", "")
+
+                if status_type == "Completed":
+                    break
+                elif "error" in status_type.lower() or status_info.get("error"):
+                    error_msg = status_info.get("error", "Training failed")
+                    raise Exception(error_msg)
+
+                time.sleep(poll_interval)
+
+            # Get result and record billing
+            result = b_train.call(_run_async, trainer.get_training_result(request_id))
 
         # Update LoRA model
         gen_service.update_lora_status(
@@ -472,9 +538,22 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
         )
         return {"status": "success", "lora_model_id": lora_model_id, "lora_url": result.lora_url}
 
+    except InsufficientBalanceError:
+        # billable context manager handles fail_decision automatically
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
+        gen_service = get_generation_service(db, user_id)
+        gen_service.update_lora_status(lora_model_id, LoraModelStatus.FAILED, "Insufficient credits")
+        return {"status": "error", "message": "Insufficient credits"}
+    except ZeroCostEstimateError as e:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
+        gen_service = get_generation_service(db, user_id)
+        gen_service.update_lora_status(lora_model_id, LoraModelStatus.FAILED, f"Billing config error: {e}")
+        return {"status": "error", "message": f"Billing config error: {e}"}
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
+        if _train_billing_ctx is not None:
+            _train_billing_ctx.fail(err_msg)
         logger.error(f"Failed to train LoRA {lora_model_id}: {err_msg}")
         write_log(
             category=LogCategory.TASK,
@@ -491,11 +570,19 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
         raise
     finally:
+        if job_id:
+            try:
+                finalize_job_billing(db, user_id, job_id)
+            except Exception:
+                logger.warning(f"Failed to finalize billing for job {job_id}", exc_info=True)
+        set_trace_id(None)
+        set_billing_user(None)
+        set_billing_job(None)
         db.close()
 
 
-@celery_app.task(bind=True)
-def generate_image(self, generated_image_id: int, job_id: int | None = None, user_id: int | None = None) -> dict:
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
+def generate_image(self, generated_image_id: int, job_id: int | None = None, user_id: int | None = None, from_batch: bool = False, trace_id: str | None = None, session_id: str | None = None) -> dict:
     """
     Generate a single image via fal.ai.
     """
@@ -507,6 +594,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
         user_id=user_id,
     )
     task_start = time.monotonic()
+    _init_task_context(user_id, job_id=job_id, trace_id=trace_id, session_id=session_id)
     db = _get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -538,20 +626,59 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
             if lora and lora.lora_url:
                 loras_for_provider = [{"path": lora.lora_url, "scale": gen.lora_scale or 1.0}]
 
+        # Build cancel check: returns True when the Job has been cancelled
+        def _is_cancelled() -> bool:
+            if not job_id:
+                return False
+            try:
+                db.expire_all()
+                job = db.query(Job).filter(Job.id == job_id).first()
+                return job is not None and job.status == JobStatus.CANCELLED
+            except Exception:
+                return False
+
         # Generate
         generator = get_generator(gen.generation_provider, db=db, base_model=gen.base_model, user_id=user_id)
-        result = _run_async(
-            generator.generate(
-                prompt=gen.prompt,
-                negative_prompt=gen.negative_prompt,
-                width=params.get("width", 1024),
-                height=params.get("height", 1024),
-                num_inference_steps=params.get("num_inference_steps", 28),
-                guidance_scale=params.get("guidance_scale", 3.5),
-                seed=params.get("seed"),
-                loras=loras_for_provider,
+        trace_id = get_trace_id()
+        _billing_ctx = None
+
+        with billable(
+            db, user_id, operation="generate",
+            provider=gen.generation_provider or "fal",
+            model=gen.base_model or "flux-dev",
+            trace_id=trace_id, resource_id=generated_image_id, job_id=job_id,
+            with_lora=bool(loras_for_provider),
+            generation_params=params,
+            request_snapshot={"generation_params": params, "prompt": gen.prompt[:200] if gen.prompt else None},
+            defer_debit=False,
+        ) as b_gen:
+            if b_gen.skipped:
+                logger.info("Duplicate generate detected for %s, skipping", generated_image_id)
+                _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
+                return {"status": "skipped", "generated_image_id": generated_image_id}
+
+            # Store billing context for cancellation handling in except block
+            _billing_ctx = b_gen
+
+            result = b_gen.call(
+                _run_async,
+                generator.generate(
+                    prompt=gen.prompt,
+                    negative_prompt=gen.negative_prompt,
+                    width=params.get("width", 1024),
+                    height=params.get("height", 1024),
+                    num_inference_steps=params.get("num_inference_steps", 28),
+                    guidance_scale=params.get("guidance_scale", 3.5),
+                    seed=params.get("seed"),
+                    loras=loras_for_provider,
+                    cancel_check=_is_cancelled,
+                    resolution=params.get("resolution"),
+                    aspect_ratio=params.get("aspect_ratio"),
+                    safety_tolerance=params.get("safety_tolerance"),
+                    enable_web_search=params.get("enable_web_search"),
+                    image_size=params.get("image_size"),
+                ),
             )
-        )
 
         # Save result
         _run_async(
@@ -578,6 +705,42 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
         )
         return {"status": "success", "generated_image_id": generated_image_id}
 
+    except InsufficientBalanceError:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
+        gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
+        if gen:
+            gen.status = GenerationStatus.FAILED
+            gen.error_message = "Insufficient credits"
+            db.commit()
+        return {"status": "error", "message": "Insufficient credits"}
+    except ZeroCostEstimateError as e:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
+        gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
+        if gen:
+            gen.status = GenerationStatus.FAILED
+            gen.error_message = f"Billing config error: {e}"
+            db.commit()
+        return {"status": "error", "message": f"Billing config error: {e}"}
+    except GenerationCancelledError:
+        elapsed = (time.monotonic() - task_start) * 1000
+        logger.info(f"Generation cancelled for generated_image {generated_image_id}")
+        if _billing_ctx is not None:
+            _billing_ctx.cancel()
+        write_log(
+            category=LogCategory.TASK,
+            message=f"Task generate_image cancelled for generated_image {generated_image_id}",
+            task_name="generate_image",
+            job_id=job_id,
+            duration_ms=round(elapsed, 1),
+            user_id=user_id,
+        )
+        # Mark as failed (job is already CANCELLED by the API)
+        gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
+        if gen and gen.status != GenerationStatus.FAILED:
+            gen.status = GenerationStatus.FAILED
+            gen.error_message = "Cancelled by user"
+            db.commit()
+        return {"status": "cancelled", "generated_image_id": generated_image_id}
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
@@ -601,6 +764,14 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
         raise
     finally:
+        if not from_batch and job_id:
+            try:
+                finalize_job_billing(db, user_id, job_id)
+            except Exception:
+                logger.warning(f"Failed to finalize billing for job {job_id}", exc_info=True)
+        set_trace_id(None)
+        set_billing_user(None)
+        set_billing_job(None)
         db.close()
 
 
@@ -619,8 +790,8 @@ def _mark_generated_images_cancelled(db: Session, generated_image_ids: list[int]
     db.commit()
 
 
-@celery_app.task(bind=True)
-def batch_generate(self, generated_image_ids: list[int], job_id: int | None = None, user_id: int | None = None) -> dict:
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
+def batch_generate(self, generated_image_ids: list[int], job_id: int | None = None, user_id: int | None = None, trace_id: str | None = None, session_id: str | None = None) -> dict:
     """
     Generate multiple images. Dispatches individual generate_image tasks and polls for completion.
     """
@@ -632,6 +803,7 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
         user_id=user_id,
     )
     task_start = time.monotonic()
+    _init_task_context(user_id, job_id=job_id, trace_id=trace_id, session_id=session_id)
     db = _get_db()
     try:
         job = db.query(Job).filter(Job.id == job_id).first() if job_id else None
@@ -646,9 +818,9 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
             job.total_items = len(generated_image_ids)
             db.commit()
 
-        # Dispatch individual tasks
+        # Dispatch individual tasks with batch job_id so their PipelineLogs are tagged
         for gen_id in generated_image_ids:
-            generate_image.delay(gen_id, user_id=user_id)
+            dispatch(generate_image, gen_id, job_id=job_id, user_id=user_id, from_batch=True)
 
         # Poll for completion
         poll_interval = 5
@@ -732,6 +904,368 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
                 db.commit()
         raise
     finally:
+        if job_id:
+            try:
+                finalize_job_billing(db, user_id, job_id)
+            except Exception:
+                logger.warning(f"Failed to finalize billing for job {job_id}", exc_info=True)
+        set_trace_id(None)
+        set_billing_user(None)
+        set_billing_job(None)
+        db.close()
+
+
+def _to_data_uri(image_data: bytes, mime_type: str = "image/jpeg") -> str:
+    """Convert image bytes to a data URI."""
+    b64 = base64.b64encode(image_data).decode("utf-8")
+    return f"data:{mime_type};base64,{b64}"
+
+
+def _resolve_edit_sources(db: Session, gen_params: dict, user_id: int) -> list[str]:
+    """Resolve source image references to data URIs for the edit provider."""
+    sources = gen_params.get("sources", {})
+    data_uris: list[str] = []
+
+    # Gallery images
+    for img_id in sources.get("image_ids", []):
+        image_service = get_image_service(db, user_id)
+        image = image_service.get_image(img_id)
+        if not image:
+            raise Exception(f"Source image {img_id} not found")
+        image_data = _run_async(image_service.get_image_data(img_id))
+        if not image_data:
+            raise Exception(f"Failed to load image data for {img_id}")
+        data_uris.append(_to_data_uri(image_data, image.mime_type or "image/jpeg"))
+
+    # Generated images
+    for gen_id in sources.get("generated_ids", []):
+        gen_service = get_generation_service(db, user_id)
+        gen_data = _run_async(gen_service.get_generated_image_data(gen_id))
+        if not gen_data:
+            raise Exception(f"Failed to load generated image data for {gen_id}")
+        gen = gen_service.get_generated_image(gen_id)
+        mime = gen.mime_type if gen else "image/png"
+        data_uris.append(_to_data_uri(gen_data, mime or "image/png"))
+
+    # Uploaded source images
+    if sources.get("upload_keys"):
+        from app.services.storage import get_storage_service
+        storage = get_storage_service()
+        for key in sources["upload_keys"]:
+            file_data = _run_async(storage.get_generated_image(key))
+            if not file_data:
+                raise Exception(f"Failed to load uploaded source {key}")
+            ext = key.rsplit(".", 1)[-1] if "." in key else "png"
+            mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif"}
+            data_uris.append(_to_data_uri(file_data, mime_map.get(ext, "image/png")))
+
+    return data_uris
+
+
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
+def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id: int | None = None, from_batch: bool = False, trace_id: str | None = None, session_id: str | None = None) -> dict:
+    """Edit an image via fal.ai."""
+    write_log(
+        category=LogCategory.TASK,
+        message=f"Task edit_image started for generated_image {generated_image_id}",
+        task_name="edit_image",
+        job_id=job_id,
+        user_id=user_id,
+    )
+    task_start = time.monotonic()
+    _init_task_context(user_id, job_id=job_id, trace_id=trace_id, session_id=session_id)
+    db = _get_db()
+    try:
+        _update_job_status(db, job_id, JobStatus.RUNNING)
+
+        gen_service = get_generation_service(db, user_id)
+        gen = gen_service.get_generated_image(generated_image_id)
+        if not gen:
+            return {"status": "error", "message": "Generated image record not found"}
+
+        gen.status = GenerationStatus.GENERATING
+        db.commit()
+
+        params = gen.generation_params or {}
+        edit_model = params.get("edit_model", "qwen-image-max-edit")
+
+        # Resolve source images to data URIs
+        image_urls = _resolve_edit_sources(db, params, user_id)
+        if not image_urls:
+            raise Exception("No source images could be resolved")
+
+        # Build cancel check
+        def _is_cancelled() -> bool:
+            if not job_id:
+                return False
+            try:
+                db.expire_all()
+                job = db.query(Job).filter(Job.id == job_id).first()
+                return job is not None and job.status == JobStatus.CANCELLED
+            except Exception:
+                return False
+
+        # Build edit kwargs
+        edit_kwargs = {
+            "image_urls": image_urls,
+            "prompt": gen.prompt,
+            "negative_prompt": gen.negative_prompt,
+            "num_images": 1,
+            "output_format": params.get("output_format", "png"),
+            "enable_prompt_expansion": params.get("enable_prompt_expansion", True),
+            "enable_safety_checker": params.get("enable_safety_checker", True),
+            "cancel_check": _is_cancelled,
+        }
+        if "image_size" in params:
+            edit_kwargs["image_size"] = params["image_size"]
+        if "seed" in params and params["seed"] is not None:
+            edit_kwargs["seed"] = params["seed"]
+        if "resolution" in params:
+            edit_kwargs["resolution"] = params["resolution"]
+        if "aspect_ratio" in params:
+            edit_kwargs["aspect_ratio"] = params["aspect_ratio"]
+        if params.get("enable_occlusion_prevention"):
+            edit_kwargs["enable_occlusion_prevention"] = True
+        if "safety_tolerance" in params:
+            edit_kwargs["safety_tolerance"] = params["safety_tolerance"]
+        if "enable_web_search" in params:
+            edit_kwargs["enable_web_search"] = params["enable_web_search"]
+
+        editor = get_editor(db=db, edit_model=edit_model, user_id=user_id)
+        trace_id = get_trace_id()
+        _edit_billing_ctx = None
+
+        with billable(
+            db, user_id, operation="edit",
+            provider="fal", model=edit_model,
+            trace_id=trace_id, resource_id=generated_image_id, job_id=job_id,
+            generation_params=params,
+            defer_debit=False,
+        ) as b_edit:
+            if b_edit.skipped:
+                logger.info("Duplicate edit detected for %s, skipping", generated_image_id)
+                _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
+                return {"status": "skipped", "generated_image_id": generated_image_id}
+
+            _edit_billing_ctx = b_edit
+            result = b_edit.call(_run_async, editor.edit(**edit_kwargs))
+
+        # Save first output image
+        if not result.images:
+            raise Exception("No images returned from edit provider")
+
+        _run_async(
+            gen_service.save_generated_result(
+                generated_image_id=generated_image_id,
+                image_data=result.images[0],
+                width=result.widths[0],
+                height=result.heights[0],
+                seed=result.seed,
+                provider_metadata=result.metadata,
+            )
+        )
+
+        _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
+
+        elapsed = (time.monotonic() - task_start) * 1000
+        write_log(
+            category=LogCategory.TASK,
+            message=f"Task edit_image completed for generated_image {generated_image_id} in {elapsed:.0f}ms",
+            task_name="edit_image",
+            job_id=job_id,
+            duration_ms=round(elapsed, 1),
+            user_id=user_id,
+        )
+        return {"status": "success", "generated_image_id": generated_image_id}
+
+    except InsufficientBalanceError:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
+        gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
+        if gen:
+            gen.status = GenerationStatus.FAILED
+            gen.error_message = "Insufficient credits"
+            db.commit()
+        return {"status": "error", "message": "Insufficient credits"}
+    except ZeroCostEstimateError as e:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
+        gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
+        if gen:
+            gen.status = GenerationStatus.FAILED
+            gen.error_message = f"Billing config error: {e}"
+            db.commit()
+        return {"status": "error", "message": f"Billing config error: {e}"}
+    except GenerationCancelledError:
+        elapsed = (time.monotonic() - task_start) * 1000
+        logger.info(f"Edit cancelled for generated_image {generated_image_id}")
+        if _edit_billing_ctx is not None:
+            _edit_billing_ctx.cancel()
+        write_log(
+            category=LogCategory.TASK,
+            message=f"Task edit_image cancelled for generated_image {generated_image_id}",
+            task_name="edit_image",
+            job_id=job_id,
+            duration_ms=round(elapsed, 1),
+            user_id=user_id,
+        )
+        gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
+        if gen and gen.status != GenerationStatus.FAILED:
+            gen.status = GenerationStatus.FAILED
+            gen.error_message = "Cancelled by user"
+            db.commit()
+        return {"status": "cancelled", "generated_image_id": generated_image_id}
+    except Exception as e:
+        elapsed = (time.monotonic() - task_start) * 1000
+        err_msg = _unwrap_error(e)
+        logger.error(f"Failed to edit image {generated_image_id}: {err_msg}")
+        write_log(
+            category=LogCategory.TASK,
+            message=f"Task edit_image failed for generated_image {generated_image_id}: {err_msg}",
+            level=LogLevel.ERROR,
+            task_name="edit_image",
+            job_id=job_id,
+            duration_ms=round(elapsed, 1),
+            extra={"error": err_msg},
+            user_id=user_id,
+        )
+        gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
+        if gen:
+            gen.status = GenerationStatus.FAILED
+            gen.error_message = err_msg
+            db.commit()
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
+        raise
+    finally:
+        if not from_batch and job_id:
+            try:
+                finalize_job_billing(db, user_id, job_id)
+            except Exception:
+                logger.warning(f"Failed to finalize billing for job {job_id}", exc_info=True)
+        set_trace_id(None)
+        set_billing_user(None)
+        set_billing_job(None)
+        db.close()
+
+
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
+def batch_edit(self, generated_image_ids: list[int], job_id: int | None = None, user_id: int | None = None, trace_id: str | None = None, session_id: str | None = None) -> dict:
+    """Edit multiple images. Dispatches individual edit_image tasks and polls for completion."""
+    write_log(
+        category=LogCategory.TASK,
+        message=f"Task batch_edit started ({len(generated_image_ids)} images)",
+        task_name="batch_edit",
+        job_id=job_id,
+        user_id=user_id,
+    )
+    task_start = time.monotonic()
+    _init_task_context(user_id, job_id=job_id, trace_id=trace_id, session_id=session_id)
+    db = _get_db()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first() if job_id else None
+
+        if job and job.status == JobStatus.CANCELLED:
+            _mark_generated_images_cancelled(db, generated_image_ids)
+            return {"status": "cancelled", "total": len(generated_image_ids)}
+
+        if job:
+            job.status = JobStatus.RUNNING
+            job.started_at = datetime.utcnow()
+            job.total_items = len(generated_image_ids)
+            db.commit()
+
+        # Dispatch individual tasks with batch job_id so their PipelineLogs are tagged
+        for gen_id in generated_image_ids:
+            dispatch(edit_image, gen_id, job_id=job_id, user_id=user_id, from_batch=True)
+
+        # Poll for completion
+        poll_interval = 5
+        while True:
+            db.expire_all()
+            if job_id:
+                job = db.query(Job).filter(Job.id == job_id).first()
+                if job and job.status == JobStatus.CANCELLED:
+                    _mark_generated_images_cancelled(db, generated_image_ids)
+                    return {"status": "cancelled", "total": len(generated_image_ids)}
+
+            done_count = (
+                db.query(GeneratedImage)
+                .filter(
+                    GeneratedImage.id.in_(generated_image_ids),
+                    GeneratedImage.status.in_([GenerationStatus.COMPLETED, GenerationStatus.FAILED]),
+                )
+                .count()
+            )
+
+            if job:
+                job.progress = done_count
+                db.commit()
+
+            if done_count >= len(generated_image_ids):
+                break
+
+            time.sleep(poll_interval)
+
+        # Count outcomes
+        failed_count = (
+            db.query(GeneratedImage)
+            .filter(
+                GeneratedImage.id.in_(generated_image_ids),
+                GeneratedImage.status == GenerationStatus.FAILED,
+            )
+            .count()
+        )
+        succeeded = len(generated_image_ids) - failed_count
+
+        if job:
+            job.status = JobStatus.COMPLETED
+            job.completed_at = datetime.utcnow()
+            job.result = {
+                "total": len(generated_image_ids),
+                "succeeded": succeeded,
+                "failed": failed_count,
+            }
+            db.commit()
+
+        elapsed = (time.monotonic() - task_start) * 1000
+        write_log(
+            category=LogCategory.TASK,
+            message=f"Task batch_edit completed in {elapsed:.0f}ms ({succeeded} succeeded, {failed_count} failed)",
+            task_name="batch_edit",
+            job_id=job_id,
+            duration_ms=round(elapsed, 1),
+            user_id=user_id,
+        )
+        return {"status": "success", "total": len(generated_image_ids), "succeeded": succeeded, "failed": failed_count}
+
+    except Exception as e:
+        elapsed = (time.monotonic() - task_start) * 1000
+        err_msg = _unwrap_error(e)
+        logger.error(f"Batch edit failed: {err_msg}")
+        write_log(
+            category=LogCategory.TASK,
+            message=f"Task batch_edit failed: {err_msg}",
+            level=LogLevel.ERROR,
+            task_name="batch_edit",
+            job_id=job_id,
+            duration_ms=round(elapsed, 1),
+            extra={"error": err_msg},
+            user_id=user_id,
+        )
+        if job_id:
+            job = db.query(Job).filter(Job.id == job_id).first()
+            if job:
+                job.status = JobStatus.FAILED
+                job.error_message = err_msg
+                db.commit()
+        raise
+    finally:
+        if job_id:
+            try:
+                finalize_job_billing(db, user_id, job_id)
+            except Exception:
+                logger.warning(f"Failed to finalize billing for job {job_id}", exc_info=True)
+        set_trace_id(None)
+        set_billing_user(None)
+        set_billing_job(None)
         db.close()
 
 
@@ -759,8 +1293,8 @@ def _normalize_embedding_similarity(cosine_sim: float) -> float:
     return max(0.0, min(10.0, normalized))
 
 
-@celery_app.task(bind=True)
-def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: int | None = None) -> dict:
+@celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
+def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: int | None = None, trace_id: str | None = None, session_id: str | None = None) -> dict:
     """
     Evaluate a LoRA model by generating images from training set descriptions
     and comparing against originals, plus optional creative prompt evaluation.
@@ -780,6 +1314,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
         user_id=user_id,
     )
     task_start = time.monotonic()
+    _init_task_context(user_id, job_id=job_id, trace_id=trace_id, session_id=session_id)
     db = _get_db()
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
@@ -864,6 +1399,34 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
             embedder = get_embedder(db=db, user_id=user_id)
             describer = get_describer(db=db, user_id=user_id)
 
+        # Resolve provider strings for billing decisions
+        _gen_provider = "fal"
+        _gen_model = lora.base_model or "flux-dev"
+        _desc_provider = getattr(describer, "provider_name", "openai") if describer else "openai"
+        _desc_model = describer.get_model_name() if describer else "unknown"
+        _embed_provider = "openai"
+        _embed_model = embedder.get_model_name() if embedder else "unknown"
+        _eval_provider = vision_eval_provider or "fal"
+        _eval_model = evaluator.get_model_name() if evaluator else "unknown"
+
+        def _orch_call(sub_op, provider, model, resource_id, call_fn, **decision_kwargs):
+            """Wrap a provider call with billable context manager."""
+            idem_key = make_idempotency_key(
+                user_id, get_trace_id(), f"evaluate_{sub_op}", resource_id,
+            )
+            with billable(
+                db, user_id, operation="evaluate",
+                provider=provider, model=model,
+                idempotency_key=idem_key,
+                resource_id=evaluation_id, job_id=job_id,
+                request_snapshot={"sub_operation": sub_op},
+                defer_debit=True,
+                **decision_kwargs,
+            ) as b:
+                if b.skipped:
+                    return None
+                return b.call(call_fn)
+
         progress_idx = 0
 
         # ========== PHASE 1: Reference pairs ==========
@@ -886,16 +1449,22 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                 gen_width = gen_params.get("width", image.width or 1024)
                 gen_height = gen_params.get("height", image.height or 1024)
 
-                result = _run_async(
-                    generator.generate(
-                        prompt=prompt,
-                        width=gen_width,
-                        height=gen_height,
-                        num_inference_steps=gen_params.get("num_inference_steps", 28),
-                        guidance_scale=gen_params.get("guidance_scale", 3.5),
-                        loras=[{"path": lora.lora_url, "scale": gen_params.get("lora_scale", 1.0)}],
-                    )
+                result = _orch_call(
+                    f"generate_ref_{idx}", _gen_provider, _gen_model, pair.id if pair else idx,
+                    lambda: _run_async(
+                        generator.generate(
+                            prompt=prompt,
+                            width=gen_width,
+                            height=gen_height,
+                            num_inference_steps=gen_params.get("num_inference_steps", 28),
+                            guidance_scale=gen_params.get("guidance_scale", 3.5),
+                            loras=[{"path": lora.lora_url, "scale": gen_params.get("lora_scale", 1.0)}],
+                        )
+                    ),
+                    with_lora=True,
                 )
+                if result is None:
+                    continue  # skip duplicate
 
                 # Save generated image
                 object_key = f"eval_{uuid.uuid4().hex}.png"
@@ -923,16 +1492,25 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                 # Embedding similarity: describe generated → embed → compare
                 if embedder and describer:
                     try:
-                        desc_result = _run_async(
-                            describer.describe_image(
-                                result.image_data, "image/png",
-                                description_prompt="Describe this image in detail for comparison purposes. Return JSON with a 'description' field.",
-                            )
+                        desc_result = _orch_call(
+                            f"describe_ref_{idx}", _desc_provider, _desc_model, pair.id if pair else idx,
+                            lambda: _run_async(
+                                describer.describe_image(
+                                    result.image_data, "image/png",
+                                    description_prompt="Describe this image in detail for comparison purposes. Return JSON with a 'description' field.",
+                                )
+                            ),
                         )
-                        gen_text = desc_result.description
+                        gen_text = desc_result.description if desc_result else None
 
-                        embed_result = _run_async(embedder.embed_text(gen_text))
-                        gen_embedding = embed_result.embedding
+                        if gen_text:
+                            embed_result = _orch_call(
+                                f"embed_ref_{idx}", _embed_provider, _embed_model, pair.id if pair else idx,
+                                lambda: _run_async(embedder.embed_text(gen_text)),
+                            )
+                        else:
+                            embed_result = None
+                        gen_embedding = embed_result.embedding if embed_result else None
 
                         original_embedding = image.image_metadata.embedding
                         if original_embedding is not None and len(original_embedding) > 0:
@@ -948,22 +1526,26 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                     try:
                         original_data = _run_async(image_service.get_image_data(image.id))
                         if original_data:
-                            eval_result = _run_async(
-                                evaluator.evaluate_pair(
-                                    original_image_data=original_data,
-                                    generated_image_data=result.image_data,
-                                    original_mime=image.mime_type or "image/jpeg",
-                                    generated_mime="image/png",
-                                    prompt_used=prompt,
-                                )
+                            eval_result = _orch_call(
+                                f"vision_eval_ref_{idx}", _eval_provider, _eval_model, pair.id if pair else idx,
+                                lambda: _run_async(
+                                    evaluator.evaluate_pair(
+                                        original_image_data=original_data,
+                                        generated_image_data=result.image_data,
+                                        original_mime=image.mime_type or "image/jpeg",
+                                        generated_mime="image/png",
+                                        prompt_used=prompt,
+                                    )
+                                ),
                             )
-                            vision_score = eval_result.overall
-                            vision_assessment = eval_result.assessment
-                            metrics_detail = {
-                                "style_fidelity": eval_result.style_fidelity,
-                                "subject_accuracy": eval_result.subject_accuracy,
-                                "detail_preservation": eval_result.detail_preservation,
-                            }
+                            if eval_result:
+                                vision_score = eval_result.overall
+                                vision_assessment = eval_result.assessment
+                                metrics_detail = {
+                                    "style_fidelity": eval_result.style_fidelity,
+                                    "subject_accuracy": eval_result.subject_accuracy,
+                                    "detail_preservation": eval_result.detail_preservation,
+                                }
                     except Exception as e:
                         logger.warning(f"Vision eval failed for pair {pair.id}: {e}")
 
@@ -1017,13 +1599,18 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                 ]
 
                 # Generate creative prompts
-                creative_prompts = _run_async(
-                    evaluator.generate_creative_prompts(
-                        trigger_word=lora.trigger_word or "",
-                        sample_descriptions=sample_descriptions,
-                        count=creative_count,
-                    )
+                creative_prompts = _orch_call(
+                    "creative_prompts", _eval_provider, _eval_model, evaluation_id,
+                    lambda: _run_async(
+                        evaluator.generate_creative_prompts(
+                            trigger_word=lora.trigger_word or "",
+                            sample_descriptions=sample_descriptions,
+                            count=creative_count,
+                        )
+                    ),
                 )
+                if creative_prompts is None:
+                    creative_prompts = []
                 logger.info(f"Generated {len(creative_prompts)} creative prompts")
 
                 for c_idx, creative_prompt in enumerate(creative_prompts):
@@ -1041,16 +1628,22 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                         c_width = gen_params.get("width", 1024)
                         c_height = gen_params.get("height", 1024)
 
-                        result = _run_async(
-                            generator.generate(
-                                prompt=creative_prompt,
-                                width=c_width,
-                                height=c_height,
-                                num_inference_steps=gen_params.get("num_inference_steps", 28),
-                                guidance_scale=gen_params.get("guidance_scale", 3.5),
-                                loras=[{"path": lora.lora_url, "scale": gen_params.get("lora_scale", 1.0)}],
-                            )
+                        result = _orch_call(
+                            f"generate_creative_{c_idx}", _gen_provider, _gen_model, pair.id if pair else c_idx,
+                            lambda: _run_async(
+                                generator.generate(
+                                    prompt=creative_prompt,
+                                    width=c_width,
+                                    height=c_height,
+                                    num_inference_steps=gen_params.get("num_inference_steps", 28),
+                                    guidance_scale=gen_params.get("guidance_scale", 3.5),
+                                    loras=[{"path": lora.lora_url, "scale": gen_params.get("lora_scale", 1.0)}],
+                                )
+                            ),
+                            with_lora=True,
                         )
+                        if result is None:
+                            continue  # skip duplicate
 
                         # Save generated image
                         object_key = f"eval_creative_{uuid.uuid4().hex}.png"
@@ -1070,13 +1663,20 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                         # Score with single-image evaluation (no reference comparison)
                         eval_service.update_pair_status(pair.id, "scoring")
 
-                        eval_result = _run_async(
-                            evaluator.evaluate_single(
-                                image_data=result.image_data,
-                                mime_type="image/png",
-                                prompt_used=creative_prompt,
-                            )
+                        eval_result = _orch_call(
+                            f"creative_eval_{c_idx}", _eval_provider, _eval_model, pair.id if pair else c_idx,
+                            lambda: _run_async(
+                                evaluator.evaluate_single(
+                                    image_data=result.image_data,
+                                    mime_type="image/png",
+                                    prompt_used=creative_prompt,
+                                )
+                            ),
                         )
+
+                        if eval_result is None:
+                            eval_service.update_pair_status(pair.id, "completed")
+                            continue
 
                         vision_score = eval_result.overall
                         vision_assessment = eval_result.assessment
@@ -1164,16 +1764,19 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                         })
 
                 if pair_assessments:
-                    assessment_summary = _run_async(
-                        evaluator.summarize_assessments(
-                            model_name=lora.name,
-                            trigger_word=lora.trigger_word or "N/A",
-                            pair_assessments=pair_assessments,
-                            overall_score=overall,
-                            avg_vision=avg_vision,
-                            avg_embedding=avg_embedding,
-                            creative_section=creative_section,
-                        )
+                    assessment_summary = _orch_call(
+                        "summarize_assessments", _eval_provider, _eval_model, evaluation_id,
+                        lambda: _run_async(
+                            evaluator.summarize_assessments(
+                                model_name=lora.name,
+                                trigger_word=lora.trigger_word or "N/A",
+                                pair_assessments=pair_assessments,
+                                overall_score=overall,
+                                avg_vision=avg_vision,
+                                avg_embedding=avg_embedding,
+                                creative_section=creative_section,
+                            )
+                        ),
                     )
             except Exception as e:
                 logger.warning(f"Assessment summary generation failed: {e}")
@@ -1230,6 +1833,16 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
             "creative_pairs": len(creative_completed),
         }
 
+    except InsufficientBalanceError:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
+        eval_service = get_evaluation_service(db, user_id)
+        eval_service.update_evaluation_status(evaluation_id, EvaluationStatus.FAILED, error_message="Insufficient credits")
+        return {"status": "error", "message": "Insufficient credits"}
+    except ZeroCostEstimateError as e:
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
+        eval_service = get_evaluation_service(db, user_id)
+        eval_service.update_evaluation_status(evaluation_id, EvaluationStatus.FAILED, error_message=f"Billing config error: {e}")
+        return {"status": "error", "message": f"Billing config error: {e}"}
     except Exception as e:
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
@@ -1249,4 +1862,12 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
         raise
     finally:
+        if job_id:
+            try:
+                finalize_job_billing(db, user_id, job_id)
+            except Exception:
+                logger.warning(f"Failed to finalize billing for job {job_id}", exc_info=True)
+        set_trace_id(None)
+        set_billing_user(None)
+        set_billing_job(None)
         db.close()

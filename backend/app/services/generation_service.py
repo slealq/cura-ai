@@ -3,6 +3,7 @@ import logging
 import uuid
 from datetime import datetime
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.generated_image import GeneratedImage, GenerationStatus
@@ -247,6 +248,7 @@ class GenerationService:
         self,
         lora_model_id: int | None = None,
         status: GenerationStatus | None = None,
+        mode: str | None = None,
         skip: int = 0,
         limit: int = 50,
     ) -> list[GeneratedImage]:
@@ -258,12 +260,22 @@ class GenerationService:
             query = query.filter(GeneratedImage.lora_model_id == lora_model_id)
         if status:
             query = query.filter(GeneratedImage.status == status)
+        if mode == "edit":
+            query = query.filter(GeneratedImage.generation_params["mode"].astext == "edit")
+        elif mode == "generate":
+            # Exclude edit records; include records with no mode key or NULL generation_params
+            query = query.filter(or_(
+                GeneratedImage.generation_params.is_(None),
+                GeneratedImage.generation_params["mode"].astext.is_(None),
+                GeneratedImage.generation_params["mode"].astext != "edit",
+            ))
         return query.order_by(GeneratedImage.created_at.desc()).offset(skip).limit(limit).all()
 
     def count_generated_images(
         self,
         lora_model_id: int | None = None,
         status: GenerationStatus | None = None,
+        mode: str | None = None,
     ) -> int:
         """Count generated images with optional filters."""
         query = self.db.query(GeneratedImage).filter(GeneratedImage.user_id == self.user_id)
@@ -271,6 +283,15 @@ class GenerationService:
             query = query.filter(GeneratedImage.lora_model_id == lora_model_id)
         if status:
             query = query.filter(GeneratedImage.status == status)
+        if mode == "edit":
+            query = query.filter(GeneratedImage.generation_params["mode"].astext == "edit")
+        elif mode == "generate":
+            # Exclude edit records; include records with no mode key or NULL generation_params
+            query = query.filter(or_(
+                GeneratedImage.generation_params.is_(None),
+                GeneratedImage.generation_params["mode"].astext.is_(None),
+                GeneratedImage.generation_params["mode"].astext != "edit",
+            ))
         return query.count()
 
     def delete_generated_image(self, gen_id: int) -> bool:

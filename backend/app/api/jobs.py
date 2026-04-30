@@ -10,6 +10,7 @@ from app.models import Image, ImageStatus, Job, JobStatus, JobType
 from app.models.generated_image import GeneratedImage, GenerationStatus
 from app.models.user import User
 from app.schemas import BatchJobImageInfo, BatchReprocessRequest, JobListResponse, JobResponse
+from app.workers.dispatch import dispatch
 from app.workers.tasks import (
     cluster_all_images,
     describe_image,
@@ -107,10 +108,12 @@ async def cancel_job(job_id: int, db: Session = Depends(get_db), current_user: U
     if job.status in [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]:
         raise HTTPException(status_code=400, detail="Job cannot be cancelled")
 
-    # Cancel Celery task if possible
+    # Revoke Celery task (prevents re-delivery of pending tasks).
+    # For running generation tasks, the actual cancellation happens via
+    # the cancel_check callback that polls Job.status in the DB.
     if job.celery_task_id:
         from app.workers.celery_app import celery_app
-        celery_app.control.revoke(job.celery_task_id, terminate=True)
+        celery_app.control.revoke(job.celery_task_id)
 
     job.status = JobStatus.CANCELLED
 
@@ -152,7 +155,7 @@ async def trigger_full_pipeline(db: Session = Depends(get_db), current_user: Use
     db.refresh(job)
 
     # Queue task
-    task = run_full_pipeline.delay(job.id, current_user.id)
+    task = dispatch(run_full_pipeline, job.id, current_user.id)
 
     # Update job with task ID
     job.celery_task_id = task.id
@@ -179,7 +182,7 @@ async def trigger_batch_tag(db: Session = Depends(get_db), current_user: User = 
     db.refresh(job)
 
     for img in images:
-        tag_image.delay(img.id, user_id=current_user.id)
+        dispatch(tag_image, img.id, user_id=current_user.id)
 
     return {"status": "queued", "job_id": job.id, "total": len(images), "message": f"Tagging {len(images)} images"}
 
@@ -198,7 +201,7 @@ async def trigger_batch_describe(db: Session = Depends(get_db), current_user: Us
     db.refresh(job)
 
     for img in images:
-        describe_image.delay(img.id, user_id=current_user.id)
+        dispatch(describe_image, img.id, user_id=current_user.id)
 
     return {"status": "queued", "job_id": job.id, "total": len(images), "message": f"Describing {len(images)} images"}
 
@@ -217,7 +220,7 @@ async def trigger_batch_embed(db: Session = Depends(get_db), current_user: User 
     db.refresh(job)
 
     for img in images:
-        embed_image.delay(img.id, user_id=current_user.id)
+        dispatch(embed_image, img.id, user_id=current_user.id)
 
     return {"status": "queued", "job_id": job.id, "total": len(images), "message": f"Embedding {len(images)} images"}
 
@@ -243,7 +246,7 @@ async def trigger_reprocess_all(db: Session = Depends(get_db), current_user: Use
     db.commit()
     db.refresh(job)
 
-    task = run_batch_reprocess.delay(job.id, current_user.id, image_ids)
+    task = dispatch(run_batch_reprocess, job.id, current_user.id, image_ids)
     job.celery_task_id = task.id
     db.commit()
 
@@ -276,7 +279,7 @@ async def trigger_reprocess_failed(db: Session = Depends(get_db), current_user: 
     db.commit()
     db.refresh(job)
 
-    task = run_batch_reprocess.delay(job.id, current_user.id, image_ids)
+    task = dispatch(run_batch_reprocess, job.id, current_user.id, image_ids)
     job.celery_task_id = task.id
     db.commit()
 
@@ -313,7 +316,7 @@ async def trigger_reprocess_selected(
     db.commit()
     db.refresh(job)
 
-    task = run_batch_reprocess.delay(job.id, current_user.id, image_ids)
+    task = dispatch(run_batch_reprocess, job.id, current_user.id, image_ids)
     job.celery_task_id = task.id
     db.commit()
 
@@ -381,22 +384,22 @@ async def retry_job(job_id: int, db: Session = Depends(get_db), current_user: Us
 
     # Dispatch the appropriate Celery task
     if job.job_type == JobType.TAG and job.image_id:
-        task = tag_image.delay(job.image_id, user_id, job_id=new_job.id)
+        task = dispatch(tag_image, job.image_id, user_id, job_id=new_job.id)
     elif job.job_type == JobType.DESCRIBE and job.image_id:
-        task = describe_image.delay(job.image_id, user_id, job_id=new_job.id)
+        task = dispatch(describe_image, job.image_id, user_id, job_id=new_job.id)
     elif job.job_type == JobType.EMBED and job.image_id:
-        task = embed_image.delay(job.image_id, user_id, job_id=new_job.id)
+        task = dispatch(embed_image, job.image_id, user_id, job_id=new_job.id)
     elif job.job_type == JobType.FULL_PIPELINE and job.image_id:
-        task = process_image_pipeline.delay(job.image_id, user_id, job_id=new_job.id)
+        task = dispatch(process_image_pipeline, job.image_id, user_id, job_id=new_job.id)
     elif job.job_type == JobType.CLUSTER:
-        task = cluster_all_images.delay(user_id, job_id=new_job.id)
+        task = dispatch(cluster_all_images, user_id, job_id=new_job.id)
     elif job.job_type == JobType.BATCH_REPROCESS:
         image_ids = (job.result or {}).get("image_ids", [])
         if not image_ids:
             db.delete(new_job)
             db.commit()
             raise HTTPException(status_code=400, detail="No image IDs found in original job to retry")
-        task = run_batch_reprocess.delay(new_job.id, user_id, image_ids)
+        task = dispatch(run_batch_reprocess, new_job.id, user_id, image_ids)
     elif job.job_type == JobType.GENERATE_IMAGE:
         from app.workers.generation_tasks import generate_image
         params = job.parameters or {}
@@ -411,7 +414,7 @@ async def retry_job(job_id: int, db: Session = Depends(get_db), current_user: Us
             gen.status = GenerationStatus.PENDING
             gen.error_message = None
             db.commit()
-        task = generate_image.delay(generated_image_id, job_id=new_job.id, user_id=user_id)
+        task = dispatch(generate_image, generated_image_id, job_id=new_job.id, user_id=user_id)
     elif job.job_type == JobType.BATCH_GENERATE:
         from app.workers.generation_tasks import batch_generate
         params = job.parameters or {}
@@ -431,7 +434,7 @@ async def retry_job(job_id: int, db: Session = Depends(get_db), current_user: Us
             synchronize_session="fetch",
         )
         db.commit()
-        task = batch_generate.delay(generated_image_ids, job_id=new_job.id, user_id=user_id)
+        task = dispatch(batch_generate, generated_image_ids, job_id=new_job.id, user_id=user_id)
     elif job.job_type == JobType.LORA_EVALUATE:
         from app.workers.generation_tasks import evaluate_lora
         params = job.parameters or {}
@@ -440,7 +443,7 @@ async def retry_job(job_id: int, db: Session = Depends(get_db), current_user: Us
             db.delete(new_job)
             db.commit()
             raise HTTPException(status_code=400, detail="No evaluation_id in original job parameters")
-        task = evaluate_lora.delay(evaluation_id, job_id=new_job.id, user_id=user_id)
+        task = dispatch(evaluate_lora, evaluation_id, job_id=new_job.id, user_id=user_id)
     elif job.job_type == JobType.LORA_TRAIN:
         # LoRA training has its own retry via /generation/lora/{id}/retry
         db.delete(new_job)

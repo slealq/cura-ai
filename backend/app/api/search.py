@@ -2,7 +2,7 @@
 import logging
 from collections import Counter
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,7 @@ from app.models import ImageMetadata
 from app.models.user import User
 from app.providers import get_embedder
 from app.schemas import ImageResponse, ScoredImageResponse, SearchRequest, SearchResponse
+from app.services.billing_service import InsufficientBalanceError
 from app.services.image_service import get_image_service
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,10 @@ async def semantic_search(
 
     Short queries lean towards keyword matching; longer queries lean towards semantic.
     """
-    embedder = get_embedder(db=db, user_id=current_user.id)
+    try:
+        embedder = get_embedder(db=db, user_id=current_user.id)
+    except InsufficientBalanceError:
+        raise HTTPException(status_code=402, detail="Insufficient credits")
     query_embedding = await embedder.embed_text(request.query)
     embedding_str = "[" + ",".join(str(x) for x in query_embedding.embedding) + "]"
 

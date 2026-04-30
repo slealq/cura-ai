@@ -1,5 +1,6 @@
 """Base interfaces for AI providers."""
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -212,11 +213,13 @@ class BaseGenerator(ABC):
         guidance_scale: float = 3.5,
         seed: int | None = None,
         loras: list[dict] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> GenerationResult:
         """Generate an image. Returns GenerationResult with image bytes.
 
         Args:
             loras: Optional list of LoRA configs, each {"path": url, "scale": float}.
+            cancel_check: Optional callable returning True if the task has been cancelled.
         """
         pass
 
@@ -311,6 +314,45 @@ class BaseEvaluator(ABC):
     @abstractmethod
     def get_model_name(self) -> str:
         """Get the model identifier."""
+        pass
+
+
+@dataclass
+class EditResult:
+    """Result from image editing."""
+
+    images: list[bytes]
+    widths: list[int]
+    heights: list[int]
+    seed: int | None = None
+    provider: str = ""
+    metadata: dict[str, Any] | None = None
+
+
+class BaseEditor(ABC):
+    """Abstract base class for image editing providers."""
+
+    @abstractmethod
+    async def edit(
+        self,
+        image_urls: list[str],
+        prompt: str,
+        negative_prompt: str | None = None,
+        image_size: dict | str | None = None,
+        num_images: int = 1,
+        seed: int | None = None,
+        output_format: str = "png",
+        enable_prompt_expansion: bool = True,
+        enable_safety_checker: bool = True,
+        cancel_check: Callable[[], bool] | None = None,
+        **kwargs: Any,
+    ) -> EditResult:
+        """Edit image(s) using a prompt. Returns EditResult with output images."""
+        pass
+
+    @abstractmethod
+    def get_provider_name(self) -> str:
+        """Get the provider identifier."""
         pass
 
 

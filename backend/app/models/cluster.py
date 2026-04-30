@@ -41,7 +41,10 @@ class Cluster(Base):
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
 
     # Clustering metadata
-    method: Mapped[ClusteringMethod] = mapped_column(Enum(ClusteringMethod), nullable=False)
+    method: Mapped[ClusteringMethod] = mapped_column(
+        Enum(ClusteringMethod, values_callable=lambda e: [m.value for m in e]),
+        nullable=False,
+    )
     run_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
 
     # Cluster properties

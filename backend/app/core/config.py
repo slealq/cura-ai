@@ -40,20 +40,21 @@ class Settings(BaseSettings):
     watch_folder_enabled: bool = True
 
     # AI Provider settings
-    default_vision_provider: Literal["openai", "anthropic"] = "openai"
+    default_vision_provider: Literal["openai", "anthropic", "fal"] = "openai"
     default_embedding_provider: Literal["openai", "local"] = "openai"
 
     # OpenAI
     openai_api_key: str = ""
-    openai_vision_model: str = "gpt-4o"
+    openai_vision_model: str = "gpt-4o-mini"
     openai_embedding_model: str = "text-embedding-3-small"
 
     # Anthropic
     anthropic_api_key: str = ""
-    anthropic_vision_model: str = "claude-sonnet-4-20250514"
+    anthropic_vision_model: str = "claude-3-haiku-20240307"
 
     # fal.ai
     fal_api_key: str = ""
+    fal_vision_model: str = "x-ai/grok-4-fast"
 
     # Generation / Training providers
     default_training_provider: str = "fal"
@@ -72,6 +73,15 @@ class Settings(BaseSettings):
     # Rate limiting / batching
     batch_size: int = 10
     rate_limit_per_minute: int = 60
+
+    # Billing
+    billing_strict_mode: bool = False
+
+    # Payments (Lemon Squeezy)
+    payment_provider: str = "lemon_squeezy"
+    lemon_squeezy_api_key: str = ""
+    lemon_squeezy_webhook_secret: str = ""
+    lemon_squeezy_store_id: str = ""
 
     # Auth / JWT
     jwt_secret_key: str = "change-me-in-production-jwt-secret"

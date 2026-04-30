@@ -3,17 +3,17 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
-import { Loader2, Plus, Image as ImageIcon } from 'lucide-react';
+import { Loader2, Plus } from 'lucide-react';
 import { toast } from 'sonner';
-import Link from 'next/link';
-import { foldersApi } from '@/lib/api';
+import { foldersApi, imagesApi } from '@/lib/api';
 import FolderCard from '@/components/FolderCard';
+import ImageGrid from '@/components/ImageGrid';
 import { cn } from '@/lib/utils';
 import type { Folder } from '@/types';
 
-const PAGE_SIZE = 20;
+const FOLDER_PAGE_SIZE = 20;
 
-export default function FoldersPage() {
+export default function ImagesPage() {
   const queryClient = useQueryClient();
   const router = useRouter();
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -24,13 +24,13 @@ export default function FoldersPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['folders', page],
-    queryFn: () => foldersApi.list({ skip: page * PAGE_SIZE, limit: PAGE_SIZE }),
+    queryFn: () => foldersApi.list({ skip: page * FOLDER_PAGE_SIZE, limit: FOLDER_PAGE_SIZE }),
   });
 
   useEffect(() => {
     if (data) {
       setAllItems((prev) => {
-        const updated = prev.slice(0, page * PAGE_SIZE);
+        const updated = prev.slice(0, page * FOLDER_PAGE_SIZE);
         return [...updated, ...data.items];
       });
     }
@@ -43,7 +43,7 @@ export default function FoldersPage() {
     setPage((p) => p + 1);
   }, []);
 
-  // Hide folders that are being deleted — read from sessionStorage (instant, no race)
+  // Hide folders that are being deleted
   const visibleFolders = useMemo(() => {
     if (allItems.length === 0) return [];
     const raw = sessionStorage.getItem('deleting-folders');
@@ -73,20 +73,15 @@ export default function FoldersPage() {
   });
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Folders</h1>
-        <div className="flex items-center gap-2">
-          <Link
-            href="/images/all"
-            className={cn(
-              'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors',
-              'border border-border hover:bg-muted'
-            )}
-          >
-            <ImageIcon className="h-3.5 w-3.5" />
-            All Images
-          </Link>
+    <div className="space-y-8">
+      {/* Folders section */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-bold">Images</h1>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-muted-foreground">Folders</h2>
           <button
             onClick={() => setShowCreateDialog(true)}
             className={cn(
@@ -98,43 +93,41 @@ export default function FoldersPage() {
             New Folder
           </button>
         </div>
+
+        {isLoading && page === 0 ? (
+          <div className="flex items-center justify-center h-32">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : visibleFolders.length > 0 ? (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {visibleFolders.map((folder) => (
+                <FolderCard key={folder.id} folder={folder} />
+              ))}
+            </div>
+
+            {hasMore && (
+              <div className="flex justify-center pt-2">
+                <button
+                  onClick={loadMore}
+                  disabled={isLoading}
+                  className="flex items-center gap-2 px-6 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
+                >
+                  {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  Load More ({total - allItems.length} remaining)
+                </button>
+              </div>
+            )}
+          </>
+        ) : null}
       </div>
 
-      {isLoading && page === 0 ? (
-        <div className="flex items-center justify-center h-64">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-        </div>
-      ) : visibleFolders.length === 0 ? (
-        <div className="flex flex-col items-center justify-center h-64 text-center">
-          <p className="text-muted-foreground">No folders yet</p>
-          <p className="text-sm text-muted-foreground mt-1">
-            Create a folder to organize your images
-          </p>
-        </div>
-      ) : (
-        <>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {visibleFolders.map((folder) => (
-              <FolderCard key={folder.id} folder={folder} />
-            ))}
-          </div>
-
-          {hasMore && (
-            <div className="flex justify-center pt-2">
-              <button
-                onClick={loadMore}
-                disabled={isLoading}
-                className="flex items-center gap-2 px-6 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
-              >
-                {isLoading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : null}
-                Load More ({total - allItems.length} remaining)
-              </button>
-            </div>
-          )}
-        </>
-      )}
+      {/* Unfiled images section */}
+      <ImageGrid
+        title="Unfiled"
+        queryKeyPrefix="unfiled-images"
+        fetchImages={(params) => imagesApi.list({ ...params, in_folder: false, min_status: 'ingested' })}
+      />
 
       {/* Create Folder Dialog */}
       {showCreateDialog && (
@@ -153,7 +146,7 @@ export default function FoldersPage() {
                 <label className="block text-sm font-medium mb-1">Name</label>
                 <input
                   type="text"
-                  placeholder="e.g. LindaBooxo"
+                  placeholder="e.g. Bugattis"
                   value={newFolderName}
                   onChange={(e) => setNewFolderName(e.target.value)}
                   className="w-full px-3 py-2 border border-border rounded-lg text-sm"

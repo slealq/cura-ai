@@ -8,6 +8,7 @@ import { Upload, X, Loader2, Info } from 'lucide-react';
 import { foldersApi } from '@/lib/api';
 import { cn, formatFileSize } from '@/lib/utils';
 import { useUpload } from '@/contexts/UploadContext';
+import { trackFunnelStep } from '@/lib/observability';
 
 interface FileWithPreview extends File {
   preview?: string;
@@ -33,6 +34,7 @@ export default function UploadPage() {
       })
     );
     setFiles((prev) => [...prev, ...newFiles]);
+    trackFunnelStep('upload', 'files_selected', { count: acceptedFiles.length });
   }, []);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({

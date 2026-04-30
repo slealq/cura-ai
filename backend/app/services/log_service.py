@@ -9,6 +9,65 @@ from app.models.pipeline_log import LogCategory, LogLevel, PipelineLog
 
 logger = logging.getLogger(__name__)
 
+_SENTRY_LOG_FNS = None
+
+
+def _get_sentry_log_fns():
+    """Lazy-load sentry_sdk.logger functions."""
+    global _SENTRY_LOG_FNS
+    if _SENTRY_LOG_FNS is None:
+        try:
+            from sentry_sdk import logger as sentry_logger
+            _SENTRY_LOG_FNS = {
+                LogLevel.INFO: sentry_logger.info,
+                LogLevel.WARNING: sentry_logger.warning,
+                LogLevel.ERROR: sentry_logger.error,
+            }
+        except (ImportError, Exception):
+            _SENTRY_LOG_FNS = {}
+    return _SENTRY_LOG_FNS
+
+
+def _emit_sentry_log(
+    level, message, pipeline_log_id, category, task_name, provider, model,
+    operation, duration_ms, input_tokens, output_tokens, success,
+    user_id, job_id, image_id,
+):
+    """Emit a structured log to Sentry Logs. Best-effort, never raises."""
+    try:
+        log_fns = _get_sentry_log_fns()
+        log_fn = log_fns.get(level)
+        if not log_fn:
+            return
+
+        attrs = {"log.category": category.value, "log.pipeline_log_id": str(pipeline_log_id)}
+        if task_name:
+            attrs["task.name"] = task_name
+        if provider:
+            attrs["ai.provider"] = provider
+        if model:
+            attrs["ai.model"] = model
+        if operation:
+            attrs["ai.operation"] = operation
+        if duration_ms is not None:
+            attrs["ai.duration_ms"] = float(duration_ms)
+        if input_tokens is not None:
+            attrs["ai.input_tokens"] = float(input_tokens)
+        if output_tokens is not None:
+            attrs["ai.output_tokens"] = float(output_tokens)
+        if success is not None:
+            attrs["ai.success"] = success
+        if user_id is not None:
+            attrs["app.user_id"] = str(user_id)
+        if job_id is not None:
+            attrs["app.job_id"] = str(job_id)
+        if image_id is not None:
+            attrs["app.image_id"] = str(image_id)
+
+        log_fn(message, attributes=attrs)
+    except Exception:
+        pass
+
 
 def write_log(
     category: LogCategory,
@@ -23,6 +82,7 @@ def write_log(
     duration_ms: float | None = None,
     input_tokens: int | None = None,
     output_tokens: int | None = None,
+    provider_cost: float | None = None,
     success: bool | None = None,
     extra: dict | None = None,
     user_id: int | None = None,
@@ -30,12 +90,26 @@ def write_log(
     """Write a log entry. Opens and closes its own session to stay independent."""
     db = SessionLocal()
     try:
+        # For API call logs, inherit context from billing thread-local if not explicitly set
+        effective_image_id = image_id
+        effective_user_id = user_id
+        if category == LogCategory.API_CALL:
+            from app.services.billing_context import get_billing_image, get_billing_job, get_billing_user, get_trace_id
+            if effective_image_id is None:
+                effective_image_id = get_billing_image()
+            if effective_user_id is None:
+                effective_user_id = get_billing_user()
+            if job_id is None:
+                job_id = get_billing_job()
+        else:
+            from app.services.billing_context import get_trace_id
+
         entry = PipelineLog(
-            user_id=user_id,
+            user_id=effective_user_id,
             level=level,
             category=category,
             message=message,
-            image_id=image_id,
+            image_id=effective_image_id,
             job_id=job_id,
             task_name=task_name,
             provider=provider,
@@ -46,9 +120,54 @@ def write_log(
             output_tokens=output_tokens,
             success=success,
             extra=extra,
+            trace_id=get_trace_id(),
         )
         db.add(entry)
         db.commit()
+
+        # Bridge to Sentry Logs with structured attributes
+        _emit_sentry_log(
+            level, message, entry.id, category, task_name, provider, model,
+            operation, duration_ms, input_tokens, output_tokens, success,
+            effective_user_id, job_id, effective_image_id,
+        )
+
+        # Record usage for successful API calls
+        if category == LogCategory.API_CALL and success is True:
+            from app.services.billing_context import get_billing_user, is_billing_deferred
+            from app.services.billing_orchestrator import ORCHESTRATOR_ENABLED_OPS
+
+            effective_user_id = user_id or get_billing_user()
+            if effective_user_id and provider and operation:
+                # If this operation is managed by the orchestrator, store
+                # tokens in context for the orchestrator to pick up and
+                # skip the legacy record_usage_standalone() path.
+                if operation in ORCHESTRATOR_ENABLED_OPS:
+                    from app.services.billing_context import set_last_api_call_tokens
+                    set_last_api_call_tokens(input_tokens, output_tokens, provider_cost, pipeline_log_id=entry.id)
+                    entry.billing_failed = False
+                    db.commit()
+                else:
+                    try:
+                        from app.services.billing_service import record_usage_standalone
+
+                        record_usage_standalone(
+                            user_id=effective_user_id,
+                            provider=provider,
+                            model=model or "unknown",
+                            operation=operation,
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                            pipeline_log_id=entry.id,
+                            provider_cost=provider_cost,
+                            defer_debit=is_billing_deferred(),
+                        )
+                        entry.billing_failed = False
+                        db.commit()
+                    except Exception as usage_err:
+                        logger.error(f"Failed to record usage: {usage_err}", exc_info=True)
+                        entry.billing_failed = True
+                        db.commit()
     except Exception as e:
         logger.warning(f"Failed to write pipeline log: {e}")
         db.rollback()

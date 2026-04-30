@@ -1,4 +1,4 @@
-# Cura.ai
+# SightLab
 
 Automatically ingest, tag, cluster, and browse design inspiration images using AI. Images flow through a processing pipeline that extracts tags, generates descriptions, creates embeddings for semantic search, and clusters similar images together.
 
@@ -74,11 +74,34 @@ Automatically ingest, tag, cluster, and browse design inspiration images using A
 - **Status tracking**: Active, invalid, quota exceeded status with last validation timestamp
 - **Environment fallback**: Falls back to environment variables if no stored key exists
 
+### Vision Analysis
+- **AI-powered image analysis**: Analyze any image (uploaded, from library, or generated) using vision AI
+- **Three analysis modes**: Tag (extract categorization tags), Describe (generate detailed description), Custom (user-provided prompt)
+- **Multiple providers**: OpenAI (GPT-4o), Anthropic (Claude Sonnet), fal.ai (Grok-4-fast via OpenRouter)
+- **Source flexibility**: Analyze existing library images, generated images, or upload a new source image
+- **Persisted results**: All analysis results saved to database with full history and search
+
+### Image Editing
+- **AI-powered image editing**: Edit images using 6 different fal.ai models with model-specific capabilities
+- **Edit models**: Qwen Image Max Edit (multi-image, prompt expansion), Kling Image (high-res up to 4K), Wan 2.5 (image-to-image), Grok Imagine (single-image edit), Nano Banana Pro Edit (multi-image with web search), Face Swap (2-image face replacement)
+- **Multi-source input**: Use images from library, generated images, or upload new source images
+- **Batch output**: Generate multiple edited variants per request (model-dependent limits)
+- **Model-specific parameters**: Resolution, aspect ratio, safety tolerance, prompt expansion, occlusion prevention
+
+### Billing & Usage Tracking
+- **Sparks currency**: Internal credit system (1 spark = $0.001 USD). All AI operations are metered and charged
+- **Cost catalog**: Admin-configurable pricing per provider/model/operation with platform markup (default 2.0x)
+- **Usage tracking**: Every AI call logged with input/output tokens, raw cost, charged cost, and detailed breakdown
+- **User balance**: Credit balance per user with transaction history (credits, debits, adjustments)
+- **Cost estimates**: Pre-operation cost estimates for image generation and vision analysis displayed in the UI
+- **Admin billing dashboard**: Platform-wide revenue summary, per-user balance management, billing logs with filters
+
 ### Provider Abstraction
-- **Swappable vision providers**: OpenAI (GPT-4o) or Anthropic (Claude Sonnet) for tagging and describing
+- **Swappable vision providers**: OpenAI (GPT-4o), Anthropic (Claude Sonnet), or fal.ai (Grok-4-fast via OpenRouter) for tagging and describing
 - **Swappable summarizers**: OpenAI or Anthropic for cluster summaries
-- **Swappable evaluators**: OpenAI or Anthropic for LoRA evaluation vision scoring
+- **Swappable evaluators**: OpenAI, Anthropic, or fal.ai for LoRA evaluation vision scoring
 - **Swappable training/generation**: fal.ai for LoRA training and image generation
+- **Image editing**: fal.ai with 6 edit models (qwen-image-max-edit, kling-image, wan-25, grok-imagine, face-swap, nano-banana-pro-edit)
 - **Embeddings**: OpenAI text-embedding-3-small (1536 dimensions)
 - **Factory functions**: `get_tagger()`, `get_describer()`, `get_embedder()`, `get_cluster_summarizer()`, `get_trainer()`, `get_generator()`, `get_evaluator()`
 
@@ -108,6 +131,12 @@ Automatically ingest, tag, cluster, and browse design inspiration images using A
               │  LoRA    │ │  Image   │ │  LoRA    │
               │ Trainer  │ │Generator │ │Evaluator │
               │ (fal.ai) │ │ (fal.ai) │ │(AI+Embed)│
+              └──────────┘ └──────────┘ └──────────┘
+
+              ┌──────────┐ ┌──────────┐ ┌──────────┐
+              │  Image   │ │  Vision  │ │ Billing  │
+              │  Editor  │ │ (Grok/   │ │ Service  │
+              │ (fal.ai) │ │ GPT/CL.) │ │ (Sparks) │
               └──────────┘ └──────────┘ └──────────┘
 ```
 
@@ -222,7 +251,19 @@ LoRA model management page. View all trained and uploaded models with status bad
 - **Evaluation**: Run quality evaluations on completed/uploaded models, view evaluation history with scores, drill into per-pair comparisons (original vs generated side-by-side with similarity metrics)
 
 ### Generate — `/generate`
-Image generation page using trained LoRA models. Select a completed LoRA model, write a prompt with the trigger word, configure generation parameters (size, steps, guidance scale, LoRA scale, seed), and generate 1-8 images. View generated images in a gallery with thumbnails. Generation parameters respect per-model defaults set in model settings.
+Image generation page using trained LoRA models. Select a completed LoRA model, write a prompt with the trigger word, configure generation parameters (size, steps, guidance scale, LoRA scale, seed), and generate 1-8 images. View generated images in a gallery with thumbnails. Generation parameters respect per-model defaults set in model settings. Supports 3 base models: Flux Dev, Qwen 2.5, and Nano Banana Pro.
+
+### Vision — `/vision`
+AI-powered image analysis interface. Select a source image (from library, generated images, or upload), choose an analysis mode (Tag, Describe, or Custom with user prompt), and select a vision provider (OpenAI GPT-4o, Anthropic Claude Sonnet, or fal.ai Grok-4-fast). Results are persisted and displayed in a history table with expandable details.
+
+### Edit — `/edit`
+Image editing page with 6 AI edit models. Select source images, choose an edit model (Qwen Image Max Edit, Kling Image, Wan 2.5, Grok Imagine, Nano Banana Pro Edit, or Face Swap), write an edit prompt, and configure model-specific parameters (resolution, aspect ratio, safety tolerance, prompt expansion). Generated edits appear in a gallery below.
+
+### Billing — `/billing`
+User billing dashboard showing current spark balance, usage summary broken down by operation and provider, and full transaction history (credits, debits, adjustments). Date range filtering for usage analysis.
+
+### Admin — `/admin`
+Admin-only dashboard with 4 tabs: **Usage & Billing** (platform revenue summary, per-user balance list with credit management), **Cost Catalog** (CRUD for provider/model/operation pricing with platform markup), **Billing Logs** (paginated billing event log with filters for user, provider, operation, and date range — expandable rows show full cost breakdown), **System** (API key management).
 
 ### Settings — `/settings`
 Multiple sections:
@@ -373,6 +414,46 @@ Full interactive docs available at http://localhost:8000/api/docs
 | GET | `/base-model` | Get active base model |
 | PUT | `/base-model` | Set active base model |
 
+### Billing (`/api/billing`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/balance` | Get current user's spark balance |
+| GET | `/transactions` | Transaction history (paginated) |
+| GET | `/usage` | Usage summary by operation/provider (optional date range) |
+| GET | `/generation-costs` | Per-image generation cost estimates in sparks by base model |
+| GET | `/vision-costs` | Per-call vision cost estimates in sparks by provider and mode |
+| GET | `/admin/users` | All user balances with total spent (admin) |
+| GET | `/admin/users/{user_id}/usage` | User-specific usage summary (admin) |
+| POST | `/admin/users/{user_id}/credits` | Add credits to user balance (admin) |
+| GET | `/admin/summary` | Platform-wide cost/revenue summary (admin) |
+| GET | `/admin/logs` | Paginated billing logs with filters (admin) |
+| GET | `/admin/catalog` | List all cost catalog entries (admin) |
+| POST | `/admin/catalog` | Create/upsert catalog entry (admin) |
+| PUT | `/admin/catalog/{entry_id}` | Update catalog entry (admin) |
+| DELETE | `/admin/catalog/{entry_id}` | Delete catalog entry (admin) |
+
+### Vision (`/api/vision`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/analyze` | Analyze image (tag/describe/custom mode, source from image_id/generated_id/upload_key) |
+| GET | `/results` | List persisted analysis results (paginated, newest first) |
+| DELETE | `/results/{result_id}` | Delete a vision result |
+| POST | `/upload-source` | Upload temporary source image for analysis (max 30MB) |
+
+### Edit (`/api/edit`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/` | Submit edit request (6 models: qwen-image-max-edit, kling-image, wan-25, grok-imagine, face-swap, nano-banana-pro-edit) |
+| POST | `/upload-source` | Upload source image for editing (max 30MB) |
+| GET | `/images` | List edited images (paginated) |
+| GET | `/images/{gen_id}` | Get edited image details |
+| DELETE | `/images/{gen_id}` | Delete edited image |
+| GET | `/images/{gen_id}/file` | Serve edited image file |
+| GET | `/thumbnails/{filename}` | Serve edited image thumbnail |
+
 ### Logs (`/api/logs`)
 
 | Method | Endpoint | Description |
@@ -398,8 +479,20 @@ AI-generated image records linked to LoRA models. Tracks generation status, prom
 ### LoraEvaluation + EvaluationPair
 Quality evaluation of trained LoRA models. An evaluation generates images from source prompts and compares against originals. Tracks overall_score, avg_embedding_similarity, avg_vision_score, avg_clip_image_score, avg_clip_text_score, and assessment_summary. Each EvaluationPair stores the original image reference, prompt used, generated image, and per-pair metrics (embedding_similarity, vision_score, vision_assessment, clip scores). Pairs have a `pair_type` of "reference" (compared against original training image) or "creative" (novel prompt, no original comparison).
 
+### CostCatalog
+Global pricing catalog for AI operations. Fields: provider, model, operation, cost_per_input_token, cost_per_output_token, cost_per_call, platform_markup (default 2.0x), is_active. Supports wildcard model matching ("*") for fallback pricing.
+
+### UsageRecord
+Per-operation usage tracking. Fields: user_id, operation, provider, model, input_tokens, output_tokens, raw_cost, charged_cost, detail (JSON cost breakdown with rates, per-component costs, markup, sparks). Indexed on created_at DESC for efficient admin queries.
+
+### UserBalance + BalanceTransaction
+UserBalance caches current credit balance per user in sparks (1 spark = $0.001 USD). BalanceTransaction is an append-only ledger with types: credit, debit, adjustment. Every AI operation debits the user balance via BillingService.
+
+### VisionResult
+Persisted vision analysis result. Fields: mode (tag/describe/custom), provider, model, prompt_text, result_tags (JSON array), result_text, duration_ms, source references (image_id, generated_id, or object_key).
+
 ### Job
-Tracks async Celery tasks with type (INGEST, TAG, DESCRIBE, EMBED, CLUSTER, SUMMARIZE_CLUSTER, FULL_PIPELINE, REPROCESS, BATCH_REPROCESS, LORA_TRAIN, GENERATE_IMAGE, BATCH_GENERATE, LORA_EVALUATE), status, progress/total counters, parameters, result data, and error messages.
+Tracks async Celery tasks with type (INGEST, NORMALIZE, TAG, DESCRIBE, EMBED, CLUSTER, SUMMARIZE_CLUSTER, FULL_PIPELINE, REPROCESS, BATCH_REPROCESS, LORA_TRAIN, GENERATE_IMAGE, BATCH_GENERATE, LORA_EVALUATE, FOLDER_DELETE, EDIT_IMAGE, BATCH_EDIT, BATCH_DESCRIBE), status, progress/total counters, parameters, result data, error messages, and charged_cost (sparks).
 
 ### Folder + FolderImage
 User-created folders for organizing images. Many-to-many relationship — an image can belong to multiple folders. Folder deletion preserves images.
@@ -432,9 +525,9 @@ Key-value store for application configuration (clustering config, provider confi
 | `SECRET_KEY` | `change-me-in-production` | Encryption key for stored API keys |
 | `DEFAULT_VISION_PROVIDER` | `openai` | Vision provider (openai/anthropic) |
 | `DEFAULT_EMBEDDING_PROVIDER` | `openai` | Embedding provider |
-| `OPENAI_VISION_MODEL` | `gpt-4o` | OpenAI vision model |
+| `OPENAI_VISION_MODEL` | `gpt-4o-mini` | OpenAI vision model |
 | `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model |
-| `ANTHROPIC_VISION_MODEL` | `claude-sonnet-4-20250514` | Anthropic vision model |
+| `ANTHROPIC_VISION_MODEL` | `claude-3-haiku-20240307` | Anthropic vision model |
 | `STORAGE_BACKEND` | `local` | Storage backend (local/s3/gcs) |
 | `LOCAL_STORAGE_PATH` | `./storage` | Local image storage path |
 | `WATCH_FOLDER_PATH` | `./watch_folder` | Folder watcher path |
@@ -546,7 +639,10 @@ def get_tagger(provider: str | None = None) -> BaseTagger:
 │   │   │   ├── settings.py   # Prompts, presets, clustering config, API keys, provider/generation/training config
 │   │   │   ├── logs.py       # Pipeline log queries
 │   │   │   ├── folders.py    # Folder management
-│   │   │   └── generation.py # LoRA training, image generation, evaluation
+│   │   │   ├── generation.py # LoRA training, image generation, evaluation
+│   │   │   ├── billing.py    # User balance, usage tracking, cost catalog, admin billing
+│   │   │   ├── vision.py     # Vision analysis (tag/describe/custom)
+│   │   │   └── edit.py       # Image editing with 6 fal.ai models
 │   │   ├── core/             # App configuration
 │   │   ├── db/               # Database session management
 │   │   ├── models/           # SQLAlchemy models
@@ -560,12 +656,14 @@ def get_tagger(provider: str | None = None) -> BaseTagger:
 │   │   │   ├── prompt_preset.py  # Prompt presets
 │   │   │   ├── pipeline_log.py   # Structured logs
 │   │   │   ├── settings.py   # AppSetting key-value
-│   │   │   └── api_key.py    # Encrypted API key storage
+│   │   │   ├── api_key.py    # Encrypted API key storage
+│   │   │   ├── billing.py    # CostCatalog, UsageRecord, UserBalance, BalanceTransaction
+│   │   │   └── vision.py     # VisionResult
 │   │   ├── providers/        # AI provider abstractions
-│   │   │   ├── base.py       # Interfaces: BaseTagger, BaseDescriber, BaseEmbedder, BaseClusterSummarizer, BaseTrainer, BaseGenerator, BaseEvaluator
+│   │   │   ├── base.py       # Interfaces: BaseTagger, BaseDescriber, BaseEmbedder, BaseClusterSummarizer, BaseTrainer, BaseGenerator, BaseEvaluator, BaseEditor
 │   │   │   ├── openai_provider.py   # OpenAI implementations (tagger, describer, embedder, summarizer, evaluator)
 │   │   │   ├── anthropic_provider.py # Anthropic implementations (tagger, describer, summarizer, evaluator)
-│   │   │   └── fal_provider.py      # fal.ai LoRA training + image generation
+│   │   │   └── fal_provider.py      # fal.ai LoRA training, image generation, vision (Grok-4-fast), editing (6 models)
 │   │   ├── schemas/          # Pydantic request/response models
 │   │   ├── services/         # Business logic layer
 │   │   │   ├── image_service.py      # Image CRUD, metadata
@@ -578,13 +676,15 @@ def get_tagger(provider: str | None = None) -> BaseTagger:
 │   │   │   ├── api_key_service.py    # Encrypted API key management
 │   │   │   ├── encryption.py         # Fernet symmetric encryption
 │   │   │   ├── generation_service.py # LoRA + generation CRUD
-│   │   │   └── evaluation_service.py # LoRA evaluation + pair management
+│   │   │   ├── evaluation_service.py # LoRA evaluation + pair management
+│   │   │   ├── billing_service.py    # Cost catalog, usage tracking, balance management
+│   │   │   └── vision_service.py     # Vision analysis result persistence
 │   │   ├── workers/          # Celery task definitions
 │   │   │   ├── celery_app.py # Celery config, queues, rate limits
 │   │   │   ├── tasks.py      # Pipeline async tasks (tag, describe, embed, cluster, summarize, batch reprocess)
 │   │   │   └── generation_tasks.py # LoRA training, image generation, batch generation, evaluation tasks
 │   │   └── main.py           # FastAPI app entry point
-│   ├── migrations/           # Alembic migrations (16 versions)
+│   ├── migrations/           # Alembic migrations (33 versions)
 │   ├── scripts/              # Utility scripts
 │   ├── Dockerfile
 │   └── pyproject.toml
@@ -613,9 +713,13 @@ def get_tagger(provider: str | None = None) -> BaseTagger:
 │       │   │   │   ├── evaluate/page.tsx     # Evaluation setup form
 │       │   │   │   └── evaluations/[evalId]/page.tsx  # Evaluation results with pairs
 │       │   ├── generate/page.tsx     # Image generation
-│       │   ├── jobs/page.tsx         # Jobs monitor
-│       │   ├── debug/page.tsx        # Debug logs
-│       │   └── settings/page.tsx     # Settings
+│       │   ├── vision/page.tsx      # Vision analysis
+│       │   ├── edit/page.tsx        # Image editing
+│       │   ├── billing/page.tsx     # User billing dashboard
+│       │   ├── admin/page.tsx       # Admin dashboard (billing, catalog, logs, system)
+│       │   ├── jobs/page.tsx        # Jobs monitor
+│       │   ├── debug/page.tsx       # Debug logs
+│       │   └── settings/page.tsx    # Settings
 │       ├── components/       # Reusable UI components
 │       │   ├── Header.tsx            # Top bar with search, stats
 │       │   ├── Sidebar.tsx           # Navigation sidebar
@@ -662,9 +766,10 @@ def get_tagger(provider: str | None = None) -> BaseTagger:
 | Backend | FastAPI, SQLAlchemy 2.0, Pydantic, Alembic |
 | Database | PostgreSQL 16 + pgvector 0.7.0 |
 | Queue | Celery + Redis 7 |
-| AI (Vision) | OpenAI GPT-4o, Anthropic Claude Sonnet |
+| AI (Vision) | OpenAI GPT-4o, Anthropic Claude Sonnet, fal.ai Grok-4-fast (via OpenRouter) |
 | AI (Embeddings) | OpenAI text-embedding-3-small (1536 dims) |
-| AI (Training/Gen) | fal.ai (Flux Dev / Qwen 2.5 LoRA training + image generation) |
+| AI (Training/Gen) | fal.ai (Flux Dev / Qwen 2.5 / Nano Banana Pro — LoRA training + image generation) |
+| AI (Editing) | fal.ai (6 models: Qwen Image Max, Kling, Wan 2.5, Grok Imagine, Face Swap, Nano Banana Pro) |
 | ML | HDBSCAN, scikit-learn, UMAP, numpy |
 | Image Processing | Pillow, imagehash |
 | Deployment | Docker Compose |
