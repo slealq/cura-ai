@@ -83,6 +83,9 @@ class Settings(BaseSettings):
     lemon_squeezy_webhook_secret: str = ""
     lemon_squeezy_store_id: str = ""
 
+    # Google OAuth (Sign in with Google). Empty = feature disabled.
+    google_client_id: str = ""
+
     # Auth / JWT
     jwt_secret_key: str = "change-me-in-production-jwt-secret"
     jwt_algorithm: str = "HS256"

@@ -70,17 +70,23 @@ function AppShell({ children }: { children: React.ReactNode }) {
   );
 }
 
+// Marketing/public pages render without the app shell and never redirect to login
+const PUBLIC_ROUTES = ['/', '/pricing', '/terms', '/privacy', '/login'];
+
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { isLoading, isAuthenticated } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
   const { resolvedTheme } = useTheme();
 
+  const normalizedPath = pathname !== '/' ? pathname.replace(/\/+$/, '') : '/';
+  const isPublic = PUBLIC_ROUTES.includes(normalizedPath);
+
   useEffect(() => {
-    if (!isLoading && !isAuthenticated && pathname !== '/login') {
+    if (!isLoading && !isAuthenticated && !isPublic) {
       router.replace('/login');
     }
-  }, [isLoading, isAuthenticated, pathname, router]);
+  }, [isLoading, isAuthenticated, isPublic, router]);
 
   if (isLoading) {
     return (
@@ -90,7 +96,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (pathname === '/login') {
+  if (isPublic) {
     return (
       <>
         {children}

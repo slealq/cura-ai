@@ -1285,6 +1285,16 @@ export const authApi = {
     return data;
   },
 
+  googleClientId: async (): Promise<string> => {
+    const { data } = await api.get('/auth/google-client-id');
+    return data.client_id || '';
+  },
+
+  googleLogin: async (credential: string): Promise<TokenResponse> => {
+    const { data } = await api.post('/auth/google', { credential });
+    return data;
+  },
+
   me: async (): Promise<AuthUser> => {
     const { data } = await api.get('/auth/me');
     return data;
