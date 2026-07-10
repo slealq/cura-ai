@@ -55,6 +55,9 @@ export default function PricingPage() {
           currency for processing, generation, editing, and training. Buy packs as you go, or
           subscribe for the best rate.
         </p>
+        <p className="mx-auto mt-3 max-w-2xl text-sm font-medium text-emerald-600 dark:text-emerald-400">
+          Every new account starts with 500 free sparks — no payment required.
+        </p>
       </section>
 
       {/* Subscriptions */}

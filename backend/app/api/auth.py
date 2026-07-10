@@ -76,6 +76,30 @@ class CreateUserRequest(BaseModel):
     role: str = "user"
 
 
+def _grant_signup_bonus(db: Session, user: User) -> None:
+    """Credit the configured welcome bonus to a newly created account.
+
+    Never fails signup — billing errors are logged and reported only.
+    """
+    from decimal import Decimal
+
+    from app.core.config import get_settings
+
+    bonus = get_settings().signup_bonus_sparks
+    if bonus <= 0:
+        return
+    try:
+        from app.services.billing_service import BillingService
+
+        BillingService(db, user.id).add_credits(
+            amount=Decimal(bonus),
+            description=f"Welcome bonus ({bonus:,} sparks)",
+        )
+        logger.info("Granted %d welcome sparks to user %s", bonus, user.email)
+    except Exception:
+        logger.exception("Failed to grant signup bonus to user %s", user.id)
+
+
 # --- Endpoints ---
 
 
@@ -106,6 +130,8 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+
+    _grant_signup_bonus(db, user)
 
     access_token = create_access_token(user.id, user.email)
     refresh_token = create_refresh_token(user.id)
@@ -199,6 +225,7 @@ async def google_login(request: GoogleLoginRequest, db: Session = Depends(get_db
         db.commit()
         db.refresh(user)
         logger.info("Created user %s via Google sign-in", email)
+        _grant_signup_bonus(db, user)
 
     if not user.is_active:
         raise HTTPException(

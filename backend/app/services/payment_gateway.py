@@ -355,13 +355,27 @@ class MockPaymentGateway(PaymentGateway):
         return {"success": True}
 
 
+class PaymentsNotConfiguredError(RuntimeError):
+    """No real payment gateway is configured and the mock is not allowed."""
+
+
 def get_payment_gateway() -> PaymentGateway:
-    """Factory: returns configured payment gateway."""
+    """Factory: returns configured payment gateway.
+
+    The mock gateway auto-completes purchases (credits sparks without any
+    payment), so it is only returned in local dev or with an explicit
+    PAYMENTS_ALLOW_MOCK opt-in. Cloud environments without Lemon Squeezy
+    credentials raise PaymentsNotConfiguredError instead.
+    """
     settings = get_settings()
     if settings.lemon_squeezy_api_key:
         return LemonSqueezyGateway(
             api_key=settings.lemon_squeezy_api_key,
             store_id=settings.lemon_squeezy_store_id,
         )
-    logger.warning("No Lemon Squeezy API key configured — using mock gateway")
-    return MockPaymentGateway()
+    if settings.environment == "local" or settings.payments_allow_mock:
+        logger.warning("No Lemon Squeezy API key configured — using mock gateway")
+        return MockPaymentGateway()
+    raise PaymentsNotConfiguredError(
+        "Automated payments are not configured in this environment"
+    )

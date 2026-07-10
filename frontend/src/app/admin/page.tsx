@@ -40,7 +40,7 @@ export default function AdminPage() {
     platform_markup: 1.0,
     pricing_rules: '' as string,
   });
-  const [activeTab, setActiveTab] = useState<'usage' | 'catalog' | 'logs' | 'operations' | 'system'>('usage');
+  const [activeTab, setActiveTab] = useState<'usage' | 'payments' | 'catalog' | 'logs' | 'operations' | 'system'>('usage');
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
   const [keyInput, setKeyInput] = useState('');
   const [showKeyInput, setShowKeyInput] = useState(false);
@@ -93,6 +93,34 @@ export default function AdminPage() {
     queryKey: ['settings', 'api-keys'],
     queryFn: settingsApi.getApiKeys,
     enabled: isAdmin,
+  });
+
+  const { data: manualClaims, isLoading: manualClaimsLoading } = useQuery({
+    queryKey: ['billing', 'admin', 'manual-claims'],
+    queryFn: () => billingApi.adminManualClaims(),
+    enabled: isAdmin,
+    refetchInterval: 60000,
+  });
+
+  const approveClaimMutation = useMutation({
+    mutationFn: (id: number) => billingApi.adminApproveManualClaim(id),
+    onSuccess: (data) => {
+      toast.success(`Claim approved — ${formatNumber(data.sparks_credited)} sparks credited`);
+      queryClient.invalidateQueries({ queryKey: ['billing', 'admin', 'manual-claims'] });
+    },
+    onError: (err) => {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Failed to approve claim';
+      toast.error(msg);
+    },
+  });
+
+  const rejectClaimMutation = useMutation({
+    mutationFn: (id: number) => billingApi.adminRejectManualClaim(id),
+    onSuccess: () => {
+      toast.success('Claim rejected');
+      queryClient.invalidateQueries({ queryKey: ['billing', 'admin', 'manual-claims'] });
+    },
+    onError: () => toast.error('Failed to reject claim'),
   });
 
   const logsStartDate = getStartDate(logsDateRange);
@@ -299,6 +327,7 @@ export default function AdminPage() {
         <div className="flex gap-1 bg-muted rounded-lg p-1 mt-4 w-fit">
           {([
             { key: 'usage', label: 'Usage & Billing' },
+            { key: 'payments', label: 'Payments' },
             { key: 'catalog', label: 'Cost Catalog' },
             { key: 'logs', label: 'Billing Logs' },
             { key: 'operations', label: 'Operations' },
@@ -308,15 +337,97 @@ export default function AdminPage() {
               key={key}
               onClick={() => setActiveTab(key)}
               className={cn(
-                'px-3 py-1 text-sm rounded-md transition-colors',
+                'px-3 py-1 text-sm rounded-md transition-colors inline-flex items-center gap-1.5',
                 activeTab === key ? 'bg-background shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'
               )}
             >
               {label}
+              {key === 'payments' && (manualClaims?.pending_count ?? 0) > 0 && (
+                <span className="rounded-full bg-red-500 text-white text-xs font-semibold px-1.5 min-w-[1.25rem] text-center">
+                  {manualClaims?.pending_count}
+                </span>
+              )}
             </button>
           ))}
         </div>
       </div>
+
+      {/* Payments Tab - Manual PayPal claims */}
+      {activeTab === 'payments' && (
+      <section>
+        <h2 className="text-lg font-semibold mb-1">Manual PayPal Claims</h2>
+        <p className="text-sm text-muted-foreground mb-4">
+          Users submit these after paying via PayPal. Verify the transaction ID and amount in your
+          PayPal account before approving — approval credits the sparks.
+        </p>
+        {manualClaimsLoading ? (
+          <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+        ) : (manualClaims?.items?.length ?? 0) > 0 ? (
+          <div className="overflow-x-auto border rounded-lg">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-muted/50 text-left">
+                  <th className="py-2 px-3 font-medium">Date</th>
+                  <th className="py-2 px-3 font-medium">User</th>
+                  <th className="py-2 px-3 font-medium">Pack</th>
+                  <th className="py-2 px-3 font-medium text-right">Amount</th>
+                  <th className="py-2 px-3 font-medium text-right">Sparks</th>
+                  <th className="py-2 px-3 font-medium">PayPal Txn ID</th>
+                  <th className="py-2 px-3 font-medium">Status</th>
+                  <th className="py-2 px-3 font-medium text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {manualClaims!.items.map((claim) => (
+                  <tr key={claim.id} className="border-b last:border-0">
+                    <td className="py-2 px-3 whitespace-nowrap">{formatDateCompact(claim.created_at)}</td>
+                    <td className="py-2 px-3">{claim.user_email}</td>
+                    <td className="py-2 px-3">{claim.pack_name}</td>
+                    <td className="py-2 px-3 text-right">${(claim.amount_cents / 100).toFixed(2)}</td>
+                    <td className="py-2 px-3 text-right">{formatNumber(claim.sparks_amount)}</td>
+                    <td className="py-2 px-3 font-mono text-xs">{claim.payer_reference}</td>
+                    <td className="py-2 px-3">
+                      <span className={cn(
+                        'px-2 py-0.5 rounded-full text-xs font-medium',
+                        claim.status === 'pending' && 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400',
+                        claim.status === 'completed' && 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
+                        claim.status === 'failed' && 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
+                      )}>
+                        {claim.status}
+                      </span>
+                    </td>
+                    <td className="py-2 px-3 text-right whitespace-nowrap">
+                      {claim.status === 'pending' && (
+                        <div className="inline-flex gap-2">
+                          <button
+                            onClick={() => approveClaimMutation.mutate(claim.id)}
+                            disabled={approveClaimMutation.isPending || rejectClaimMutation.isPending}
+                            className="px-3 py-1 rounded-md text-xs font-medium bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 transition-colors"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            onClick={() => rejectClaimMutation.mutate(claim.id)}
+                            disabled={approveClaimMutation.isPending || rejectClaimMutation.isPending}
+                            className="px-3 py-1 rounded-md text-xs font-medium border border-border hover:bg-secondary disabled:opacity-50 transition-colors"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="text-center py-8 text-muted-foreground border rounded-lg">
+            No manual payment claims yet
+          </div>
+        )}
+      </section>
+      )}
 
       {/* System Tab - Platform API Keys */}
       {activeTab === 'system' && (

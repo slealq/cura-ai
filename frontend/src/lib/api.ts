@@ -59,6 +59,8 @@ import type {
   VisionCosts,
   SparkPack,
   PurchaseListResponse,
+  PaymentConfig,
+  ManualClaimListResponse,
   SubscriptionPlan,
   UserSubscription,
   PromoRedeemResult,
@@ -1536,6 +1538,36 @@ export const billingApi = {
 
   getPurchases: async (skip = 0, limit = 50): Promise<PurchaseListResponse> => {
     const { data } = await api.get('/billing/purchases', { params: { skip, limit } });
+    return data;
+  },
+
+  // --- Manual PayPal purchases (interim while LS approval is pending) ---
+
+  getPaymentConfig: async (): Promise<PaymentConfig> => {
+    const { data } = await api.get('/billing/payment-config');
+    return data;
+  },
+
+  submitManualClaim: async (packId: number, payerReference: string): Promise<{ id: number; purchase_id: string; status: string }> => {
+    const { data } = await api.post('/billing/manual-claim', {
+      pack_id: packId,
+      payer_reference: payerReference,
+    });
+    return data;
+  },
+
+  adminManualClaims: async (status?: string, skip = 0, limit = 50): Promise<ManualClaimListResponse> => {
+    const { data } = await api.get('/billing/admin/manual-claims', { params: { status, skip, limit } });
+    return data;
+  },
+
+  adminApproveManualClaim: async (id: number): Promise<{ status: string; sparks_credited: number }> => {
+    const { data } = await api.post(`/billing/admin/manual-claims/${id}/approve`);
+    return data;
+  },
+
+  adminRejectManualClaim: async (id: number): Promise<{ status: string }> => {
+    const { data } = await api.post(`/billing/admin/manual-claims/${id}/reject`);
     return data;
   },
 

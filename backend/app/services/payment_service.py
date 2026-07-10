@@ -186,6 +186,217 @@ class PaymentService:
             "purchase_id": str(purchase_id),
         }
 
+    # --- Manual PayPal claims (interim flow while LS approval is pending) ---
+
+    MANUAL_PROVIDER = "paypal_manual"
+
+    def get_payment_config(self) -> dict:
+        """What purchase flows are available in this environment."""
+        from app.core.config import get_settings
+        from app.services.payment_gateway import PaymentsNotConfiguredError
+
+        settings = get_settings()
+        try:
+            get_payment_gateway()
+            automated = True
+        except PaymentsNotConfiguredError:
+            automated = False
+
+        return {
+            "automated": automated,
+            "manual_enabled": bool(settings.paypal_me_url),
+            "paypal_me_url": settings.paypal_me_url,
+        }
+
+    def create_manual_claim(
+        self,
+        pack_id: int,
+        payer_reference: str,
+        ip_address: str | None = None,
+    ) -> dict:
+        """Record a user's claim that they paid for a pack via PayPal.
+
+        Creates a PENDING transaction that an admin must approve before any
+        sparks are credited. The PayPal transaction ID is stored in
+        provider_payment_id (unique), so the same payment can't be claimed
+        twice.
+        """
+        if self.user_id is None:
+            raise ValueError("user_id is required")
+
+        from app.core.config import get_settings
+
+        if not get_settings().paypal_me_url:
+            raise ValueError("Manual PayPal purchases are not enabled")
+
+        pack = self.db.query(SparkPack).filter(
+            SparkPack.id == pack_id, SparkPack.is_active.is_(True)
+        ).first()
+        if not pack:
+            raise ValueError(f"Pack {pack_id} not found or inactive")
+
+        self._check_fraud_guardrails(pack)
+
+        reference = payer_reference.strip()
+        if len(reference) < 8:
+            raise ValueError("Please provide the full PayPal transaction ID")
+
+        duplicate = self.db.query(PaymentTransaction).filter(
+            PaymentTransaction.provider_payment_id == reference
+        ).first()
+        if duplicate:
+            raise ValueError(
+                "This PayPal transaction ID has already been submitted"
+            )
+
+        txn = PaymentTransaction(
+            purchase_id=uuid.uuid4(),
+            user_id=self.user_id,
+            provider=self.MANUAL_PROVIDER,
+            provider_payment_id=reference,
+            amount_cents=pack.price_cents,
+            currency=pack.currency,
+            pack_id=pack.id,
+            status=PaymentStatus.PENDING,
+            ip_address=ip_address,
+        )
+        self.db.add(txn)
+        self.db.commit()
+        self.db.refresh(txn)
+
+        user = self.db.query(User).filter(User.id == self.user_id).first()
+        logger.info(
+            "Manual PayPal claim submitted: user=%s pack=%s amount=%s ref=%s",
+            self.user_id, pack.name, pack.price_cents, reference,
+        )
+        if sentry_sdk:
+            sentry_sdk.capture_message(
+                f"Manual PayPal claim awaiting review: {user.email if user else self.user_id} "
+                f"paid ${pack.price_cents / 100:.2f} for {pack.name} "
+                f"(txn ref {reference}) — approve in Admin → Payments",
+                level="warning",
+            )
+
+        return {
+            "id": txn.id,
+            "purchase_id": str(txn.purchase_id),
+            "status": txn.status.value,
+        }
+
+    def list_manual_claims(
+        self, status: str | None = None, skip: int = 0, limit: int = 50
+    ) -> dict:
+        """List manual PayPal claims with user/pack context (admin)."""
+        query = (
+            self.db.query(PaymentTransaction)
+            .filter(PaymentTransaction.provider == self.MANUAL_PROVIDER)
+            .order_by(PaymentTransaction.created_at.desc())
+        )
+        if status:
+            query = query.filter(PaymentTransaction.status == PaymentStatus(status))
+
+        total = query.count()
+        items = query.offset(skip).limit(limit).all()
+
+        pending_count = (
+            self.db.query(func.count(PaymentTransaction.id))
+            .filter(
+                PaymentTransaction.provider == self.MANUAL_PROVIDER,
+                PaymentTransaction.status == PaymentStatus.PENDING,
+            )
+            .scalar()
+        )
+
+        user_ids = {t.user_id for t in items}
+        pack_ids = {t.pack_id for t in items}
+        users = {
+            u.id: u.email
+            for u in self.db.query(User).filter(User.id.in_(user_ids)).all()
+        } if user_ids else {}
+        packs = {
+            p.id: p
+            for p in self.db.query(SparkPack).filter(SparkPack.id.in_(pack_ids)).all()
+        } if pack_ids else {}
+
+        return {
+            "items": [
+                {
+                    "id": t.id,
+                    "user_id": t.user_id,
+                    "user_email": users.get(t.user_id, ""),
+                    "pack_name": packs[t.pack_id].name if t.pack_id in packs else "Unknown",
+                    "sparks_amount": (
+                        packs[t.pack_id].sparks_amount + packs[t.pack_id].bonus_sparks
+                        if t.pack_id in packs else 0
+                    ),
+                    "amount_cents": t.amount_cents,
+                    "currency": t.currency,
+                    "payer_reference": t.provider_payment_id,
+                    "status": t.status.value,
+                    "created_at": t.created_at.isoformat(),
+                    "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+                }
+                for t in items
+            ],
+            "total": total,
+            "pending_count": pending_count or 0,
+        }
+
+    def _get_pending_manual_claim(self, txn_id: int) -> PaymentTransaction:
+        txn = self.db.query(PaymentTransaction).filter(
+            PaymentTransaction.id == txn_id,
+            PaymentTransaction.provider == self.MANUAL_PROVIDER,
+        ).first()
+        if not txn:
+            raise ValueError(f"Manual claim {txn_id} not found")
+        if txn.status != PaymentStatus.PENDING:
+            raise ValueError(
+                f"Claim {txn_id} is {txn.status.value}, not pending"
+            )
+        return txn
+
+    def approve_manual_claim(self, txn_id: int, admin_id: int) -> dict:
+        """Approve a manual claim: credit sparks and mark COMPLETED."""
+        txn = self._get_pending_manual_claim(txn_id)
+
+        pack = self.db.query(SparkPack).filter(SparkPack.id == txn.pack_id).first()
+        if not pack:
+            raise ValueError(f"Pack {txn.pack_id} not found")
+
+        total_sparks = Decimal(pack.sparks_amount + pack.bonus_sparks)
+        billing = BillingService(self.db, txn.user_id)
+        balance_txn = billing.add_credits(
+            amount=total_sparks,
+            description=(
+                f"Purchased {pack.name} pack via PayPal "
+                f"({pack.sparks_amount:,} + {pack.bonus_sparks:,} bonus sparks)"
+            ),
+            created_by=admin_id,
+        )
+
+        txn.status = PaymentStatus.COMPLETED
+        txn.balance_txn_id = balance_txn.id
+        txn.completed_at = datetime.utcnow()
+        self.db.commit()
+
+        logger.info(
+            "Manual claim approved: claim=%d user=%d sparks=%s by admin=%d",
+            txn_id, txn.user_id, total_sparks, admin_id,
+        )
+        return {"status": "approved", "sparks_credited": int(total_sparks)}
+
+    def reject_manual_claim(self, txn_id: int, admin_id: int) -> dict:
+        """Reject a manual claim: mark FAILED, nothing credited."""
+        txn = self._get_pending_manual_claim(txn_id)
+        txn.status = PaymentStatus.FAILED
+        self.db.commit()
+
+        logger.info(
+            "Manual claim rejected: claim=%d user=%d by admin=%d",
+            txn_id, txn.user_id, admin_id,
+        )
+        return {"status": "rejected"}
+
     # --- Webhook processing ---
 
     def handle_webhook(
@@ -560,12 +771,17 @@ class PaymentService:
     # --- Reconciliation ---
 
     def reconcile_stale_transactions(self) -> dict:
-        """Expire PENDING transactions older than 24h. Returns summary."""
+        """Expire PENDING transactions older than 24h. Returns summary.
+
+        Manual PayPal claims are excluded — they stay PENDING until an admin
+        approves or rejects them.
+        """
         cutoff = datetime.utcnow() - timedelta(hours=24)
         stale = (
             self.db.query(PaymentTransaction)
             .filter(
                 PaymentTransaction.status == PaymentStatus.PENDING,
+                PaymentTransaction.provider != self.MANUAL_PROVIDER,
                 PaymentTransaction.created_at < cutoff,
             )
             .all()
