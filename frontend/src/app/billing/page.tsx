@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'next/navigation';
-import { Loader2, Zap, TrendingDown, ArrowUpRight, ArrowDownRight, Sparkles, ShoppingBag, Crown, Gift, XCircle } from 'lucide-react';
+import { Loader2, Zap, TrendingDown, ArrowUpRight, ArrowDownRight, Sparkles, ShoppingBag, Crown, Gift, XCircle, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
 import { billingApi } from '@/lib/api';
+import { useAuth } from '@/contexts/AuthContext';
 import { cn, formatDateCompact, formatNumber } from '@/lib/utils';
 import type { BalanceTransaction, Purchase, SparkPack, SubscriptionPlan } from '@/types';
 
@@ -118,6 +119,10 @@ export default function BillingPage() {
   const [cancellingSubscription, setCancellingSubscription] = useState(false);
   const [promoCode, setPromoCode] = useState('');
   const [redeemingPromo, setRedeemingPromo] = useState(false);
+  const [manualPack, setManualPack] = useState<SparkPack | null>(null);
+  const [manualReference, setManualReference] = useState('');
+  const [submittingClaim, setSubmittingClaim] = useState(false);
+  const { user } = useAuth();
   const txnLimit = 25;
   const queryClient = useQueryClient();
   const searchParams = useSearchParams();
@@ -170,6 +175,12 @@ export default function BillingPage() {
     queryFn: billingApi.getPacks,
   });
 
+  const { data: paymentConfig } = useQuery({
+    queryKey: ['billing', 'payment-config'],
+    queryFn: billingApi.getPaymentConfig,
+    staleTime: 5 * 60 * 1000,
+  });
+
   const { data: subPlans, isLoading: subPlansLoading } = useQuery({
     queryKey: ['billing', 'subscription-plans'],
     queryFn: billingApi.getSubscriptionPlans,
@@ -196,6 +207,18 @@ export default function BillingPage() {
   });
 
   const handleBuy = async (packId: number) => {
+    // Without an automated gateway, purchases go through the manual PayPal flow
+    if (paymentConfig && !paymentConfig.automated) {
+      if (paymentConfig.manual_enabled) {
+        const pack = packs?.find((p) => p.id === packId) || null;
+        setManualReference('');
+        setManualPack(pack);
+      } else {
+        toast.error('Purchases are not available yet. Please check back soon.');
+      }
+      return;
+    }
+
     setBuyingPackId(packId);
     try {
       const currentUrl = window.location.origin + '/billing';
@@ -208,6 +231,22 @@ export default function BillingPage() {
     } catch {
       toast.error('Failed to start checkout. Please try again.');
       setBuyingPackId(null);
+    }
+  };
+
+  const handleSubmitClaim = async () => {
+    if (!manualPack || !manualReference.trim()) return;
+    setSubmittingClaim(true);
+    try {
+      await billingApi.submitManualClaim(manualPack.id, manualReference.trim());
+      toast.success('Payment claim submitted! Sparks will be credited after review (usually within 24h).');
+      setManualPack(null);
+      queryClient.invalidateQueries({ queryKey: ['billing', 'purchases'] });
+    } catch (err) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Failed to submit claim.';
+      toast.error(msg);
+    } finally {
+      setSubmittingClaim(false);
     }
   };
 
@@ -623,6 +662,78 @@ export default function BillingPage() {
           <div className="text-center py-8 text-muted-foreground">No purchases yet</div>
         )}
       </section>
+
+      {/* Manual PayPal payment dialog */}
+      {manualPack && paymentConfig?.paypal_me_url && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-card border border-border rounded-lg w-full max-w-md p-6 space-y-4">
+            <div>
+              <h3 className="text-lg font-semibold">Pay with PayPal</h3>
+              <p className="text-sm text-muted-foreground mt-1">
+                {manualPack.name} pack — {formatPrice(manualPack.price_cents, manualPack.currency)} for{' '}
+                {(manualPack.sparks_amount + manualPack.bonus_sparks).toLocaleString()} sparks
+              </p>
+            </div>
+
+            <ol className="space-y-3 text-sm list-decimal pl-5">
+              <li>
+                Send{' '}
+                <span className="font-semibold">{formatPrice(manualPack.price_cents, manualPack.currency)}</span>{' '}
+                via PayPal:{' '}
+                <a
+                  href={`${paymentConfig.paypal_me_url.replace(/\/+$/, '')}/${(manualPack.price_cents / 100).toFixed(2)}USD`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-primary underline font-medium"
+                >
+                  Open PayPal <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+              </li>
+              <li>
+                Include your account email{user?.email ? (
+                  <> (<span className="font-medium">{user.email}</span>)</>
+                ) : null}{' '}
+                in the payment note.
+              </li>
+              <li>Paste the PayPal transaction ID below.</li>
+            </ol>
+
+            <div>
+              <label htmlFor="paypal-ref" className="block text-sm font-medium mb-1">
+                PayPal transaction ID
+              </label>
+              <input
+                id="paypal-ref"
+                type="text"
+                value={manualReference}
+                onChange={(e) => setManualReference(e.target.value)}
+                placeholder="e.g. 1AB23456CD789012E"
+                className="w-full px-3 py-2 bg-background border border-input rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Sparks are credited after a quick manual review — usually within 24 hours.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => setManualPack(null)}
+                disabled={submittingClaim}
+                className="py-2 px-4 rounded-md text-sm font-medium border border-border hover:bg-secondary transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmitClaim}
+                disabled={submittingClaim || manualReference.trim().length < 8}
+                className="py-2 px-4 rounded-md text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors"
+              >
+                {submittingClaim ? <Loader2 className="h-4 w-4 animate-spin mx-auto" /> : 'I paid — submit'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

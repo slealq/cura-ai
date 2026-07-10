@@ -550,6 +550,32 @@ export interface PurchaseListResponse {
   total: number;
 }
 
+export interface PaymentConfig {
+  automated: boolean;
+  manual_enabled: boolean;
+  paypal_me_url: string;
+}
+
+export interface ManualClaim {
+  id: number;
+  user_id: number;
+  user_email: string;
+  pack_name: string;
+  sparks_amount: number;
+  amount_cents: number;
+  currency: string;
+  payer_reference: string;
+  status: string;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface ManualClaimListResponse {
+  items: ManualClaim[];
+  total: number;
+  pending_count: number;
+}
+
 export interface SubscriptionPlan {
   id: number;
   name: string;

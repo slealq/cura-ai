@@ -83,6 +83,16 @@ class Settings(BaseSettings):
     lemon_squeezy_webhook_secret: str = ""
     lemon_squeezy_store_id: str = ""
 
+    # Manual PayPal purchases (interim flow while LS approval is pending).
+    # Empty URL hides the manual purchase option in the UI.
+    paypal_me_url: str = ""
+    # Mock gateway auto-completes purchases — never allow outside local dev
+    # unless explicitly opted in.
+    payments_allow_mock: bool = False
+
+    # Sparks granted to every new account on signup (0 disables).
+    signup_bonus_sparks: int = 500
+
     # Google OAuth (Sign in with Google). Empty = feature disabled.
     google_client_id: str = ""
 

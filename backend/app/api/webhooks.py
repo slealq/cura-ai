@@ -62,9 +62,16 @@ async def test_webhook(body: TestWebhookRequest):
 
     Only available when MockPaymentGateway is active (no LS API key configured).
     """
-    from app.services.payment_gateway import MockPaymentGateway, get_payment_gateway
+    from app.services.payment_gateway import (
+        MockPaymentGateway,
+        PaymentsNotConfiguredError,
+        get_payment_gateway,
+    )
 
-    gateway = get_payment_gateway()
+    try:
+        gateway = get_payment_gateway()
+    except PaymentsNotConfiguredError:
+        gateway = None
     if not isinstance(gateway, MockPaymentGateway):
         raise HTTPException(
             status_code=403,

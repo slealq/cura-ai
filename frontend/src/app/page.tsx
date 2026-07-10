@@ -138,7 +138,8 @@ export default function LandingPage() {
       <section className="mx-auto max-w-6xl px-6 py-24 text-center">
         <h2 className="text-3xl font-bold tracking-tight">Ready to build your visual AI studio?</h2>
         <p className="mt-4 text-muted-foreground">
-          Sign up free, explore your library, and pay only for what you create with spark credits.
+          Every new account starts with <span className="font-medium text-foreground">500 free sparks</span> —
+          enough to explore, generate, and see your style come to life before paying anything.
         </p>
         <Link
           href="/login?mode=signup"

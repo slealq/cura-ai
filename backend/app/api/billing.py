@@ -1556,6 +1556,7 @@ async def create_checkout(
     db: Session = Depends(get_db),
 ):
     """Create a payment checkout session for a spark pack."""
+    from app.services.payment_gateway import PaymentsNotConfiguredError
     from app.services.payment_service import FraudCheckError, PaymentService
 
     service = PaymentService(db, current_user.id)
@@ -1567,8 +1568,112 @@ async def create_checkout(
             cancel_url=body.cancel_url or "http://localhost:3000/billing",
         )
         return CheckoutResponse(**result)
+    except PaymentsNotConfiguredError:
+        raise HTTPException(
+            status_code=503,
+            detail="Automated checkout is not available yet — use the PayPal option",
+        )
     except FraudCheckError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class PaymentConfigResponse(BaseModel):
+    automated: bool
+    manual_enabled: bool
+    paypal_me_url: str
+
+
+class ManualClaimRequest(BaseModel):
+    pack_id: int
+    payer_reference: str
+
+
+class ManualClaimResponse(BaseModel):
+    id: int
+    purchase_id: str
+    status: str
+
+
+@router.get("/payment-config", response_model=PaymentConfigResponse)
+def get_payment_config(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Which purchase flows are available (automated checkout vs manual PayPal)."""
+    from app.services.payment_service import PaymentService
+
+    return PaymentConfigResponse(**PaymentService(db).get_payment_config())
+
+
+@router.post("/manual-claim", response_model=ManualClaimResponse)
+def submit_manual_claim(
+    body: ManualClaimRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Submit a 'paid via PayPal' claim. Sparks are credited after admin review."""
+    from app.services.payment_service import FraudCheckError, PaymentService
+
+    service = PaymentService(db, current_user.id)
+    try:
+        result = service.create_manual_claim(
+            pack_id=body.pack_id,
+            payer_reference=body.payer_reference,
+        )
+        return ManualClaimResponse(**result)
+    except FraudCheckError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/admin/manual-claims")
+def admin_list_manual_claims(
+    status: str | None = Query(None),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """List manual PayPal claims (admin only)."""
+    from app.services.payment_service import PaymentService
+
+    try:
+        return PaymentService(db).list_manual_claims(
+            status=status, skip=skip, limit=limit
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/admin/manual-claims/{txn_id}/approve")
+def admin_approve_manual_claim(
+    txn_id: int,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Approve a manual PayPal claim and credit sparks (admin only)."""
+    from app.services.payment_service import PaymentService
+
+    try:
+        return PaymentService(db).approve_manual_claim(txn_id, admin_id=admin.id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/admin/manual-claims/{txn_id}/reject")
+def admin_reject_manual_claim(
+    txn_id: int,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Reject a manual PayPal claim (admin only)."""
+    from app.services.payment_service import PaymentService
+
+    try:
+        return PaymentService(db).reject_manual_claim(txn_id, admin_id=admin.id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1748,6 +1853,7 @@ async def create_subscription_checkout(
     db: Session = Depends(get_db),
 ):
     """Create a subscription checkout session."""
+    from app.services.payment_gateway import PaymentsNotConfiguredError
     from app.services.subscription_service import SubscriptionService
 
     service = SubscriptionService(db, current_user.id)
@@ -1759,6 +1865,11 @@ async def create_subscription_checkout(
             cancel_url=body.cancel_url or "http://localhost:3000/billing",
         )
         return result
+    except PaymentsNotConfiguredError:
+        raise HTTPException(
+            status_code=503,
+            detail="Subscriptions are not available yet",
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
