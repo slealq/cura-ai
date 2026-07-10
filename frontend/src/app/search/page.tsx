@@ -71,7 +71,7 @@ function SearchContent() {
       ) : results ? (
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Found {results.total} results for "{results.query}"
+            Found {results.total} results for &quot;{results.query}&quot;
           </p>
 
           {results.results.length > 0 ? (
@@ -100,7 +100,7 @@ function SearchContent() {
             Enter a search term to find similar images
           </p>
           <p className="text-sm text-muted-foreground mt-2">
-            Try "minimal product photography" or "warm earthy tones"
+            Try &quot;minimal product photography&quot; or &quot;warm earthy tones&quot;
           </p>
         </div>
       )}

@@ -1,19 +1,107 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { authApi } from '@/lib/api';
 import SightLabLogo from '@/components/SightLabLogo';
+
+// Minimal typings for the Google Identity Services script
+interface GoogleCredentialResponse {
+  credential: string;
+}
+
+declare global {
+  interface Window {
+    google?: {
+      accounts: {
+        id: {
+          initialize: (config: {
+            client_id: string;
+            callback: (response: GoogleCredentialResponse) => void;
+          }) => void;
+          renderButton: (parent: HTMLElement, options: Record<string, unknown>) => void;
+        };
+      };
+    };
+  }
+}
 
 export default function LoginPage() {
   const [isSignUp, setIsSignUp] = useState(false);
+
+  // Allow /login?mode=signup deep links from the marketing pages
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('mode') === 'signup') {
+      setIsSignUp(true);
+    }
+  }, []);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const { login, register } = useAuth();
+  const { login, register, loginWithGoogle } = useAuth();
   const router = useRouter();
+  const googleButtonRef = useRef<HTMLDivElement>(null);
+  const [googleReady, setGoogleReady] = useState(false);
+
+  const handleGoogleCredential = useCallback(
+    async (response: GoogleCredentialResponse) => {
+      setError('');
+      try {
+        await loginWithGoogle(response.credential);
+        router.push('/generate');
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Google sign-in failed. Please try again.';
+        setError(message);
+      }
+    },
+    [loginWithGoogle, router]
+  );
+
+  // Load Google Identity Services and render the button (if configured server-side)
+  useEffect(() => {
+    let cancelled = false;
+
+    authApi
+      .googleClientId()
+      .then((clientId) => {
+        if (cancelled || !clientId) return;
+
+        const renderGoogleButton = () => {
+          if (cancelled || !window.google || !googleButtonRef.current) return;
+          window.google.accounts.id.initialize({
+            client_id: clientId,
+            callback: handleGoogleCredential,
+          });
+          window.google.accounts.id.renderButton(googleButtonRef.current, {
+            theme: 'outline',
+            size: 'large',
+            width: 320,
+            text: 'continue_with',
+          });
+          setGoogleReady(true);
+        };
+
+        if (window.google) {
+          renderGoogleButton();
+          return;
+        }
+        const script = document.createElement('script');
+        script.src = 'https://accounts.google.com/gsi/client';
+        script.async = true;
+        script.onload = renderGoogleButton;
+        document.head.appendChild(script);
+      })
+      .catch(() => {
+        // Google sign-in unavailable — email/password still works
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [handleGoogleCredential]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,7 +114,7 @@ export default function LoginPage() {
       } else {
         await login(email, password);
       }
-      router.push('/');
+      router.push('/generate');
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : `${isSignUp ? 'Sign up' : 'Login'} failed. Please try again.`;
@@ -120,6 +208,15 @@ export default function LoginPage() {
                 : (isSignUp ? 'Create account' : 'Sign in')}
             </button>
           </form>
+
+          <div className={googleReady ? 'mt-4' : 'hidden'}>
+            <div className="flex items-center gap-3 my-4">
+              <div className="flex-1 border-t border-border" />
+              <span className="text-xs text-muted-foreground">or</span>
+              <div className="flex-1 border-t border-border" />
+            </div>
+            <div ref={googleButtonRef} className="flex justify-center" />
+          </div>
 
           <div className="mt-4 text-center text-sm text-muted-foreground">
             {isSignUp ? 'Already have an account?' : "Don't have an account?"}{' '}

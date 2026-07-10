@@ -65,6 +65,10 @@ class RegisterRequest(BaseModel):
     display_name: str | None = None
 
 
+class GoogleLoginRequest(BaseModel):
+    credential: str  # Google ID token (JWT) from Google Identity Services
+
+
 class CreateUserRequest(BaseModel):
     email: str
     password: str
@@ -109,6 +113,105 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
     return TokenResponse(
         access_token=access_token,
         refresh_token=refresh_token,
+        user=_user_to_response(user),
+    )
+
+
+@router.get("/google-client-id")
+async def get_google_client_id():
+    """Public endpoint: Google OAuth client ID for the frontend button.
+
+    Returns an empty string when Google sign-in is not configured.
+    """
+    from app.core.config import get_settings
+
+    return {"client_id": get_settings().google_client_id}
+
+
+@router.post("/google", response_model=TokenResponse)
+async def google_login(request: GoogleLoginRequest, db: Session = Depends(get_db)):
+    """Sign in (or sign up) with a Google ID token from Google Identity Services."""
+    import httpx
+
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    if not settings.google_client_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Google sign-in is not configured",
+        )
+
+    # Verify the ID token with Google
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://oauth2.googleapis.com/tokeninfo",
+                params={"id_token": request.credential},
+            )
+    except httpx.HTTPError:
+        logger.exception("Google tokeninfo request failed")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not verify Google credential",
+        )
+
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Google credential",
+        )
+
+    claims = resp.json()
+    if claims.get("aud") != settings.google_client_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Google credential was issued for a different application",
+        )
+    if claims.get("iss") not in ("accounts.google.com", "https://accounts.google.com"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Google credential issuer",
+        )
+
+    email = claims.get("email")
+    if not email or claims.get("email_verified") not in (True, "true"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Google account has no verified email",
+        )
+
+    user = db.query(User).filter(User.email == email).first()
+    if user is None:
+        # Auto-provision: password login stays impossible until a reset,
+        # since the random secret is never revealed.
+        import secrets
+
+        user = User(
+            email=email,
+            hashed_password=hash_password(secrets.token_urlsafe(32)),
+            display_name=claims.get("name"),
+            role=UserRole.USER,
+            is_active=True,
+            is_verified=True,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        logger.info("Created user %s via Google sign-in", email)
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is disabled",
+        )
+
+    user.last_login_at = datetime.utcnow()
+    db.commit()
+
+    return TokenResponse(
+        access_token=create_access_token(user.id, user.email),
+        refresh_token=create_refresh_token(user.id),
         user=_user_to_response(user),
     )
 

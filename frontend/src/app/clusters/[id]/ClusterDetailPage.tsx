@@ -71,7 +71,7 @@ export default function ClusterDetailPage() {
   const archiveMutation = useMutation({
     mutationFn: () => clustersApi.archive(clusterId),
     onSuccess: () => {
-      router.push('/');
+      router.push('/clusters');
     },
   });
 
