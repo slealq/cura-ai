@@ -90,7 +90,7 @@ class ClusterService:
         raw_method = cast(Cluster.method, String).label("method")
         raw_query = self.db.query(Cluster.id, raw_method)
         raw_rows = self._apply_cluster_filters(raw_query, run_id, include_archived).all()
-        valid_methods = {method.value for method in ClusteringMethod}
+        valid_methods = {method.name for method in ClusteringMethod}
 
         invalid_cluster_ids = []
         for cluster_id, method in raw_rows:

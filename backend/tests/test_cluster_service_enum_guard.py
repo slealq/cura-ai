@@ -1,6 +1,10 @@
 """Hermetic coverage for recovery from malformed cluster enum values."""
 from unittest.mock import Mock, patch
 
+import pytest
+from sqlalchemy.dialects import postgresql
+
+from app.models.cluster import Cluster, ClusteringMethod
 from app.services.cluster_service import ClusterService
 
 
@@ -20,7 +24,7 @@ def test_get_clusters_skips_bad_enum_row_after_hydration_failure():
     """A bad row cannot prevent valid clusters from being returned."""
     valid_cluster = Mock(id=18)
     initial_query = _query_mock(all_side_effect=[LookupError("invalid enum value"), [valid_cluster]])
-    raw_query = _query_mock(all_result=[(17, "HDBSCAN"), (18, "hdbscan")])
+    raw_query = _query_mock(all_result=[(17, "hdbscan"), (18, "HDBSCAN")])
     db = Mock()
     db.query.side_effect = [initial_query, raw_query]
 
@@ -33,6 +37,18 @@ def test_get_clusters_skips_bad_enum_row_after_hydration_failure():
 
     assert result == [valid_cluster]
     logger.error.assert_called_once_with(
-        "Skipping cluster id=%s with invalid method value=%r", 17, "HDBSCAN"
+        "Skipping cluster id=%s with invalid method value=%r", 17, "hdbscan"
     )
     assert initial_query.all.call_count == 2
+
+
+def test_cluster_method_enum_binds_and_deserializes_member_names():
+    """The database representation is the uppercase enum member name, not its value."""
+    enum_type = Cluster.__table__.c.method.type
+    dialect = postgresql.dialect()
+
+    assert enum_type.bind_processor(dialect)(ClusteringMethod.HDBSCAN) == "HDBSCAN"
+    assert enum_type.result_processor(dialect, None)("HDBSCAN") is ClusteringMethod.HDBSCAN
+    assert ClusteringMethod["HDBSCAN"] is ClusteringMethod.HDBSCAN
+    with pytest.raises(ValueError):
+        ClusteringMethod("HDBSCAN")
