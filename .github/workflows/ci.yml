@@ -66,7 +66,7 @@ jobs:
 
       - name: Run standalone tests
         working-directory: backend
-        run: pytest tests/test_dispatch.py tests/test_cost_calculator.py tests/test_no_retry_decorators.py -v
+        run: pytest tests/test_fal_generator.py tests/test_fal_editor.py tests/test_dispatch.py tests/test_cost_calculator.py tests/test_no_retry_decorators.py -v
 
   frontend:
     name: Frontend Lint & Build
