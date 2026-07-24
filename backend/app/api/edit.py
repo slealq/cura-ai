@@ -11,7 +11,7 @@ from app.db.base import get_db
 from app.models import Job, JobStatus, JobType
 from app.models.user import User
 from app.services.generation_service import get_generation_service
-from app.workers.dispatch import dispatch
+from app.workers.dispatch import dispatch_or_fail
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +191,7 @@ async def edit_images(
         raise HTTPException(status_code=500, detail=f"Failed to create edit job: {e}")
 
     # Create generated image records (one per num_images)
+    generated_images = []
     gen_ids = []
     for _ in range(request.num_images):
         gen = gen_service.create_generated_image(
@@ -201,6 +202,7 @@ async def edit_images(
             generation_params=gen_params,
             job_id=job.id,
         )
+        generated_images.append(gen)
         gen_ids.append(gen.id)
 
     # Dispatch Celery tasks
@@ -208,10 +210,14 @@ async def edit_images(
     from app.workers.generation_tasks import edit_image as edit_task
 
     if request.num_images == 1:
-        task = dispatch(edit_task, gen_ids[0], job.id, current_user.id)
+        task = dispatch_or_fail(
+            edit_task, job, db, gen_ids[0], job.id, current_user.id, generated_images=generated_images
+        )
         job.celery_task_id = task.id
     else:
-        task = dispatch(batch_edit, gen_ids, job.id, current_user.id)
+        task = dispatch_or_fail(
+            batch_edit, job, db, gen_ids, job.id, current_user.id, generated_images=generated_images
+        )
         job.celery_task_id = task.id
 
     db.commit()

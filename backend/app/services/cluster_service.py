@@ -4,10 +4,12 @@ from io import BytesIO
 
 import numpy as np
 from PIL import Image as PILImage
+from sqlalchemy import String, cast
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import (
     Cluster,
+    ClusteringMethod,
     ClusterMembership,
     Image,
 )
@@ -46,20 +48,57 @@ class ClusterService:
         query = (
             self.db.query(Cluster)
             .options(joinedload(Cluster.cover_image))
-            .filter(Cluster.user_id == self.user_id)
         )
+        query = self._apply_cluster_filters(query, run_id, include_archived)
+
+        try:
+            return self._ordered_cluster_query(query, skip, limit).all()
+        except LookupError:
+            # SQLAlchemy deserializes Enum values while executing .all(), so one
+            # malformed row otherwise prevents every valid cluster from loading.
+            invalid_cluster_ids = self._find_invalid_cluster_method_ids(run_id, include_archived)
+            if not invalid_cluster_ids:
+                raise
+
+            return (
+                self._ordered_cluster_query(query.filter(Cluster.id.notin_(invalid_cluster_ids)), skip, limit)
+                .all()
+            )
+
+    def _apply_cluster_filters(self, query, run_id: str | None, include_archived: bool):
+        """Apply the user/run/archive filters shared by normal and raw queries."""
+        query = query.filter(Cluster.user_id == self.user_id)
 
         if run_id:
             query = query.filter(Cluster.run_id == run_id)
         if not include_archived:
             query = query.filter(Cluster.is_archived.is_(False))
+        return query
 
+    @staticmethod
+    def _ordered_cluster_query(query, skip: int, limit: int):
         return (
             query.order_by(Cluster.is_pinned.desc(), Cluster.size.desc())
             .offset(skip)
             .limit(limit)
-            .all()
         )
+
+    def _find_invalid_cluster_method_ids(
+        self, run_id: str | None, include_archived: bool
+    ) -> list[int]:
+        """Return malformed method rows without invoking Enum result coercion."""
+        raw_method = cast(Cluster.method, String).label("method")
+        raw_query = self.db.query(Cluster.id, raw_method)
+        raw_rows = self._apply_cluster_filters(raw_query, run_id, include_archived).all()
+        valid_methods = {method.name for method in ClusteringMethod}
+
+        invalid_cluster_ids = []
+        for cluster_id, method in raw_rows:
+            if method not in valid_methods:
+                logger.error("Skipping cluster id=%s with invalid method value=%r", cluster_id, method)
+                invalid_cluster_ids.append(cluster_id)
+
+        return invalid_cluster_ids
 
     def get_latest_clusters(self, limit: int = 100) -> list[Cluster]:
         """Get clusters from the most recent clustering run."""

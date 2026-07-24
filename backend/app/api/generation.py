@@ -16,7 +16,7 @@ from app.models.user import User
 from app.services.evaluation_service import get_evaluation_service
 from app.services.generation_service import get_generation_service
 from app.services.settings_service import get_settings_service
-from app.workers.dispatch import dispatch
+from app.workers.dispatch import dispatch, dispatch_or_fail
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -558,7 +558,7 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db), c
 
     # Dispatch Celery task
     from app.workers.generation_tasks import train_lora as train_lora_task
-    task = dispatch(train_lora_task, lora.id, job.id, current_user.id)
+    task = dispatch_or_fail(train_lora_task, job, db, lora.id, job.id, current_user.id)
 
     job.celery_task_id = task.id
     db.commit()
@@ -887,7 +887,7 @@ async def retry_lora_training(lora_id: int, db: Session = Depends(get_db), curre
 
     # Dispatch
     from app.workers.generation_tasks import train_lora as train_lora_task
-    task = dispatch(train_lora_task, lora_id, job.id, current_user.id)
+    task = dispatch_or_fail(train_lora_task, job, db, lora_id, job.id, current_user.id)
 
     job.celery_task_id = task.id
     db.commit()
@@ -1085,6 +1085,7 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
         raise HTTPException(status_code=500, detail=f"Failed to create generation job: {e}")
 
     # Create generated image records
+    generated_images = []
     gen_ids = []
     for _ in range(request.num_images):
         gen = gen_service.create_generated_image(
@@ -1097,6 +1098,7 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
             generation_params=gen_params,
             job_id=job.id,
         )
+        generated_images.append(gen)
         gen_ids.append(gen.id)
 
     # Dispatch Celery tasks
@@ -1104,10 +1106,14 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
     from app.workers.generation_tasks import generate_image as gen_task
 
     if request.num_images == 1:
-        task = dispatch(gen_task, gen_ids[0], job.id, current_user.id)
+        task = dispatch_or_fail(
+            gen_task, job, db, gen_ids[0], job.id, current_user.id, generated_images=generated_images
+        )
         job.celery_task_id = task.id
     else:
-        task = dispatch(batch_generate, gen_ids, job.id, current_user.id)
+        task = dispatch_or_fail(
+            batch_generate, job, db, gen_ids, job.id, current_user.id, generated_images=generated_images
+        )
         job.celery_task_id = task.id
 
     db.commit()
@@ -1418,7 +1424,7 @@ async def start_evaluation(lora_id: int, request: StartEvaluationRequest, db: Se
 
     # Dispatch Celery task
     from app.workers.generation_tasks import evaluate_lora as evaluate_task
-    task = dispatch(evaluate_task, evaluation.id, job.id, current_user.id)
+    task = dispatch_or_fail(evaluate_task, job, db, evaluation.id, job.id, current_user.id)
 
     job.celery_task_id = task.id
     db.commit()
