@@ -1877,6 +1877,110 @@ def cleanup_stale_reservations():
 
 
 @celery_app.task
+def fail_stuck_generation_jobs():
+    """Fail generation jobs with no progress for more than 30 minutes."""
+    from datetime import timedelta
+
+    from sqlalchemy import and_, or_
+
+    from app.models.cost_decision import CostDecision, DecisionStatus
+    from app.models.generated_image import GeneratedImage, GenerationStatus
+    from app.models.job import JobType
+    from app.services.billing_service import BillingService
+
+    db = SessionLocal()
+    try:
+        cutoff = datetime.utcnow() - timedelta(minutes=30)
+        stuck_jobs = (
+            db.query(Job)
+            .filter(
+                Job.job_type.in_(
+                    [
+                        JobType.GENERATE_IMAGE,
+                        JobType.BATCH_GENERATE,
+                        JobType.EDIT_IMAGE,
+                        JobType.BATCH_EDIT,
+                    ]
+                ),
+                or_(
+                    and_(
+                        Job.status == JobStatus.RUNNING,
+                        Job.updated_at < cutoff,
+                    ),
+                    and_(
+                        Job.status == JobStatus.PENDING,
+                        Job.celery_task_id.is_(None),
+                        Job.created_at < cutoff,
+                    ),
+                ),
+            )
+            .all()
+        )
+        for job in stuck_jobs:
+            previous_status = job.status
+            job.status = JobStatus.FAILED
+            if previous_status == JobStatus.RUNNING:
+                job.error_message = (
+                    "Auto-failed by reconciliation: no progress for 30+ minutes "
+                    "(worker likely died or was restarted mid-task)"
+                )
+            else:
+                job.error_message = (
+                    "Auto-failed by reconciliation: pending for 30+ minutes "
+                    "without a Celery task ID (dispatch never completed)"
+                )
+            job.completed_at = datetime.utcnow()
+
+            generated_images = (
+                db.query(GeneratedImage)
+                .filter(
+                    GeneratedImage.job_id == job.id,
+                    GeneratedImage.status.in_(
+                        [GenerationStatus.PENDING, GenerationStatus.GENERATING]
+                    ),
+                )
+                .all()
+            )
+            for generated_image in generated_images:
+                generated_image.status = GenerationStatus.FAILED
+                generated_image.error_message = (
+                    "Parent job failed: worker likely died mid-task"
+                )
+
+            pending_decisions = (
+                db.query(CostDecision)
+                .filter(
+                    CostDecision.job_id == job.id,
+                    CostDecision.status == DecisionStatus.PENDING.value,
+                    CostDecision.reserved_sparks > 0,
+                )
+                .all()
+            )
+            for decision in pending_decisions:
+                BillingService(db, decision.user_id).release_reservation(
+                    decision.reserved_sparks
+                )
+                decision.reserved_sparks = 0
+                decision.status = DecisionStatus.FAILED.value
+                decision.error_message = "stuck job cleanup"
+                decision.updated_at = datetime.utcnow()
+
+            db.commit()
+            logger.info(
+                "STUCK_JOB_CLEANUP | job=%s type=%s status=%s user=%s",
+                job.id,
+                job.job_type,
+                previous_status,
+                job.user_id,
+            )
+    except Exception:
+        logger.warning("Failed to clean up stuck generation jobs", exc_info=True)
+        db.rollback()
+    finally:
+        db.close()
+
+
+@celery_app.task
 def monitor_queue_health():
     """Periodic task to monitor queue depths, oldest pending job age, and completion rate."""
     import redis as redis_lib
