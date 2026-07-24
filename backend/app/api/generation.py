@@ -50,11 +50,20 @@ class TrainLoraRequest(BaseModel):
     steps: int | None = None
     is_style: bool | None = None
     learning_rate: float | None = None
-    base_model: str = "flux-dev"
+    base_model: str = "flux-2"
     use_captions: bool = False
     caption_include_tags: bool = True
     caption_include_description: bool = True
     example_prompts: list[str] | None = None
+
+    @model_validator(mode="after")
+    def validate_supported_base_model(self) -> "TrainLoraRequest":
+        if self.base_model not in SUPPORTED_BASE_MODELS:
+            raise ValueError(
+                "Unsupported base model. Must be one of: "
+                f"{', '.join(sorted(SUPPORTED_BASE_MODELS))}"
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_trigger_word_for_flux(self) -> "TrainLoraRequest":
@@ -570,14 +579,14 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db), c
     }
 
 
-SUPPORTED_BASE_MODELS = {"flux-dev", "qwen-2.5"}
+SUPPORTED_BASE_MODELS = {"flux-2", "qwen-image-2512"}
 
 
 @router.post("/lora/upload", status_code=201)
 async def upload_lora(
     name: str = Form(...),
     trigger_word: str | None = Form(None),
-    base_model: str = Form("flux-dev"),
+    base_model: str = Form("flux-2"),
     description: str | None = Form(None),
     example_prompts: str | None = Form(None),
     file: UploadFile = File(...),
@@ -978,7 +987,7 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
     gen_service = get_generation_service(db, current_user.id)
 
     # Determine effective base_model
-    effective_base_model = request.base_model or "flux-dev"
+    effective_base_model = request.base_model or "nano-banana-pro"
 
     # Validate LoRAs if specified
     loras_for_params: list[dict] = []
@@ -1032,7 +1041,9 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
 
     # Width/height: included for models that use image_size dict (not resolution/aspect or preset models)
     # For image_size_preset models: store width/height only when custom (no preset selected)
-    if model_config.get("uses_image_size_presets"):
+    if model_config.get("uses_image_size_enum"):
+        pass
+    elif model_config.get("uses_image_size_presets"):
         if not request.image_size:
             # Custom size mode — send width/height instead of preset
             gen_params["width"] = request.width

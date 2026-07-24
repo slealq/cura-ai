@@ -17,6 +17,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/edit", tags=["edit"])
 
+SUPPORTED_EDIT_MODELS = {
+    "nano-banana-pro-edit",
+    "kling-image",
+    "grok-imagine",
+    "seedream-5-pro-edit",
+    "qwen-image-2-pro-edit",
+    "flux-2-lora-edit",
+}
+
 # --- Schemas ---
 
 
@@ -28,7 +37,7 @@ class EditImageRequest(BaseModel):
     source_image_ids: list[int] | None = None
     source_generated_ids: list[int] | None = None
     source_upload_keys: list[str] | None = None
-    edit_model: str = "qwen-image-max-edit"
+    edit_model: str = "nano-banana-pro-edit"
     image_size: dict | str | None = None
     num_images: int = Field(1, ge=1, le=9)
     seed: int | None = Field(None, ge=0, le=2147483647)
@@ -81,7 +90,7 @@ async def edit_images(
     from app.providers.fal_provider import FAL_EDIT_MODEL_CONFIG
 
     # Validate edit model
-    if request.edit_model not in FAL_EDIT_MODEL_CONFIG:
+    if request.edit_model not in SUPPORTED_EDIT_MODELS:
         raise HTTPException(status_code=400, detail=f"Unknown edit model: {request.edit_model}")
 
     model_config = FAL_EDIT_MODEL_CONFIG[request.edit_model]

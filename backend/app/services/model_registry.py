@@ -205,7 +205,37 @@ def validate_against_catalog(db) -> list[str]:
 # Model registrations — THE single source of truth
 # ---------------------------------------------------------------------------
 
-# --- Generation models (5 base + 2 LoRA variants) ---
+# --- Generation models ---
+
+register(ModelEntry(
+    short_name="flux-2",
+    provider="fal",
+    catalog_model="fal-ai/flux-2",
+    operation="generate",
+))
+
+register(ModelEntry(
+    short_name="flux-2",
+    provider="fal",
+    catalog_model="fal-ai/flux-2/lora",
+    operation="generate",
+    lora_variant_of="flux-2",
+))
+
+register(ModelEntry(
+    short_name="qwen-image-2512",
+    provider="fal",
+    catalog_model="fal-ai/qwen-image-2512",
+    operation="generate",
+))
+
+register(ModelEntry(
+    short_name="qwen-image-2512",
+    provider="fal",
+    catalog_model="fal-ai/qwen-image-2512/lora",
+    operation="generate",
+    lora_variant_of="qwen-image-2512",
+))
 
 register(ModelEntry(
     short_name="flux-dev",
@@ -261,7 +291,14 @@ register(ModelEntry(
     pricing_strategy_key="flux_2_pro_mp",
 ))
 
-# --- Edit models (6) ---
+register(ModelEntry(
+    short_name="seedream-5-pro",
+    provider="fal",
+    catalog_model="bytedance/seedream/v5/pro/text-to-image",
+    operation="generate",
+))
+
+# --- Edit models ---
 
 register(ModelEntry(
     short_name="qwen-image-max-edit",
@@ -306,7 +343,42 @@ register(ModelEntry(
     pricing_strategy_key="nano_banana_pro_edit",
 ))
 
-# --- Training models (2) ---
+register(ModelEntry(
+    short_name="seedream-5-pro-edit",
+    provider="fal",
+    catalog_model="bytedance/seedream/v5/pro/edit",
+    operation="edit",
+))
+
+register(ModelEntry(
+    short_name="qwen-image-2-pro-edit",
+    provider="fal",
+    catalog_model="fal-ai/qwen-image-2/pro/edit",
+    operation="edit",
+))
+
+register(ModelEntry(
+    short_name="flux-2-lora-edit",
+    provider="fal",
+    catalog_model="fal-ai/flux-2/lora/edit",
+    operation="edit",
+))
+
+# --- Training models ---
+
+register(ModelEntry(
+    short_name="flux-2",
+    provider="fal",
+    catalog_model="fal-ai/flux-2-trainer-v2",
+    operation="train",
+))
+
+register(ModelEntry(
+    short_name="qwen-image-2512",
+    provider="fal",
+    catalog_model="fal-ai/qwen-image-2512-trainer-v2",
+    operation="train",
+))
 
 register(ModelEntry(
     short_name="flux-dev",
