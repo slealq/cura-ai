@@ -22,17 +22,42 @@ DEFAULT_TRAINING_CONFIG = {
 
 # Per-model defaults
 DEFAULT_TRAINING_CONFIGS = {
+    "flux-2": {"steps": 1000, "learning_rate": 0.00005},
+    "qwen-image-2512": {"steps": 2000, "learning_rate": 0.0005},
     "flux-dev": {"steps": 1000, "is_style": False},
     "qwen-2.5": {"steps": 2000, "learning_rate": 0.0005},
 }
 
 DEFAULT_GENERATION_CONFIGS = {
+    "flux-2": {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 2.5, "default_lora_scale": 1.0},
+    "qwen-image-2512": {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 4.0, "default_lora_scale": 1.0},
+    "seedream-5-pro": {"image_size": "auto_2K", "num_images": 1, "output_format": "png", "enable_safety_checker": True},
     "nano-banana-pro": {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 3.5, "default_lora_scale": 1.0},
     "flux-dev": {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 3.5, "default_lora_scale": 1.0},
     "qwen-2.5": {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 4.0, "default_lora_scale": 1.0},
 }
 
 DEFAULT_EDIT_CONFIGS = {
+    "seedream-5-pro-edit": {
+        "image_size": "auto_2K",
+        "num_images": 1,
+        "output_format": "png",
+        "enable_safety_checker": True,
+    },
+    "qwen-image-2-pro-edit": {
+        "image_size": "square_hd",
+        "num_images": 1,
+        "output_format": "png",
+        "enable_prompt_expansion": True,
+        "enable_safety_checker": True,
+    },
+    "flux-2-lora-edit": {
+        "image_size": "landscape_4_3",
+        "num_images": 1,
+        "output_format": "png",
+        "enable_prompt_expansion": False,
+        "enable_safety_checker": True,
+    },
     "qwen-image-max-edit": {
         "image_size": "square_hd",
         "num_images": 1,
@@ -63,7 +88,7 @@ DEFAULT_EDIT_CONFIGS = {
 }
 
 DEFAULT_BASE_MODEL = "nano-banana-pro"
-DEFAULT_EDIT_MODEL = "qwen-image-max-edit"
+DEFAULT_EDIT_MODEL = "nano-banana-pro-edit"
 
 DEFAULT_PROVIDER_CONFIG = {
     "vision_provider": "openai",

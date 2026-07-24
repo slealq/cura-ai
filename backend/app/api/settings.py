@@ -627,15 +627,24 @@ def _get_fal_models() -> list[ProviderModelInfo]:
         ProviderModelInfo(id="x-ai/grok-4-fast", name="Grok 4 Fast", capabilities=["vision", "chat"]),
         ProviderModelInfo(id="qwen/qwen3-vl-235b-a22b-instruct", name="Qwen3 VL 235B", capabilities=["vision", "chat"]),
         ProviderModelInfo(id="google/gemini-2.5-flash", name="Gemini 2.5 Flash", capabilities=["vision", "chat"]),
-        # Generation/training endpoints
-        ProviderModelInfo(id="fal-ai/flux/dev", name="Flux.1 Dev", capabilities=["generation"]),
-        ProviderModelInfo(id="fal-ai/flux-lora", name="Flux LoRA", capabilities=["generation", "lora"]),
-        ProviderModelInfo(id="fal-ai/flux-lora-fast-training", name="Flux LoRA Fast Training", capabilities=["training"]),
-        # Generation endpoints (no LoRA)
+        # Frontier generation/training endpoints
+        ProviderModelInfo(id="fal-ai/flux-2", name="FLUX.2", capabilities=["generation"]),
+        ProviderModelInfo(id="fal-ai/flux-2/lora", name="FLUX.2 LoRA", capabilities=["generation", "lora"]),
+        ProviderModelInfo(id="fal-ai/flux-2-trainer-v2", name="FLUX.2 LoRA Training", capabilities=["training"]),
+        ProviderModelInfo(id="fal-ai/qwen-image-2512", name="Qwen Image 2512", capabilities=["generation"]),
+        ProviderModelInfo(id="fal-ai/qwen-image-2512/lora", name="Qwen Image 2512 LoRA", capabilities=["generation", "lora"]),
+        ProviderModelInfo(id="fal-ai/qwen-image-2512-trainer-v2", name="Qwen Image 2512 Training", capabilities=["training"]),
         ProviderModelInfo(id="fal-ai/nano-banana-pro", name="Nano Banana Pro", capabilities=["generation"]),
+        ProviderModelInfo(id="fal-ai/nano-banana-2", name="Nano Banana 2", capabilities=["generation"]),
+        ProviderModelInfo(id="fal-ai/flux-2-pro", name="FLUX.2 Pro", capabilities=["generation"]),
+        ProviderModelInfo(id="bytedance/seedream/v5/pro/text-to-image", name="Seedream 5 Pro", capabilities=["generation"]),
         # Edit endpoints
-        ProviderModelInfo(id="qwen-image-max-edit", name="Qwen Image Max Edit", capabilities=["edit"]),
-        ProviderModelInfo(id="nano-banana-pro-edit", name="Nano Banana Pro Edit", capabilities=["edit"]),
+        ProviderModelInfo(id="fal-ai/nano-banana-pro/edit", name="Nano Banana Pro Edit", capabilities=["edit"]),
+        ProviderModelInfo(id="fal-ai/kling-image/o3/image-to-image", name="Kling Image", capabilities=["edit"]),
+        ProviderModelInfo(id="xai/grok-imagine-image/edit", name="Grok Imagine", capabilities=["edit"]),
+        ProviderModelInfo(id="bytedance/seedream/v5/pro/edit", name="Seedream 5 Pro Edit", capabilities=["edit"]),
+        ProviderModelInfo(id="fal-ai/qwen-image-2/pro/edit", name="Qwen Image 2 Pro Edit", capabilities=["edit"]),
+        ProviderModelInfo(id="fal-ai/flux-2/lora/edit", name="FLUX.2 LoRA Edit", capabilities=["edit"]),
     ]
 
 
@@ -842,7 +851,7 @@ class EditConfigUpdateRequest(BaseModel):
 
 
 @router.get("/edit", response_model=EditConfigResponse)
-async def get_edit_config(edit_model: str = "qwen-image-max-edit", db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+async def get_edit_config(edit_model: str = "nano-banana-pro-edit", db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get current edit configuration for a specific edit model."""
     service = get_settings_service(db, current_user.id)
     return service.get_edit_config(edit_model)
@@ -850,7 +859,7 @@ async def get_edit_config(edit_model: str = "qwen-image-max-edit", db: Session =
 
 @router.put("/edit", response_model=EditConfigResponse)
 async def update_edit_config(
-    request: EditConfigUpdateRequest, edit_model: str = "qwen-image-max-edit", db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
+    request: EditConfigUpdateRequest, edit_model: str = "nano-banana-pro-edit", db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
 ):
     """Update edit configuration for a specific edit model."""
     service = get_settings_service(db, current_user.id)
@@ -859,7 +868,7 @@ async def update_edit_config(
 
 
 @router.post("/edit/reset", response_model=EditConfigResponse)
-async def reset_edit_config(edit_model: str = "qwen-image-max-edit", db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+async def reset_edit_config(edit_model: str = "nano-banana-pro-edit", db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Reset edit configuration to defaults."""
     service = get_settings_service(db, current_user.id)
     service.delete_setting(f"edit_config:{edit_model}")

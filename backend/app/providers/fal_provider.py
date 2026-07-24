@@ -23,6 +23,30 @@ settings = get_settings()
 
 # Model configuration: maps base_model keys to fal.ai endpoints and parameter differences
 FAL_MODEL_CONFIG = {
+    "flux-2": {
+        "training_endpoint": "fal-ai/flux-2-trainer-v2",
+        "generation_lora_endpoint": "fal-ai/flux-2/lora",
+        "generation_base_endpoint": "fal-ai/flux-2",
+        "zip_param": "image_data_url",
+        "supports_trigger_word": False,
+        "supports_is_style": False,
+        "supports_base64": False,
+        "default_steps": 1000,
+        "default_guidance": 2.5,
+        "default_safety_checker": True,
+    },
+    "qwen-image-2512": {
+        # New user-facing name for the same endpoints as the legacy "qwen-2.5" key.
+        "training_endpoint": "fal-ai/qwen-image-2512-trainer-v2",
+        "generation_lora_endpoint": "fal-ai/qwen-image-2512/lora",
+        "generation_base_endpoint": "fal-ai/qwen-image-2512",
+        "zip_param": "image_data_url",
+        "supports_trigger_word": False,
+        "supports_is_style": False,
+        "supports_base64": False,
+        "default_steps": 2000,
+        "default_guidance": 4.0,
+    },
     "flux-dev": {
         "training_endpoint": "fal-ai/flux-lora-fast-training",
         "generation_lora_endpoint": "fal-ai/flux-lora",
@@ -65,6 +89,12 @@ FAL_MODEL_CONFIG = {
         "supports_steps_guidance": False,
         "uses_image_size_presets": True,
         "default_safety_tolerance": "2",
+    },
+    "seedream-5-pro": {
+        "generation_base_endpoint": "bytedance/seedream/v5/pro/text-to-image",
+        "supports_lora": False,
+        "supports_steps_guidance": False,
+        "uses_image_size_enum": True,
     },
 }
 
@@ -279,6 +309,15 @@ class FalGenerator(BaseGenerator):
                 arguments["enable_web_search"] = enable_web_search
             if seed is not None:
                 arguments["seed"] = seed
+        elif self.config.get("uses_image_size_enum"):
+            # Seedream uses its own named image-size enum and defaults to auto_2K.
+            endpoint = self.config["generation_base_endpoint"]
+            arguments = {
+                "prompt": prompt,
+                "image_size": image_size or "auto_2K",
+                "output_format": "png",
+                "enable_safety_checker": True,
+            }
         elif self.config.get("uses_image_size_presets"):
             # Image-size-preset model (e.g. flux-2-pro) — no LoRA, no steps/guidance
             endpoint = self.config["generation_base_endpoint"]
@@ -300,12 +339,12 @@ class FalGenerator(BaseGenerator):
             endpoint = self.config["generation_lora_endpoint"]
             arguments = {
                 "prompt": prompt,
-                "image_size": {"width": width, "height": height},
+                "image_size": image_size or {"width": width, "height": height},
                 "num_inference_steps": num_inference_steps,
                 "guidance_scale": guidance_scale,
                 "loras": loras,
                 "output_format": "png",
-                "enable_safety_checker": False,
+                "enable_safety_checker": self.config.get("default_safety_checker", False),
             }
             if seed is not None:
                 arguments["seed"] = seed
@@ -313,13 +352,13 @@ class FalGenerator(BaseGenerator):
             endpoint = self.config["generation_base_endpoint"]
             arguments = {
                 "prompt": prompt,
-                "image_size": {"width": width, "height": height},
+                "image_size": image_size or {"width": width, "height": height},
                 "output_format": "png",
             }
             if self.config.get("supports_steps_guidance", True):
                 arguments["num_inference_steps"] = num_inference_steps
                 arguments["guidance_scale"] = guidance_scale
-                arguments["enable_safety_checker"] = False
+                arguments["enable_safety_checker"] = self.config.get("default_safety_checker", False)
             if safety_tolerance is not None:
                 arguments["safety_tolerance"] = safety_tolerance
             if seed is not None:
@@ -491,6 +530,32 @@ FAL_EDIT_MODEL_CONFIG = {
         "uses_safety_tolerance": True,
         "uses_web_search": True,
     },
+    "seedream-5-pro-edit": {
+        "endpoint": "bytedance/seedream/v5/pro/edit",
+        "supports_negative_prompt": False,
+        "supports_prompt_expansion": False,
+        "supports_safety_checker": True,
+        "max_source_images": 10,
+        "max_num_images": 6,
+        "uses_image_size_enum": True,
+    },
+    "qwen-image-2-pro-edit": {
+        "endpoint": "fal-ai/qwen-image-2/pro/edit",
+        "supports_negative_prompt": True,
+        "supports_prompt_expansion": True,
+        "supports_safety_checker": True,
+        "max_source_images": 3,
+        "max_num_images": 6,
+    },
+    "flux-2-lora-edit": {
+        "endpoint": "fal-ai/flux-2/lora/edit",
+        "supports_negative_prompt": False,
+        "supports_prompt_expansion": True,
+        "supports_safety_checker": True,
+        "max_source_images": 4,
+        "max_num_images": 4,
+        "uses_empty_loras": True,
+    },
 }
 
 
@@ -542,6 +607,10 @@ class FalEditor(BaseEditor):
             else:
                 arguments["image_urls"] = image_urls
 
+            if self.config.get("uses_empty_loras"):
+                # LoRA attachment is intentionally out of scope; the endpoint accepts none.
+                arguments["loras"] = []
+
             if self.config.get("uses_resolution"):
                 # Kling-style: resolution + aspect_ratio instead of image_size
                 resolution = kwargs.get("resolution", "1K")
@@ -558,6 +627,8 @@ class FalEditor(BaseEditor):
                     arguments["negative_prompt"] = negative_prompt
                 if image_size is not None:
                     arguments["image_size"] = image_size
+                elif self.config.get("uses_image_size_enum"):
+                    arguments["image_size"] = "auto_2K"
 
             if self.config.get("uses_safety_tolerance") and kwargs.get("safety_tolerance") is not None:
                 arguments["safety_tolerance"] = kwargs["safety_tolerance"]

@@ -159,3 +159,79 @@ async def test_edit_nano_banana_uses_resolution_safety_and_web_search_arguments(
         "safety_tolerance": "5",
         "enable_web_search": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_edit_seedream_5_pro_uses_image_size_enum_without_prompt_expansion(fal_submit):
+    await FalEditor(edit_model="seedream-5-pro-edit").edit(
+        ["https://example.com/source.png"],
+        "replace the sky",
+        negative_prompt="rain",
+        image_size="auto_2K",
+        num_images=2,
+        enable_safety_checker=False,
+        enable_prompt_expansion=True,
+    )
+
+    endpoint, = fal_submit.call_args.args
+    assert endpoint == FAL_EDIT_MODEL_CONFIG["seedream-5-pro-edit"]["endpoint"]
+    assert fal_submit.call_args.kwargs["arguments"] == {
+        "prompt": "replace the sky",
+        "num_images": 2,
+        "output_format": "png",
+        "image_urls": ["https://example.com/source.png"],
+        "enable_safety_checker": False,
+        "image_size": "auto_2K",
+    }
+
+
+@pytest.mark.asyncio
+async def test_edit_qwen_image_2_pro_includes_supported_arguments(fal_submit):
+    await FalEditor(edit_model="qwen-image-2-pro-edit").edit(
+        ["https://example.com/source.png"],
+        "replace the sky",
+        negative_prompt="rain",
+        image_size={"width": 768, "height": 512},
+        seed=123,
+        enable_safety_checker=False,
+        enable_prompt_expansion=False,
+    )
+
+    endpoint, = fal_submit.call_args.args
+    assert endpoint == FAL_EDIT_MODEL_CONFIG["qwen-image-2-pro-edit"]["endpoint"]
+    assert fal_submit.call_args.kwargs["arguments"] == {
+        "prompt": "replace the sky",
+        "num_images": 1,
+        "output_format": "png",
+        "image_urls": ["https://example.com/source.png"],
+        "enable_safety_checker": False,
+        "enable_prompt_expansion": False,
+        "negative_prompt": "rain",
+        "image_size": {"width": 768, "height": 512},
+        "seed": 123,
+    }
+
+
+@pytest.mark.asyncio
+async def test_edit_flux_2_lora_uses_empty_loras_and_omits_negative_prompt(fal_submit):
+    await FalEditor(edit_model="flux-2-lora-edit").edit(
+        ["https://example.com/source.png"],
+        "replace the sky",
+        negative_prompt="rain",
+        image_size="landscape_4_3",
+        seed=123,
+    )
+
+    endpoint, = fal_submit.call_args.args
+    assert endpoint == FAL_EDIT_MODEL_CONFIG["flux-2-lora-edit"]["endpoint"]
+    assert fal_submit.call_args.kwargs["arguments"] == {
+        "prompt": "replace the sky",
+        "num_images": 1,
+        "output_format": "png",
+        "image_urls": ["https://example.com/source.png"],
+        "loras": [],
+        "enable_safety_checker": True,
+        "enable_prompt_expansion": True,
+        "image_size": "landscape_4_3",
+        "seed": 123,
+    }
