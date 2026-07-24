@@ -8,7 +8,7 @@ import type { Folder, Cluster } from '@/types';
 export interface QwenTrainData {
   name: string;
   trigger_word?: string;
-  base_model: 'qwen-2.5';
+  base_model: 'flux-2' | 'qwen-image-2512';
   folder_id?: number;
   cluster_id?: number;
   steps: number;
@@ -20,6 +20,7 @@ export interface QwenTrainData {
 }
 
 interface QwenTrainFormProps {
+  baseModel: 'flux-2' | 'qwen-image-2512';
   defaultSteps: number;
   defaultLearningRate: number;
   folders: Folder[];
@@ -30,6 +31,7 @@ interface QwenTrainFormProps {
 }
 
 export default function QwenTrainForm({
+  baseModel,
   defaultSteps,
   defaultLearningRate,
   folders,
@@ -61,7 +63,7 @@ export default function QwenTrainForm({
     onSubmit({
       name: name.trim(),
       ...(triggerWord.trim() ? { trigger_word: triggerWord.trim() } : {}),
-      base_model: 'qwen-2.5',
+      base_model: baseModel,
       ...(sourceType === 'folder' ? { folder_id: folderId } : { cluster_id: clusterId }),
       steps,
       learning_rate: learningRate,
@@ -97,7 +99,7 @@ export default function QwenTrainForm({
           className="w-full px-3 py-2 border border-border rounded-lg text-sm"
         />
         <p className="text-xs text-muted-foreground mt-1">
-          Qwen trains via captions, so a trigger word is usually not needed
+          Caption-based training usually does not need a trigger word
         </p>
       </div>
 
@@ -136,11 +138,11 @@ export default function QwenTrainForm({
         </div>
       </div>
 
-      {/* Captions (always on for Qwen) */}
+      {/* Captions are always on for caption-based training */}
       <div className="border-t border-border pt-3">
         <div className="flex items-center gap-2 mb-2">
           <span className="text-sm font-medium">Per-image captions</span>
-          <span className="text-xs text-orange-600 dark:text-orange-400">(required for Qwen)</span>
+          <span className="text-xs text-orange-600 dark:text-orange-400">(required)</span>
         </div>
         <p className="text-xs text-muted-foreground mb-3">
           Include generated tags and descriptions as captions for each training image

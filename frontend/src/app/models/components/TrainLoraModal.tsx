@@ -7,13 +7,14 @@ import { X, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { trackFunnelStep } from '@/lib/observability';
 import ModelSelector from '@/components/ModelSelector';
-import FluxTrainForm, { type FluxTrainData } from './FluxTrainForm';
 import QwenTrainForm, { type QwenTrainData } from './QwenTrainForm';
 
 const BASE_MODELS = [
-  { value: 'flux-dev', label: 'Flux' },
-  { value: 'qwen-2.5', label: 'Qwen 2.5' },
-];
+  { value: 'flux-2', label: 'FLUX.2' },
+  { value: 'qwen-image-2512', label: 'Qwen Image 2512' },
+] as const;
+
+type BaseModel = (typeof BASE_MODELS)[number]['value'];
 
 interface TrainLoraModalProps {
   open: boolean;
@@ -23,7 +24,7 @@ interface TrainLoraModalProps {
 export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
   const queryClient = useQueryClient();
   const hasInitialized = useRef(false);
-  const [baseModel, setBaseModel] = useState('flux-dev');
+  const [baseModel, setBaseModel] = useState<BaseModel>('flux-2');
 
   // Fetch settings defaults
   const { data: baseModelData } = useQuery({
@@ -63,7 +64,7 @@ export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
     if (baseModelData && !hasInitialized.current) {
       hasInitialized.current = true;
       if (BASE_MODELS.some((m) => m.value === baseModelData.base_model)) {
-        setBaseModel(baseModelData.base_model);
+        setBaseModel(baseModelData.base_model as BaseModel);
       }
     }
   }, [baseModelData]);
@@ -90,11 +91,6 @@ export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
     },
   });
 
-  const handleFluxSubmit = (data: FluxTrainData) => {
-    trackFunnelStep('training', 'config_saved', { baseModel, source: data.folder_id ? 'folder' : 'cluster' });
-    trainMutation.mutate(data);
-  };
-
   const handleQwenSubmit = (data: QwenTrainData) => {
     trackFunnelStep('training', 'config_saved', { baseModel, source: data.folder_id ? 'folder' : 'cluster' });
     trainMutation.mutate(data);
@@ -104,8 +100,7 @@ export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
 
   const folders = foldersData?.items || [];
   const clusterItems = clustersData?.items || [];
-  const defaultSteps = trainConfig?.steps ?? (baseModel === 'qwen-2.5' ? 2000 : 1000);
-  const defaultIsStyle = trainConfig?.is_style ?? false;
+  const defaultSteps = trainConfig?.steps ?? (baseModel === 'qwen-image-2512' ? 2000 : 1000);
   const defaultLearningRate = trainConfig?.learning_rate ?? 0.0005;
 
   return (
@@ -135,7 +130,7 @@ export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
               label="Base Model *"
               models={BASE_MODELS}
               value={baseModel}
-              onChange={(v) => setBaseModel(v)}
+              onChange={(v) => setBaseModel(v as BaseModel)}
               size="sm"
             />
             {trainingCosts?.costs[baseModel] != null && trainingCosts.costs[baseModel] > 0 && (
@@ -146,28 +141,16 @@ export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
             )}
           </div>
 
-          {/* Model-specific form */}
-          {baseModel === 'flux-dev' ? (
-            <FluxTrainForm
-              defaultSteps={defaultSteps}
-              defaultIsStyle={defaultIsStyle}
-              folders={folders}
-              clusters={clusterItems}
-              isPending={trainMutation.isPending}
-              onSubmit={handleFluxSubmit}
-              onCancel={onClose}
-            />
-          ) : (
-            <QwenTrainForm
-              defaultSteps={baseModel === 'qwen-2.5' ? Math.max(defaultSteps, 2000) : defaultSteps}
-              defaultLearningRate={defaultLearningRate}
-              folders={folders}
-              clusters={clusterItems}
-              isPending={trainMutation.isPending}
-              onSubmit={handleQwenSubmit}
-              onCancel={onClose}
-            />
-          )}
+          <QwenTrainForm
+            baseModel={baseModel}
+            defaultSteps={baseModel === 'qwen-image-2512' ? Math.max(defaultSteps, 2000) : defaultSteps}
+            defaultLearningRate={defaultLearningRate}
+            folders={folders}
+            clusters={clusterItems}
+            isPending={trainMutation.isPending}
+            onSubmit={handleQwenSubmit}
+            onCancel={onClose}
+          />
         </div>
       </div>
     </>
