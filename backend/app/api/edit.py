@@ -68,6 +68,12 @@ class EditSourceUploadResponse(BaseModel):
     object_key: str
 
 
+class BulkDeleteImagesRequest(BaseModel):
+    """Request to delete multiple edited images."""
+
+    image_ids: list[int]
+
+
 # --- Helpers ---
 
 
@@ -290,6 +296,18 @@ async def list_edit_images(
     )
 
 
+@router.post("/images/bulk-delete")
+async def bulk_delete_edit_images(
+    request: BulkDeleteImagesRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete multiple edited images."""
+    gen_service = get_generation_service(db, current_user.id)
+    deleted = await gen_service.bulk_delete_generated_images(request.image_ids)
+    return {"deleted": deleted}
+
+
 @router.get("/images/{gen_id}")
 async def get_edit_image(
     gen_id: int,
@@ -314,7 +332,7 @@ async def delete_edit_image(
 ):
     """Delete an edited image."""
     gen_service = get_generation_service(db, current_user.id)
-    if not gen_service.delete_generated_image(gen_id):
+    if not await gen_service.delete_generated_image(gen_id):
         raise HTTPException(status_code=404, detail="Edited image not found")
 
 

@@ -100,6 +100,10 @@ celery_app.conf.update(
             "task": "app.workers.tasks.cleanup_stale_reservations",
             "schedule": 1800.0,  # every 30 minutes
         },
+        "cleanup-empty-clusters": {
+            "task": "app.workers.tasks.cleanup_empty_clusters",
+            "schedule": 1800.0,  # every 30 minutes
+        },
         "fail-stuck-generation-jobs": {
             "task": "app.workers.tasks.fail_stuck_generation_jobs",
             "schedule": 600.0,  # every 10 minutes, catching jobs stuck 30+ minutes

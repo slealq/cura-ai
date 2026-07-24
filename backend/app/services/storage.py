@@ -446,7 +446,11 @@ class StorageService:
             raise ValueError(f"Unsupported storage backend: {self.storage_backend}")
 
     async def delete_image_files(
-        self, object_key: str, thumbnail_uris: list[str]
+        self,
+        object_key: str,
+        thumbnail_uris: list[str],
+        original_subdir: str = "images",
+        thumbnail_subdir: str = "thumbnails",
     ) -> dict[str, int]:
         """Delete original image + all thumbnails. Returns {deleted, failed} counts."""
         deleted = 0
@@ -454,7 +458,7 @@ class StorageService:
 
         # Delete original image
         try:
-            if await self.delete_file("images", object_key):
+            if await self.delete_file(original_subdir, object_key):
                 deleted += 1
         except Exception as e:
             logger.warning(f"Failed to delete image file {object_key}: {e}")
@@ -466,7 +470,7 @@ class StorageService:
             if not thumb_filename:
                 continue
             try:
-                if await self.delete_file("thumbnails", thumb_filename):
+                if await self.delete_file(thumbnail_subdir, thumb_filename):
                     deleted += 1
             except Exception as e:
                 logger.warning(f"Failed to delete thumbnail {thumb_filename}: {e}")

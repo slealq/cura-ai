@@ -1072,6 +1072,11 @@ export const generationApi = {
     await api.delete(`/generation/images/${id}`);
   },
 
+  bulkDelete: async (imageIds: number[]): Promise<{ deleted: number }> => {
+    const { data } = await api.post('/generation/images/bulk-delete', { image_ids: imageIds });
+    return data;
+  },
+
   getImageUrl: (id: number): string => {
     return authUrl(`/api/generation/images/${id}/file`);
   },
@@ -1170,6 +1175,11 @@ export const editApi = {
 
   deleteImage: async (id: number): Promise<void> => {
     await api.delete(`/edit/images/${id}`);
+  },
+
+  bulkDelete: async (imageIds: number[]): Promise<{ deleted: number }> => {
+    const { data } = await api.post('/edit/images/bulk-delete', { image_ids: imageIds });
+    return data;
   },
 
   getImageUrl: (id: number): string => {

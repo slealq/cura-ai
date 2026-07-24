@@ -1981,6 +1981,43 @@ def fail_stuck_generation_jobs():
 
 
 @celery_app.task
+def cleanup_empty_clusters():
+    """Delete clusters that no longer have any memberships."""
+    from sqlalchemy import select
+
+    from app.models.cluster import Cluster, ClusterMembership
+    from app.services.storage import get_storage_service
+
+    db = SessionLocal()
+    try:
+        empty_clusters = (
+            db.query(Cluster)
+            .filter(
+                ~Cluster.id.in_(select(ClusterMembership.cluster_id))
+            )
+            .all()
+        )
+        storage = get_storage_service()
+        for cluster in empty_clusters:
+            if cluster.cover_thumbnail_uri:
+                storage.delete_cluster_cover_sync(cluster.id)
+            db.delete(cluster)
+            db.commit()
+            logger.info(
+                "EMPTY_CLUSTER_CLEANUP | cluster=%s user=%s",
+                cluster.id,
+                cluster.user_id,
+            )
+        if empty_clusters:
+            logger.info("Cleaned up %d empty clusters", len(empty_clusters))
+    except Exception:
+        logger.warning("Failed to clean up empty clusters", exc_info=True)
+        db.rollback()
+    finally:
+        db.close()
+
+
+@celery_app.task
 def monitor_queue_health():
     """Periodic task to monitor queue depths, oldest pending job age, and completion rate."""
     import redis as redis_lib

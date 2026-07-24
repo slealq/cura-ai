@@ -221,6 +221,12 @@ class GeneratedImageListResponse(BaseModel):
     limit: int
 
 
+class BulkDeleteImagesRequest(BaseModel):
+    """Request to delete multiple generated images."""
+
+    image_ids: list[int]
+
+
 # --- Helpers ---
 
 
@@ -1168,6 +1174,18 @@ async def list_generated_images(
     )
 
 
+@router.post("/images/bulk-delete")
+async def bulk_delete_generated_images(
+    request: BulkDeleteImagesRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete multiple generated images."""
+    gen_service = get_generation_service(db, current_user.id)
+    deleted = await gen_service.bulk_delete_generated_images(request.image_ids)
+    return {"deleted": deleted}
+
+
 @router.get("/images/{gen_id}", response_model=GeneratedImageResponse)
 async def get_generated_image(gen_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get generated image detail."""
@@ -1214,7 +1232,7 @@ async def serve_generated_thumbnail(filename: str, current_user: User = Depends(
 async def delete_generated_image(gen_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Delete a generated image."""
     gen_service = get_generation_service(db, current_user.id)
-    if not gen_service.delete_generated_image(gen_id):
+    if not await gen_service.delete_generated_image(gen_id):
         raise HTTPException(status_code=404, detail="Generated image not found")
 
 
