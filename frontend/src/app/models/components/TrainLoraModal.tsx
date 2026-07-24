@@ -12,9 +12,9 @@ import QwenTrainForm, { type QwenTrainData } from './QwenTrainForm';
 const BASE_MODELS = [
   { value: 'flux-2', label: 'FLUX.2' },
   { value: 'qwen-image-2512', label: 'Qwen Image 2512' },
-] as const;
+];
 
-type BaseModel = (typeof BASE_MODELS)[number]['value'];
+type BaseModel = 'flux-2' | 'qwen-image-2512';
 
 interface TrainLoraModalProps {
   open: boolean;
