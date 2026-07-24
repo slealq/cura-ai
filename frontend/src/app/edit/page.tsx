@@ -21,12 +21,12 @@ const SIZE_PRESETS = [
 ];
 
 const EDIT_MODELS = [
-  { value: 'qwen-image-max-edit', label: 'Qwen Image Max Edit' },
-  { value: 'kling-image', label: 'Kling Image' },
-  { value: 'wan-25', label: 'Wan 2.5' },
-  { value: 'grok-imagine', label: 'Grok Imagine' },
   { value: 'nano-banana-pro-edit', label: 'Nano Banana Pro Edit' },
-  { value: 'face-swap', label: 'Face Swap' },
+  { value: 'kling-image', label: 'Kling Image' },
+  { value: 'grok-imagine', label: 'Grok Imagine' },
+  { value: 'seedream-5-pro-edit', label: 'Seedream 5 Pro Edit' },
+  { value: 'qwen-image-2-pro-edit', label: 'Qwen Image 2 Pro Edit' },
+  { value: 'flux-2-lora-edit', label: 'FLUX.2 LoRA Edit' },
 ];
 
 const KLING_RESOLUTIONS = [
@@ -97,7 +97,7 @@ export default function EditPage() {
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [editModel, setEditModel] = useState('qwen-image-max-edit');
+  const [editModel, setEditModel] = useState('nano-banana-pro-edit');
   const [imageSize, setImageSize] = useState<string>('square_hd');
   const [customWidth, setCustomWidth] = useState(1024);
   const [customHeight, setCustomHeight] = useState(1024);
@@ -113,9 +113,6 @@ export default function EditPage() {
   // Nano Banana Pro state
   const [safetyTolerance, setSafetyTolerance] = useState('4');
   const [enableWebSearch, setEnableWebSearch] = useState(false);
-  // Face swap state
-  const [enableOcclusionPrevention, setEnableOcclusionPrevention] = useState(false);
-
   // Fetch default edit model from settings
   const { data: editModelData } = useQuery({
     queryKey: ['edit-model'],
@@ -139,18 +136,18 @@ export default function EditPage() {
   }, [editModelData]);
 
   const isKling = editModel === 'kling-image';
-  const isFaceSwap = editModel === 'face-swap';
+  const isSeedream = editModel === 'seedream-5-pro-edit';
 
   // Model capability flags
   const MODEL_CAPS: Record<string, { maxSources: number; maxImages: number; hasNegativePrompt: boolean; hasPromptExpansion: boolean; hasSafetyChecker: boolean; usesResolution: boolean; hasImageSize: boolean; hasSeed: boolean; maxPromptLen: number; hasSafetyTolerance: boolean; hasWebSearch: boolean }> = {
-    'qwen-image-max-edit': { maxSources: 3, maxImages: 6, hasNegativePrompt: true, hasPromptExpansion: true, hasSafetyChecker: true, usesResolution: false, hasImageSize: true, hasSeed: true, maxPromptLen: 800, hasSafetyTolerance: false, hasWebSearch: false },
     'kling-image': { maxSources: 10, maxImages: 9, hasNegativePrompt: false, hasPromptExpansion: false, hasSafetyChecker: false, usesResolution: true, hasImageSize: false, hasSeed: true, maxPromptLen: 2500, hasSafetyTolerance: false, hasWebSearch: false },
-    'wan-25': { maxSources: 2, maxImages: 4, hasNegativePrompt: true, hasPromptExpansion: false, hasSafetyChecker: true, usesResolution: false, hasImageSize: true, hasSeed: true, maxPromptLen: 2000, hasSafetyTolerance: false, hasWebSearch: false },
     'grok-imagine': { maxSources: 1, maxImages: 4, hasNegativePrompt: false, hasPromptExpansion: false, hasSafetyChecker: false, usesResolution: false, hasImageSize: false, hasSeed: false, maxPromptLen: 8000, hasSafetyTolerance: false, hasWebSearch: false },
     'nano-banana-pro-edit': { maxSources: 14, maxImages: 4, hasNegativePrompt: false, hasPromptExpansion: false, hasSafetyChecker: false, usesResolution: true, hasImageSize: false, hasSeed: true, maxPromptLen: 50000, hasSafetyTolerance: true, hasWebSearch: true },
-    'face-swap': { maxSources: 2, maxImages: 1, hasNegativePrompt: false, hasPromptExpansion: false, hasSafetyChecker: false, usesResolution: false, hasImageSize: false, hasSeed: false, maxPromptLen: 0, hasSafetyTolerance: false, hasWebSearch: false },
+    'seedream-5-pro-edit': { maxSources: 10, maxImages: 6, hasNegativePrompt: false, hasPromptExpansion: false, hasSafetyChecker: true, usesResolution: false, hasImageSize: true, hasSeed: false, maxPromptLen: 5000, hasSafetyTolerance: false, hasWebSearch: false },
+    'qwen-image-2-pro-edit': { maxSources: 3, maxImages: 6, hasNegativePrompt: true, hasPromptExpansion: true, hasSafetyChecker: true, usesResolution: false, hasImageSize: true, hasSeed: true, maxPromptLen: 2000, hasSafetyTolerance: false, hasWebSearch: false },
+    'flux-2-lora-edit': { maxSources: 4, maxImages: 4, hasNegativePrompt: false, hasPromptExpansion: true, hasSafetyChecker: true, usesResolution: false, hasImageSize: true, hasSeed: true, maxPromptLen: 2000, hasSafetyTolerance: false, hasWebSearch: false },
   };
-  const caps = MODEL_CAPS[editModel] || MODEL_CAPS['qwen-image-max-edit'];
+  const caps = MODEL_CAPS[editModel] || MODEL_CAPS['nano-banana-pro-edit'];
 
   // Source images state
   const [sources, setSources] = useState<SourceImage[]>([]);
@@ -216,62 +213,54 @@ export default function EditPage() {
   };
 
   const handleEdit = () => {
-    if (isFaceSwap) {
-      if (sources.length !== 2) {
-        toast.error('Face swap requires exactly 2 images: source face and target image');
-        return;
-      }
-    } else {
-      if (!prompt.trim()) {
-        toast.error('Please enter a prompt');
-        return;
-      }
-      if (sources.length === 0) {
-        toast.error('Please add at least one source image');
-        return;
-      }
+    if (!prompt.trim()) {
+      toast.error('Please enter a prompt');
+      return;
+    }
+    if (sources.length === 0) {
+      toast.error('Please add at least one source image');
+      return;
+    }
+    if (sources.length > caps.maxSources) {
+      toast.error(`Maximum ${caps.maxSources} source images for this model`);
+      return;
     }
 
     const params: Parameters<typeof editApi.edit>[0] = {
       edit_model: editModel,
-      num_images: isFaceSwap ? 1 : numImages,
+      num_images: numImages,
+      prompt: prompt.trim(),
+      output_format: outputFormat,
     };
 
-    if (isFaceSwap) {
-      if (enableOcclusionPrevention) {
-        params.enable_occlusion_prevention = true;
+    if (caps.usesResolution) {
+      params.resolution = resolution;
+      params.aspect_ratio = aspectRatio;
+    } else if (caps.hasImageSize) {
+      if (isSeedream) {
+        params.image_size = 'auto_2K';
+      } else if (useCustomSize) {
+        params.image_size = { width: customWidth, height: customHeight };
+      } else {
+        params.image_size = imageSize;
       }
-    } else {
-      params.prompt = prompt.trim();
-      params.output_format = outputFormat;
-
-      if (caps.usesResolution) {
-        params.resolution = resolution;
-        params.aspect_ratio = aspectRatio;
-      } else if (caps.hasImageSize) {
-        if (useCustomSize) {
-          params.image_size = { width: customWidth, height: customHeight };
-        } else {
-          params.image_size = imageSize;
-        }
-      }
-      if (caps.hasNegativePrompt && negativePrompt.trim()) {
-        params.negative_prompt = negativePrompt.trim();
-      }
-      if (caps.hasPromptExpansion) {
-        params.enable_prompt_expansion = enablePromptExpansion;
-      }
-      if (caps.hasSafetyChecker) {
-        params.enable_safety_checker = enableSafetyChecker;
-      }
-      if (caps.hasSafetyTolerance) {
-        params.safety_tolerance = safetyTolerance;
-      }
-      if (caps.hasWebSearch) {
-        params.enable_web_search = enableWebSearch;
-      }
-      if (caps.hasSeed && seed) params.seed = parseInt(seed);
     }
+    if (caps.hasNegativePrompt && negativePrompt.trim()) {
+      params.negative_prompt = negativePrompt.trim();
+    }
+    if (caps.hasPromptExpansion) {
+      params.enable_prompt_expansion = enablePromptExpansion;
+    }
+    if (caps.hasSafetyChecker) {
+      params.enable_safety_checker = enableSafetyChecker;
+    }
+    if (caps.hasSafetyTolerance) {
+      params.safety_tolerance = safetyTolerance;
+    }
+    if (caps.hasWebSearch) {
+      params.enable_web_search = enableWebSearch;
+    }
+    if (caps.hasSeed && seed) params.seed = parseInt(seed);
 
     // Collect source IDs by type
     const galleryIds = sources.filter((s) => s.type === 'gallery').map((s) => s.id!);
@@ -382,7 +371,7 @@ export default function EditPage() {
         {/* Source Images */}
         <div>
           <label className="block text-sm font-medium mb-2">
-            {isFaceSwap ? 'Face Swap Images' : 'Source Images'}
+            Source Images
           </label>
           <div className="flex flex-wrap gap-3 items-start">
             {/* Existing source previews */}
@@ -404,9 +393,7 @@ export default function EditPage() {
                   <X className="h-3.5 w-3.5" />
                 </button>
                 <span className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-[10px] text-center py-0.5 rounded-b-lg">
-                  {isFaceSwap
-                    ? (idx === 0 ? 'Source Face' : 'Target')
-                    : src.type === 'gallery' ? `#${src.id}` : src.type === 'generated' ? `Gen #${src.id}` : src.name?.slice(0, 12) || 'Upload'}
+                  {src.type === 'gallery' ? `#${src.id}` : src.type === 'generated' ? `Gen #${src.id}` : src.name?.slice(0, 12) || 'Upload'}
                 </span>
               </div>
             ))}
@@ -449,55 +436,32 @@ export default function EditPage() {
             )}
           </div>
           <p className="text-xs text-muted-foreground mt-1">
-            {isFaceSwap
-              ? 'Add exactly 2 images: first the source face, then the target image to swap the face onto.'
-              : <>
-                  Add 1-{maxSources} source images. Drag &amp; drop, paste, upload, or browse gallery/generated.
-                  {isKling && ' Reference images in your prompt using @Image1, @Image2, etc.'}
-                  {editModel === 'wan-25' && ' Max 2 source images (1 for single edit, 2 for multi-reference).'}
-                </>
-            }
+            Add 1-{maxSources} source images. Drag &amp; drop, paste, upload, or browse gallery/generated.
+            {isKling && ' Reference images in your prompt using @Image1, @Image2, etc.'}
           </p>
         </div>
 
-        {/* Prompt (hidden for face swap) */}
-        {!isFaceSwap && (
-          <div>
-            <label className="block text-sm font-medium mb-1">
-              Prompt
-              <span className="text-muted-foreground font-normal ml-2">
-                {prompt.length}/{caps.maxPromptLen}
-              </span>
-            </label>
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value.slice(0, caps.maxPromptLen))}
-              placeholder={isKling
-                ? "Use @Image1 to reference your source image. e.g. 'Transform @Image1 into a watercolor painting'"
-                : "Describe how you want to edit the image..."}
-              className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-y min-h-[80px]"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                  handleEdit();
-                }
-              }}
-            />
-          </div>
-        )}
-
-        {/* Face swap occlusion toggle */}
-        {isFaceSwap && (
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={enableOcclusionPrevention}
-              onChange={(e) => setEnableOcclusionPrevention(e.target.checked)}
-              className="rounded"
-            />
-            Occlusion prevention
-            <span className="text-xs text-muted-foreground">(handles faces covered by hands/objects, costs 2x)</span>
+        <div>
+          <label className="block text-sm font-medium mb-1">
+            Prompt
+            <span className="text-muted-foreground font-normal ml-2">
+              {prompt.length}/{caps.maxPromptLen}
+            </span>
           </label>
-        )}
+          <textarea
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value.slice(0, caps.maxPromptLen))}
+            placeholder={isKling
+              ? "Use @Image1 to reference your source image. e.g. 'Transform @Image1 into a watercolor painting'"
+              : "Describe how you want to edit the image..."}
+            className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-y min-h-[80px]"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                handleEdit();
+              }
+            }}
+          />
+        </div>
 
         {/* Controls row */}
         <div className="flex flex-wrap gap-4 items-end">
@@ -506,31 +470,31 @@ export default function EditPage() {
             label="Model"
             models={EDIT_MODELS}
             value={editModel}
-            onChange={(v) => setEditModel(v)}
+            onChange={(v) => {
+              setEditModel(v);
+              setNumImages((current) => Math.min(current, MODEL_CAPS[v]?.maxImages ?? 1));
+            }}
             size="sm"
           />
 
-          {/* Num images (hidden for face swap) */}
-          {!isFaceSwap && (
-            <div className="w-24">
-              <label className="block text-xs text-muted-foreground mb-1">Images</label>
-              <select
-                value={numImages}
-                onChange={(e) => setNumImages(parseInt(e.target.value))}
-                className="w-full px-3 py-2 border border-border rounded-lg text-sm"
-              >
-                {[1, 2, 3, 4, 6, 9].filter((n) => n <= caps.maxImages).map((n) => (
-                  <option key={n} value={n}>{n}</option>
-                ))}
-              </select>
-            </div>
-          )}
+          <div className="w-24">
+            <label className="block text-xs text-muted-foreground mb-1">Images</label>
+            <select
+              value={numImages}
+              onChange={(e) => setNumImages(parseInt(e.target.value))}
+              className="w-full px-3 py-2 border border-border rounded-lg text-sm"
+            >
+              {[1, 2, 3, 4, 6, 9].filter((n) => n <= caps.maxImages).map((n) => (
+                <option key={n} value={n}>{n}</option>
+              ))}
+            </select>
+          </div>
 
           {/* Edit button + cost */}
           <div className="flex items-center gap-3">
             <button
               onClick={handleEdit}
-              disabled={editMutation.isPending || (!isFaceSwap && !prompt.trim()) || sources.length === 0 || (isFaceSwap && sources.length !== 2)}
+              disabled={editMutation.isPending || !prompt.trim() || sources.length === 0}
               className="flex items-center gap-2 px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 font-medium"
             >
               {editMutation.isPending ? (
@@ -549,19 +513,16 @@ export default function EditPage() {
           </div>
         </div>
 
-        {/* Advanced toggle (hidden for face swap) */}
-        {!isFaceSwap && (
-          <button
-            onClick={() => setShowAdvanced(!showAdvanced)}
-            className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            {showAdvanced ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-            Advanced Parameters
-          </button>
-        )}
+        <button
+          onClick={() => setShowAdvanced(!showAdvanced)}
+          className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          {showAdvanced ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          Advanced Parameters
+        </button>
 
         {/* Advanced params */}
-        {!isFaceSwap && showAdvanced && (
+        {showAdvanced && (
           <div className="border border-border rounded-lg p-4 space-y-4">
             {/* Negative prompt */}
             {caps.hasNegativePrompt && (
@@ -614,8 +575,8 @@ export default function EditPage() {
               </div>
             )}
 
-            {/* Size presets (Qwen/Wan) */}
-            {caps.hasImageSize && (
+            {/* Size presets (Qwen/FLUX). Seedream requires its own named enum. */}
+            {caps.hasImageSize && !isSeedream && (
               <div>
                 <label className="block text-xs text-muted-foreground mb-1">Image Size</label>
                 <div className="flex flex-wrap gap-2">
@@ -1036,12 +997,6 @@ export default function EditPage() {
                           <div>
                             <span className="text-xs text-muted-foreground">Web Search</span>
                             <p className="font-medium">{gp.enable_web_search ? 'On' : 'Off'}</p>
-                          </div>
-                        )}
-                        {'enable_occlusion_prevention' in gp && gp.enable_occlusion_prevention != null && (
-                          <div>
-                            <span className="text-xs text-muted-foreground">Occlusion Prevention</span>
-                            <p className="font-medium">{gp.enable_occlusion_prevention ? 'On' : 'Off'}</p>
                           </div>
                         )}
                       </div>
