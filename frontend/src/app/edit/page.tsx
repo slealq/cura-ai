@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { editApi, settingsApi, billingApi } from '@/lib/api';
-import { Loader2, Pencil, ChevronDown, ChevronUp, X, Upload, ImageIcon, Zap } from 'lucide-react';
+import { Check, CheckSquare, Loader2, Pencil, ChevronDown, ChevronUp, Trash2, X, Upload, ImageIcon, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import GeneratedImageCard from '@/components/GeneratedImageCard';
@@ -159,6 +159,9 @@ export default function EditPage() {
 
   // Full-size modal
   const [selectedImageId, setSelectedImageId] = useState<number | null>(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   // Fetch edited images with polling
   const { data: editedImages, isLoading: imagesLoading } = useQuery({
@@ -189,6 +192,28 @@ export default function EditPage() {
       toast.error(`Delete failed: ${err.message}`);
     },
   });
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: editApi.bulkDelete,
+    onSuccess: (data) => {
+      toast.success(`Deleted ${data.deleted} images`);
+      queryClient.invalidateQueries({ queryKey: ['edited-images'] });
+      setSelectedIds(new Set());
+      setSelectMode(false);
+    },
+    onError: (err: Error) => {
+      toast.error(`Delete failed: ${err.message}`);
+    },
+  });
+
+  const toggleSelected = (id: number) => {
+    setSelectedIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const handleEdit = () => {
     if (isFaceSwap) {
@@ -748,10 +773,40 @@ export default function EditPage() {
 
       {/* Edited Images Grid */}
       <section>
-        <h2 className="font-semibold mb-3">
-          Edited Images
-          {editedImages && <span className="text-muted-foreground font-normal ml-2">({editedImages.total})</span>}
-        </h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-semibold">
+            Edited Images
+            {editedImages && <span className="text-muted-foreground font-normal ml-2">({editedImages.total})</span>}
+          </h2>
+          {images.length > 0 && (
+            <div className="flex items-center gap-2">
+              {selectMode && (
+                <button
+                  onClick={() => {
+                    const pageIds = images.map((image) => image.id);
+                    const allSelected = pageIds.every((id) => selectedIds.has(id));
+                    setSelectedIds(allSelected ? new Set() : new Set(pageIds));
+                  }}
+                  className="px-3 py-1.5 rounded-lg text-sm border border-border hover:bg-muted transition-colors"
+                >
+                  {images.every((image) => selectedIds.has(image.id))
+                    ? 'Deselect Page'
+                    : 'Select Page'}
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  if (selectMode) setSelectedIds(new Set());
+                  setSelectMode((value) => !value);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-border hover:bg-muted transition-colors"
+              >
+                {selectMode ? <X className="h-3.5 w-3.5" /> : <CheckSquare className="h-3.5 w-3.5" />}
+                {selectMode ? 'Cancel' : 'Select'}
+              </button>
+            </div>
+          )}
+        </div>
         {imagesLoading ? (
           <div className="flex items-center justify-center h-32">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -768,9 +823,24 @@ export default function EditPage() {
               <div key={img.id} className="relative">
                 <GeneratedImageCard
                   image={img}
-                  onClick={() => setSelectedImageId(img.id)}
+                  onClick={selectMode ? () => toggleSelected(img.id) : () => setSelectedImageId(img.id)}
                   onDelete={(id) => deleteMutation.mutate(id)}
                 />
+                {selectMode && (
+                  <button
+                    type="button"
+                    onClick={() => toggleSelected(img.id)}
+                    aria-label={`${selectedIds.has(img.id) ? 'Deselect' : 'Select'} image ${img.id}`}
+                    className={cn(
+                      'absolute top-2 right-2 z-20 h-6 w-6 rounded-md border-2 flex items-center justify-center transition-colors',
+                      selectedIds.has(img.id)
+                        ? 'bg-primary border-primary text-primary-foreground'
+                        : 'bg-card/90 border-white text-transparent'
+                    )}
+                  >
+                    <Check className="h-4 w-4" />
+                  </button>
+                )}
                 {img.status === 'completed' && img.completed_at && (
                   <div className="absolute bottom-1 right-1 z-10 pointer-events-none">
                     <span className="px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-black/60 text-white">
@@ -783,6 +853,60 @@ export default function EditPage() {
           </div>
         )}
       </section>
+
+      {selectedIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-card border border-border rounded-xl shadow-lg px-4 py-3 flex items-center gap-3 z-50">
+          <span className="text-sm font-medium">
+            {selectedIds.size} image{selectedIds.size !== 1 ? 's' : ''} selected
+          </span>
+          <button
+            onClick={() => setShowDeleteConfirm(true)}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium border border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/30"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete
+          </button>
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            className="p-1.5 hover:bg-muted rounded-lg text-muted-foreground transition-colors"
+            aria-label="Clear selection"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
+      {showDeleteConfirm && (
+        <>
+          <div className="fixed inset-0 bg-black/50 z-50" onClick={() => setShowDeleteConfirm(false)} />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="bg-card rounded-xl shadow-xl max-w-sm w-full p-6 space-y-4" onClick={(event) => event.stopPropagation()}>
+              <h3 className="text-lg font-semibold">Delete Images</h3>
+              <p className="text-sm text-muted-foreground">
+                Permanently delete {selectedIds.size} image{selectedIds.size !== 1 ? 's' : ''}? This cannot be undone.
+              </p>
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => setShowDeleteConfirm(false)}
+                  className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    setShowDeleteConfirm(false);
+                    bulkDeleteMutation.mutate(Array.from(selectedIds));
+                  }}
+                  disabled={bulkDeleteMutation.isPending}
+                  className="px-4 py-2 text-sm text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Full-size modal */}
       {selectedImage && (

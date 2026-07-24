@@ -294,14 +294,62 @@ class GenerationService:
             ))
         return query.count()
 
-    def delete_generated_image(self, gen_id: int) -> bool:
-        """Delete a generated image record."""
-        gen = self.db.query(GeneratedImage).filter(GeneratedImage.id == gen_id, GeneratedImage.user_id == self.user_id).first()
-        if gen:
-            self.db.delete(gen)
-            self.db.commit()
-            return True
-        return False
+    async def delete_generated_image(self, gen_id: int) -> bool:
+        """Delete a generated image record and its stored files."""
+        gen = self.db.query(GeneratedImage).filter(
+            GeneratedImage.id == gen_id,
+            GeneratedImage.user_id == self.user_id,
+        ).first()
+        if not gen:
+            return False
+
+        if gen.object_key:
+            try:
+                await self.storage.delete_image_files(
+                    gen.object_key,
+                    [
+                        uri
+                        for uri in (
+                            gen.thumbnail_uri_small,
+                            gen.thumbnail_uri_medium,
+                        )
+                        if uri
+                    ],
+                    original_subdir="generated",
+                    thumbnail_subdir="generated_thumbnails",
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to delete storage files for generated image %s",
+                    gen.id,
+                    exc_info=True,
+                )
+
+        self.db.delete(gen)
+        self.db.commit()
+        return True
+
+    async def bulk_delete_generated_images(self, gen_ids: list[int]) -> int:
+        """Delete generated images owned by the current user."""
+        if not gen_ids:
+            return 0
+
+        owned_ids = {
+            row[0]
+            for row in (
+                self.db.query(GeneratedImage.id)
+                .filter(
+                    GeneratedImage.id.in_(gen_ids),
+                    GeneratedImage.user_id == self.user_id,
+                )
+                .all()
+            )
+        }
+        deleted = 0
+        for gen_id in gen_ids:
+            if gen_id in owned_ids and await self.delete_generated_image(gen_id):
+                deleted += 1
+        return deleted
 
     async def get_generated_image_data(self, gen_id: int) -> bytes | None:
         """Get raw generated image data."""
