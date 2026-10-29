@@ -4,7 +4,7 @@ This directory uses two deliberately different test tiers. The division keeps pu
 
 ## Dependency baseline and local verification
 
-`backend/constraints.txt` records the runtime packages captured on 2026-10-29 from the healthy DEV revision `cae-imggen-dev-backend--0000020`. Docker and CI use it with `pyproject.toml`, which remains the dependency list. Direct dev tools are pinned separately in `constraints-dev.txt` to locally observed versions; dev-only transitive dependencies and build tooling remain unpinned. These version constraints do not pin artifacts, hashes, system packages, or platforms.
+`backend/constraints.txt` records the runtime packages captured on 2026-10-29 from the healthy DEV revision `cae-imggen-dev-backend--0000020`. Docker and CI use it with `pyproject.toml`, which remains the dependency list. Direct dev tools are pinned separately in `constraints-dev.txt` to locally observed versions; dev-only transitive dependencies and build tooling remain unpinned. NetworkX 3.4.2 is an intentional addition beyond that freeze, required for graph clustering and matched to the previously passing local environment. These version constraints do not pin artifacts, hashes, system packages, or platforms.
 
 To update intentionally, resolve and test a proposed set on Python 3.11, review the runtime and dev changes, and update the constraints together. Verify the resulting deployment before adopting its freeze as a new baseline; omit the editable application and build-only tools. From `backend/`, install and run the same CI checks in a clean Python 3.11 environment:
 
