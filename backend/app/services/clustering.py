@@ -74,7 +74,11 @@ class ClusteringService:
         # Optionally reduce dimensionality with UMAP before clustering
         original_embeddings = embeddings
         if params.get("use_umap", False) and embeddings.shape[1] > params.get("umap_n_components", 15):
-            embeddings = self._reduce_umap(embeddings, params)
+            # At least four samples are needed for two spectral components.
+            if len(embeddings) < 4:
+                logger.info("Skipping UMAP: need at least 4 samples, got %s", len(embeddings))
+            else:
+                embeddings = self._reduce_umap(embeddings, params)
 
         if method == ClusteringMethod.HDBSCAN:
             result = self._cluster_hdbscan(embeddings, original_embeddings, params, run_id)
@@ -88,11 +92,27 @@ class ClusteringService:
         return result
 
     def _reduce_umap(self, embeddings: np.ndarray, params: dict) -> np.ndarray:
-        """Reduce embedding dimensionality using UMAP."""
+        """Reduce with spectral UMAP; fewer than four samples cannot support two components."""
+        n_samples, n_features = embeddings.shape
+        if n_samples < 4:
+            logger.info("Skipping UMAP: need at least 4 samples, got %s", n_samples)
+            return embeddings
+
+        requested_components = params.get("umap_n_components", 15)
+        requested_neighbors = params.get("umap_n_neighbors", 15)
+        n_components = min(n_features, max(2, min(requested_components, n_samples - 2)))
+        n_neighbors = max(2, min(requested_neighbors, n_samples - 1))
+        if n_components >= n_features:
+            logger.info("Skipping UMAP: no feature reduction possible for shape %s", embeddings.shape)
+            return embeddings
+        if (n_components, n_neighbors) != (requested_components, requested_neighbors):
+            logger.info(
+                "Clamping UMAP for %s samples: n_components=%s → %s, n_neighbors=%s → %s",
+                n_samples, requested_components, n_components, requested_neighbors, n_neighbors,
+            )
+
         import umap
 
-        n_components = params.get("umap_n_components", 15)
-        n_neighbors = params.get("umap_n_neighbors", 15)
         min_dist = params.get("umap_min_dist", 0.0)
         metric = params.get("umap_metric", "cosine")
 

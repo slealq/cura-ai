@@ -4,12 +4,13 @@ This directory uses two deliberately different test tiers. The division keeps pu
 
 ## Tier 1 — hermetic, every PR
 
-Tier 1 is the `backend-tests` job in `.github/workflows/ci.yml`. It currently installs the backend and runs the six test modules below explicitly (the intended local equivalent is `pytest tests/`). It uses no Postgres, Docker, network access, or real API keys, and completes in seconds.
+Tier 1 is the `backend-tests` job in `.github/workflows/ci.yml`. It installs the backend and runs an explicit list of test modules (the intended local equivalent is `pytest tests/`). It uses no Postgres, Docker, network access, or real API keys, and completes in seconds.
 
 This tier is for pure functions and services, plus carefully mocked provider and dispatch boundaries. It cannot exercise real ORM flows that load tables with PostgreSQL-only types: SQLite is not a workable substitute for those tables.
 
 ### Current coverage
 
+- `test_clustering_small_n.py` — runs real UMAP and all three clusterers on small float32 embedding sets, including the spectral initialization boundary; also checks UMAP skip/clamp behavior without DB or network access.
 - `test_cost_calculator.py` — catalog resolution and precedence, Sparks estimation, cost calculation, and operation-specific token-estimation routing; its isolated SQLite fixture creates only `CostCatalog`.
 - `test_dispatch.py` — `dispatch_or_fail()` returns successful dispatches unchanged, but marks the `Job` and supplied `GeneratedImage` records `FAILED`, sets errors, commits, and returns HTTP 503 when Celery dispatch fails.
 - `test_fal_generator.py` — per-base-model request construction in `FalGenerator.generate()`, including LoRA/base endpoints, Nano Banana resolution/aspect arguments, and Flux 2 image-size presets, by asserting mocked `fal_client.submit()` calls.
