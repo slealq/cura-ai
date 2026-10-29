@@ -68,6 +68,7 @@ class Job(Base):
         Enum(JobStatus, values_callable=lambda x: [e.value for e in x]),
         default=JobStatus.PENDING,
         nullable=False,
+        active_history=True,
     )
     progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     total_items: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

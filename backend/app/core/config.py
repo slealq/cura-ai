@@ -2,6 +2,7 @@
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings
 
 
@@ -34,6 +35,8 @@ class Settings(BaseSettings):
     # Environment & CORS
     environment: Literal["local", "dev", "prod"] = "local"
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001"
+
+    discord_alert_webhook_url: SecretStr = SecretStr("")
 
     # Watch folder
     watch_folder_path: str = "./watch_folder"

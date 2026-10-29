@@ -20,6 +20,7 @@ services:
     env_file:
       - .env.cloud
     environment:
+      DISCORD_ALERT_WEBHOOK_URL: ""
       LOCAL_STORAGE_PATH: /app/storage
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
@@ -39,6 +40,7 @@ services:
     env_file:
       - .env.cloud
     environment:
+      DISCORD_ALERT_WEBHOOK_URL: ""
       LOCAL_STORAGE_PATH: /app/storage
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
@@ -56,6 +58,7 @@ services:
     env_file:
       - .env.cloud
     environment:
+      DISCORD_ALERT_WEBHOOK_URL: ""
       LOCAL_STORAGE_PATH: /app/storage
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
@@ -73,6 +76,7 @@ services:
     env_file:
       - .env.cloud
     environment:
+      DISCORD_ALERT_WEBHOOK_URL: ""
       LOCAL_STORAGE_PATH: /app/storage
       FAL_API_KEY: ${FAL_API_KEY}
     volumes:
