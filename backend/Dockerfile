@@ -10,8 +10,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
-COPY pyproject.toml .
-RUN pip install --no-cache-dir -e .
+COPY pyproject.toml constraints.txt ./
+RUN pip install --no-cache-dir -c constraints.txt -e . && pip check
 
 # Stage 2: Runtime - lean final image
 FROM python:3.11-slim AS runtime

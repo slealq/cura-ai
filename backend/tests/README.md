@@ -2,6 +2,20 @@
 
 This directory uses two deliberately different test tiers. The division keeps pull-request feedback fast while making the infrastructure and paid-provider boundaries explicit.
 
+## Dependency baseline and local verification
+
+`backend/constraints.txt` records the runtime packages captured on 2026-10-29 from the healthy DEV revision `cae-imggen-dev-backend--0000020`. Docker and CI use it with `pyproject.toml`, which remains the dependency list. Direct dev tools are pinned separately in `constraints-dev.txt` to locally observed versions; dev-only transitive dependencies and build tooling remain unpinned. NetworkX 3.4.2 is an intentional addition beyond that freeze, required for graph clustering and matched to the previously passing local environment. These version constraints do not pin artifacts, hashes, system packages, or platforms.
+
+To update intentionally, resolve and test a proposed set on Python 3.11, review the runtime and dev changes, and update the constraints together. Verify the resulting deployment before adopting its freeze as a new baseline; omit the editable application and build-only tools. From `backend/`, install and run the same CI checks in a clean Python 3.11 environment:
+
+```sh
+python -m pip install -c constraints.txt -c constraints-dev.txt -e ".[dev]"
+python -m pip check
+python -c "import app.db.base; print(app.db.base.engine.dialect.driver)"
+ruff check .
+pytest tests/test_fal_generator.py tests/test_fal_editor.py tests/test_dispatch.py tests/test_cost_calculator.py tests/test_no_retry_decorators.py tests/test_model_registry_drift.py tests/test_cluster_service_enum_guard.py tests/test_clustering_small_n.py -v
+```
+
 ## Tier 1 — hermetic, every PR
 
 Tier 1 is the `backend-tests` job in `.github/workflows/ci.yml`. It installs the backend and runs an explicit list of test modules (the intended local equivalent is `pytest tests/`). It uses no Postgres, Docker, network access, or real API keys, and completes in seconds.

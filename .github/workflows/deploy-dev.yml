@@ -150,24 +150,68 @@ jobs:
 
       - name: Verify deployment
         run: |
-          echo "Waiting for backend to become healthy..."
+          apps=(
+            cae-imggen-dev-backend
+            cae-imggen-dev-celery-worker
+            cae-imggen-dev-celery-clustering
+            cae-imggen-dev-celery-generation
+          )
+          deadline=$((SECONDS + 600))
+          for app in "${apps[@]}"; do
+            ready=false
+            while (( SECONDS < deadline )); do
+              # Read only revision names and the configured image, never environment variables.
+              app_state=$(timeout 20s az containerapp show --name "$app" \
+                --resource-group "${{ secrets.DEV_RESOURCE_GROUP }}" \
+                --query '{latest:properties.latestRevisionName,ready:properties.latestReadyRevisionName,images:properties.template.containers[].image}' -o json 2>/dev/null) || app_state='{}'
+              latest=$(printf '%s' "$app_state" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("latest") or "")')
+              if [ -n "$latest" ]; then
+                revision_state=$(timeout 20s az containerapp revision show --name "$app" \
+                  --resource-group "${{ secrets.DEV_RESOURCE_GROUP }}" --revision "$latest" \
+                  --query '{health:properties.healthState,running:properties.runningState,images:properties.template.containers[].image}' -o json 2>/dev/null) || revision_state='{}'
+                if python3 -c 'import json,sys; a=json.loads(sys.argv[1]); r=json.loads(sys.argv[2]); image=sys.argv[3]; sys.exit(not (a.get("latest") and a.get("latest") == a.get("ready") and image in (a.get("images") or []) and image in (r.get("images") or []) and r.get("health") == "Healthy" and r.get("running") == "Running"))' "$app_state" "$revision_state" "$IMAGE"; then
+                  echo "$app: latest revision is ready, healthy, and running the expected image"
+                  ready=true
+                  break
+                fi
+              fi
+              echo "Waiting for $app latest revision (remaining: $((deadline - SECONDS))s)"
+              sleep 10
+            done
+            if [ "$ready" != true ]; then
+              echo "::error::$app latest revision did not become ready with the expected image within 10 minutes"
+              exit 1
+            fi
+          done
+
+          echo "Waiting for backend dependency health..."
           BACKEND_URL="${{ secrets.DEV_BACKEND_URL }}"
-          for i in $(seq 1 30); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BACKEND_URL/health" 2>/dev/null || echo "000")
-            if [ "$STATUS" = "200" ]; then
-              echo "Backend is healthy (attempt $i)"
+          health_deadline=$((SECONDS + 300))
+          healthy=false
+          while (( SECONDS < health_deadline )); do
+            body=$(curl --silent --show-error --fail --connect-timeout 5 --max-time 10 "$BACKEND_URL/health" 2>/dev/null) || body=''
+            if printf '%s' "$body" | python3 -c 'import json,sys
+          try:
+              data=json.load(sys.stdin)
+              checks=data.get("checks", {})
+              ok=data.get("status") == "healthy" and all(checks.get(k) == "ok" for k in ("database", "redis", "storage"))
+          except (ValueError, AttributeError):
+              ok=False
+          sys.exit(not ok)' 2>/dev/null; then
+              healthy=true
+              echo "Backend dependencies are healthy"
               break
             fi
-            echo "Waiting... (attempt $i, status: $STATUS)"
+            echo "Waiting for backend dependency health"
             sleep 10
           done
-          if [ "$STATUS" != "200" ]; then
-            echo "::error::Backend health check failed after 5 minutes"
+          if [ "$healthy" != true ]; then
+            echo "::error::Backend dependency health check failed after 5 minutes"
             exit 1
           fi
 
           # Verify a protected endpoint works (not just health)
-          TOKEN=$(curl -s "$BACKEND_URL/api/auth/login" \
+          TOKEN=$(curl -s --connect-timeout 5 --max-time 10 "$BACKEND_URL/api/auth/login" \
             -H "Content-Type: application/json" \
             -d '{"email":"stuart.leal23@gmail.com","password":"password"}' \
             | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null)
@@ -177,7 +221,7 @@ jobs:
             exit 0
           fi
 
-          STATS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+          STATS_STATUS=$(curl -s --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer $TOKEN" "$BACKEND_URL/api/images/stats")
           if [ "$STATS_STATUS" != "200" ]; then
             echo "::error::/api/images/stats returned $STATS_STATUS — deployment may be broken"
