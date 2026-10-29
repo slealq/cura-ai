@@ -52,6 +52,8 @@ if [ -f "$PROJECT_ROOT/.env" ]; then
 fi
 # Re-source cloud env to override any root .env values
 source "$ENV_FILE"
+# Local processes must never send Discord alerts, even when cloud secrets are loaded.
+DISCORD_ALERT_WEBHOOK_URL=
 set +a
 
 # 2b. Isolate Celery broker from DEV cloud workers.

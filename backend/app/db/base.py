@@ -28,6 +28,10 @@ engine = create_engine(
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+from app.db.job_alerts import register_job_alerts  # noqa: E402
+
+register_job_alerts(SessionLocal)
+
 
 # Slow query detection via SQLAlchemy event listeners
 @event.listens_for(engine, "before_cursor_execute")
