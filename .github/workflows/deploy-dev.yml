@@ -169,7 +169,7 @@ jobs:
                 revision_state=$(timeout 20s az containerapp revision show --name "$app" \
                   --resource-group "${{ secrets.DEV_RESOURCE_GROUP }}" --revision "$latest" \
                   --query '{health:properties.healthState,running:properties.runningState,images:properties.template.containers[].image}' -o json 2>/dev/null) || revision_state='{}'
-                if python3 -c 'import json,sys; a=json.loads(sys.argv[1]); r=json.loads(sys.argv[2]); image=sys.argv[3]; sys.exit(not (a.get("latest") and a.get("latest") == a.get("ready") and image in (a.get("images") or []) and image in (r.get("images") or []) and r.get("health") == "Healthy" and r.get("running") == "Running"))' "$app_state" "$revision_state" "$IMAGE"; then
+                if python3 -c 'import json,sys; a=json.loads(sys.argv[1]); r=json.loads(sys.argv[2]); image=sys.argv[3]; sys.exit(not (a.get("latest") and a.get("latest") == a.get("ready") and image in (a.get("images") or []) and image in (r.get("images") or []) and r.get("health") == "Healthy" and r.get("running") in ("Running", "RunningAtMaxScale")))' "$app_state" "$revision_state" "$IMAGE"; then
                   echo "$app: latest revision is ready, healthy, and running the expected image"
                   ready=true
                   break
