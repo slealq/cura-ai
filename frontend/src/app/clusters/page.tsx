@@ -1,10 +1,11 @@
 'use client';
 
 import { useState, useCallback, useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { clustersApi, jobsApi } from '@/lib/api';
 import ClusterCard from '@/components/ClusterCard';
-import { Loader2, Play, AlertTriangle } from 'lucide-react';
+import ClusteringRunDialog from '@/components/ClusteringRunDialog';
+import { Loader2, Play } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import type { Cluster } from '@/types';
@@ -71,33 +72,7 @@ export default function ClustersPage() {
     }
   }, [data, page]);
 
-  const clusterMutation = useMutation({
-    mutationFn: () => clustersApi.recluster(),
-    onSuccess: (result) => {
-      setIsReclustering(true);
-      setReclusterJobId(result.job_id);
-      setAllItems([]);
-      toast.success('Clustering job started', {
-        action: { label: 'View Jobs', onClick: () => window.location.href = '/jobs' },
-      });
-    },
-    onError: () => {
-      toast.error('Failed to start clustering');
-    },
-  });
-
-  const handleRunClustering = () => {
-    if (allItems.length > 0) {
-      setShowConfirm(true);
-    } else {
-      clusterMutation.mutate();
-    }
-  };
-
-  const confirmRecluster = () => {
-    setShowConfirm(false);
-    clusterMutation.mutate();
-  };
+  const handleRunClustering = () => setShowConfirm(true);
 
   const total = data?.total ?? 0;
   const hasMore = allItems.length < total;
@@ -115,17 +90,32 @@ export default function ClustersPage() {
 
   const header = (
     <div className="flex items-center justify-between">
+      {showConfirm && (
+        <ClusteringRunDialog
+          hasClusters={(data?.total ?? 0) > 0 || allItems.length > 0}
+          onClose={() => setShowConfirm(false)}
+          onStarted={(jobId) => {
+            setShowConfirm(false);
+            setIsReclustering(true);
+            setReclusterJobId(jobId);
+            setAllItems([]);
+            toast.success('Clustering job started', {
+              action: { label: 'View Jobs', onClick: () => window.location.href = '/jobs' },
+            });
+          }}
+        />
+      )}
       <h1 className="text-2xl font-bold">Clusters</h1>
       <button
         onClick={handleRunClustering}
-        disabled={clusterMutation.isPending || isReclustering}
+        disabled={isReclustering}
         className={cn(
           'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors',
           'bg-primary text-primary-foreground hover:bg-primary/90',
           'disabled:opacity-50 disabled:cursor-not-allowed'
         )}
       >
-        {clusterMutation.isPending || isReclustering ? (
+        {isReclustering ? (
           <Loader2 className="h-4 w-4 animate-spin" />
         ) : (
           <Play className="h-4 w-4" />
@@ -249,45 +239,6 @@ export default function ClustersPage() {
         </div>
       )}
 
-      {/* Recluster Confirmation Dialog */}
-      {showConfirm && (
-        <>
-          <div
-            className="fixed inset-0 bg-black/50 z-50"
-            onClick={() => setShowConfirm(false)}
-          />
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div
-              className="bg-card rounded-xl shadow-xl max-w-sm w-full p-6 space-y-4"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-start gap-3">
-                <AlertTriangle className="h-5 w-5 text-amber-500 mt-0.5 shrink-0" />
-                <div>
-                  <h3 className="font-semibold text-card-foreground">Replace existing clusters?</h3>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Running clustering will delete all existing clusters. Save important clusters as folders first.
-                  </p>
-                </div>
-              </div>
-              <div className="flex gap-2 justify-end">
-                <button
-                  onClick={() => setShowConfirm(false)}
-                  className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={confirmRecluster}
-                  className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
-                >
-                  Run Clustering
-                </button>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
     </div>
   );
 }
