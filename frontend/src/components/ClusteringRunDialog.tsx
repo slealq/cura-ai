@@ -228,6 +228,26 @@ export default function ClusteringRunDialog({ hasClusters, onClose, onStarted }:
         className="space-y-5 p-6"
       >
         <h2 id="clustering-dialog-title" className="text-lg font-semibold">Run Clustering</h2>
+        <section aria-labelledby="clustering-explanation-title" className="space-y-3 rounded-lg border border-border bg-muted/30 p-4 text-sm">
+          <h3 id="clustering-explanation-title" className="font-medium">How clustering works</h3>
+          <p>SightLab groups images by the meaning of their AI-generated tags and descriptions.</p>
+          <ol className="flex flex-wrap gap-x-4 gap-y-2" aria-label="Clustering steps">
+            <li><span className="mr-1 text-muted-foreground">1.</span> Image</li>
+            <li><span className="mr-1 text-muted-foreground">2.</span> Tags &amp; description</li>
+            <li><span className="mr-1 text-muted-foreground">3.</span> Similarity groups</li>
+          </ol>
+          <p className="text-muted-foreground">
+            Visual details affect grouping when captured in the generated text; images are not compared directly.
+          </p>
+          <details className="rounded-lg border border-border p-3">
+            <summary className="cursor-pointer font-medium">More about clustering</summary>
+            <div className="mt-3 space-y-2 text-muted-foreground">
+              <p>Tags and descriptions are converted into numerical embeddings that represent their meaning. Clustering reuses saved embeddings and does not analyze images again. Only images with completed processing and saved embeddings participate.</p>
+              <p>The algorithm changes how groups form from the same inputs. Cluster titles and summaries are generated afterward and do not determine membership.</p>
+              <p>After changing tags or descriptions, regenerate embeddings before reclustering.</p>
+            </div>
+          </details>
+        </section>
         {hasClusters && (
           <p className="rounded-lg bg-amber-500/10 p-3 text-sm">
             Existing clusters will be replaced. Save important clusters as folders first.
