@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useState, useEffect, useMemo, useRef } from 'react';
+import { Suspense, useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { Check, FileText, FolderMinus, FolderPlus, Loader2, RefreshCw, Trash2, X } from 'lucide-react';
@@ -132,14 +132,14 @@ function Tile({
   return (
     <div
       className={cn(
-        'group relative mb-2 break-inside-avoid overflow-hidden rounded-md bg-muted',
+        'group relative h-full overflow-hidden rounded-md bg-muted',
         selected && 'outline outline-[3px] -outline-offset-[3px] outline-selection'
       )}
     >
       <button
         type="button"
         onClick={(e) => (selecting || e.metaKey || e.ctrlKey || e.shiftKey ? onToggle() : onOpen())}
-        className="block w-full"
+        className="block h-full w-full"
         aria-label={`${image.original_filename || `Image ${image.id}`}${selected ? ', selected' : ''}`}
       >
         {src ? (
@@ -150,14 +150,14 @@ function Tile({
             loading="lazy"
             style={{ aspectRatio: ratio }}
             className={cn(
-              'block w-full object-cover transition-transform duration-200',
+              'block h-full w-full object-cover transition-transform duration-200',
               selected && 'scale-[0.94] rounded'
             )}
           />
         ) : (
           <div
             style={{ aspectRatio: ratio }}
-            className="grid w-full place-items-center text-xs text-muted-foreground"
+            className="grid h-full w-full place-items-center text-xs text-muted-foreground"
           >
             No preview
           </div>
@@ -191,6 +191,63 @@ function Tile({
         >
           {flag.text}
         </span>
+      )}
+    </div>
+  );
+}
+
+// Keep assignments and ratios for the current result sequence. Appending a page only
+// adds to the shortest column; existing DOM nodes and reserved heights stay put.
+function AppendOnlyGrid({ images, density, children }: {
+  images: Image[];
+  density: Density;
+  children: (image: Image) => ReactNode;
+}) {
+  const container = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  const layout = useRef<{ count: number; density: Density; ids: number[]; columns: number[]; ratios: number[] }>({
+    count: 0, density, ids: [], columns: [], ratios: [],
+  });
+  useEffect(() => {
+    const element = container.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const count = Math.max(1, Math.floor((width + 8) / (COLUMN_WIDTH[density] + 8)));
+  const tileWidth = (width - (count - 1) * 8) / count;
+  let current = layout.current;
+  if (current.count !== count || current.density !== density ||
+      current.ids.length > images.length || current.ids.some((id, i) => images[i]?.id !== id)) {
+    current = { count, density, ids: [], columns: [], ratios: [] };
+    layout.current = current;
+  }
+  const heights = Array<number>(count).fill(0);
+  current.columns.forEach((column, i) => { heights[column] += tileWidth / current.ratios[i] + 8; });
+  for (let i = current.ids.length; i < images.length; i++) {
+    const image = images[i];
+    const ratio = image.width && image.height ? image.width / image.height : 1;
+    const column = heights.indexOf(Math.min(...heights));
+    current.ids.push(image.id);
+    current.columns.push(column);
+    current.ratios.push(ratio);
+    heights[column] += tileWidth / ratio + 8;
+  }
+  return (
+    <div ref={container} className="pb-24">
+      {width > 0 && (
+        <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${count}, minmax(0, 1fr))` }}>
+          {Array.from({ length: count }, (_, column) => (
+            <div key={column} className="min-w-0">
+              {images.map((image, i) => current.columns[i] === column ? (
+                <div key={image.id} style={{ aspectRatio: current.ratios[i] }} className="mb-2 overflow-hidden rounded-md">
+                  {children(image)}
+                </div>
+              ) : null)}
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -476,8 +533,8 @@ function ImageGridContent({
           </div>
         ) : (
           <>
-            <div style={{ columnWidth: COLUMN_WIDTH[density], columnGap: 8 }} className="pb-24">
-              {images.map((image) => (
+            <AppendOnlyGrid images={images} density={density}>
+              {(image) => (
                 <Tile
                   key={image.id}
                   image={image}
@@ -486,8 +543,8 @@ function ImageGridContent({
                   onOpen={() => setOpenImage(image)}
                   onToggle={() => toggle(image.id)}
                 />
-              ))}
-            </div>
+              )}
+            </AppendOnlyGrid>
             <div ref={sentinelRef} className="flex h-10 items-center justify-center">
               {isFetchingNextPage && <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />}
             </div>
