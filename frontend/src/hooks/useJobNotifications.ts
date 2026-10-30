@@ -27,7 +27,7 @@ const JOB_TYPE_LABELS: Record<string, string> = {
   folder_delete: 'Folder Delete',
 };
 
-function jobLabel(job: Job): string {
+export function jobLabel(job: Job): string {
   return JOB_TYPE_LABELS[job.job_type] || job.job_type.replace('_', ' ');
 }
 
