@@ -1,5 +1,7 @@
 'use client';
 
+import { useModelCatalog } from '@/hooks/useModelCatalog';
+
 import { useState } from 'react';
 import { useParams, useRouter, usePathname } from 'next/navigation';
 import { useQuery, useMutation } from '@tanstack/react-query';
@@ -47,7 +49,8 @@ export default function EvaluatePage() {
   const [matchOriginals, setMatchOriginals] = useState(true);
   const [customWidth, setCustomWidth] = useState(1024);
   const [customHeight, setCustomHeight] = useState(1024);
-  const [visionProvider, setVisionProvider] = useState<string>('');
+
+  const { data: catalog } = useModelCatalog();
 
   // Fetch LoRA model info
   const { data: lora, isLoading: loraLoading } = useQuery({
@@ -75,9 +78,6 @@ export default function EvaluatePage() {
           guidance_scale: guidanceScale,
           ...(matchOriginals ? {} : { width: customWidth, height: customHeight }),
         },
-        vision_eval_provider: metricsEnabled.includes('vision_eval') && visionProvider
-          ? visionProvider
-          : undefined,
       }),
     onSuccess: (data) => {
       toast.success('Evaluation started');
@@ -127,7 +127,7 @@ export default function EvaluatePage() {
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             Trigger: <code className="bg-muted px-1 py-0.5 rounded">{lora.trigger_word}</code>
-            {' · '}{lora.base_model}
+            {' · '}{catalog?.training_base_models.find(m => m.key === lora.base_model)?.label || lora.base_model}
             {' · '}{lora.training_images_count} training images
           </p>
         </div>
@@ -195,26 +195,10 @@ export default function EvaluatePage() {
                 className="rounded"
               />
               Vision AI Evaluation
-              <span className="text-xs text-muted-foreground">(sends both images to GPT-4V/Claude for scoring)</span>
+              <span className="text-xs text-muted-foreground">(uses the configured vision model for scoring)</span>
             </label>
           </div>
         </div>
-
-        {/* Vision Provider */}
-        {metricsEnabled.includes('vision_eval') && (
-          <div>
-            <label className="text-sm font-medium">Vision Evaluation Provider</label>
-            <select
-              value={visionProvider}
-              onChange={(e) => setVisionProvider(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
-            >
-              <option value="">Default (from settings)</option>
-              <option value="openai">OpenAI</option>
-              <option value="anthropic">Anthropic</option>
-            </select>
-          </div>
-        )}
 
         {/* Generation Params */}
         <div className="grid grid-cols-3 gap-4">

@@ -3,9 +3,6 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
-from anthropic import AsyncAnthropic
-from anthropic import AuthenticationError as AnthropicAuthError
-from anthropic import RateLimitError as AnthropicRateLimitError
 from openai import AsyncOpenAI
 from openai import AuthenticationError as OpenAIAuthError
 from openai import RateLimitError as OpenAIRateLimitError
@@ -129,34 +126,6 @@ class APIKeyService:
                 valid=False, status=APIKeyStatus.UNKNOWN, error=str(e)
             )
 
-    async def validate_anthropic_key(self, key_value: str) -> APIKeyValidationResult:
-        """Validate an Anthropic API key by making a minimal API call."""
-        try:
-            client = AsyncAnthropic(api_key=key_value)
-            # Make a minimal message request to validate
-            await client.messages.create(
-                model="claude-3-haiku-20240307",
-                max_tokens=1,
-                messages=[{"role": "user", "content": "hi"}],
-            )
-            return APIKeyValidationResult(valid=True, status=APIKeyStatus.ACTIVE)
-        except AnthropicAuthError:
-            return APIKeyValidationResult(
-                valid=False, status=APIKeyStatus.INVALID, error="Invalid API key"
-            )
-        except AnthropicRateLimitError as e:
-            error_msg = str(e).lower()
-            if "quota" in error_msg or "exceeded" in error_msg:
-                return APIKeyValidationResult(
-                    valid=True, status=APIKeyStatus.QUOTA_EXCEEDED, error=str(e)
-                )
-            return APIKeyValidationResult(valid=True, status=APIKeyStatus.ACTIVE, error=str(e))
-        except Exception as e:
-            logger.error(f"Anthropic validation error: {e}")
-            return APIKeyValidationResult(
-                valid=False, status=APIKeyStatus.UNKNOWN, error=str(e)
-            )
-
     async def validate_fal_key(self, key_value: str) -> APIKeyValidationResult:
         """Validate a fal.ai API key by making a lightweight API call."""
         try:
@@ -197,8 +166,6 @@ class APIKeyService:
         """Validate a key and save it with the validation result."""
         if provider == APIProvider.OPENAI:
             result = await self.validate_openai_key(key_value)
-        elif provider == APIProvider.ANTHROPIC:
-            result = await self.validate_anthropic_key(key_value)
         elif provider == APIProvider.FAL:
             result = await self.validate_fal_key(key_value)
         elif provider == APIProvider.SENTRY:

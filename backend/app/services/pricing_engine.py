@@ -78,14 +78,22 @@ def _nano_banana_pro_generate(params: dict) -> Decimal:
     return raw
 
 
-def _nano_banana_2_generate(params: dict) -> Decimal:
-    """$0.08 × resolution_mult + optional web_search surcharge."""
-    resolution = params.get("resolution", "1K")
-    multiplier = Decimal(str(_NANO_RESOLUTION_MULTIPLIERS.get(resolution, 1.0)))
-    raw = Decimal("0.08") * multiplier
-    if params.get("enable_web_search") or params.get("web_search"):
-        raw += _WEB_SEARCH_SURCHARGE
-    return raw
+def _catalog_table_cost(provider: str, model: str, operation: str, params: dict) -> Decimal | None:
+    """Table-driven price from the model catalog: ``price_table[params[price_param]]``.
+
+    *model* is the fal endpoint (the registry-resolved catalog name).  Falls back
+    to the option's catalog default, then to the flat ``base_price``.
+    """
+    from app.services.model_catalog import image_model_for_endpoint
+
+    found = image_model_for_endpoint(model, operation)
+    if found is None or found[1] or not found[0].price_table:
+        return None
+    image_model, _ = found
+    option = params.get(image_model.price_param)
+    if option is None:
+        option = image_model.params.get(image_model.price_param, {}).get("default")
+    return Decimal(str(image_model.price_table.get(option, image_model.base_price)))
 
 
 # ---------------------------------------------------------------------------
@@ -96,13 +104,16 @@ _STRATEGY_FUNCTIONS: dict[str, callable] = {
     "flux_2_pro_mp": _flux_2_pro_generate,
     "nano_banana_pro": _nano_banana_pro_generate,
     "nano_banana_pro_edit": _nano_banana_pro_generate,  # same formula
-    "nano_banana_2": _nano_banana_2_generate,
 }
+
+# Strategy key for catalog models priced from a ``price_table``.  Handled
+# directly in compute_raw_cost (it needs the model, not just the params).
+TABLE_STRATEGY_KEY = "catalog_table"
 
 
 def get_strategy_functions() -> dict[str, callable]:
     """Return the strategy function dict — used by model_registry validation."""
-    return _STRATEGY_FUNCTIONS
+    return {**_STRATEGY_FUNCTIONS, TABLE_STRATEGY_KEY: _catalog_table_cost}
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +138,8 @@ def compute_raw_cost(
     key = get_pricing_strategy_key(provider, model, operation)
     if key is None:
         return None
+    if key == TABLE_STRATEGY_KEY:
+        return _catalog_table_cost(provider, model, operation, params)
     fn = _STRATEGY_FUNCTIONS.get(key)
     if fn is None:
         return None
@@ -141,4 +154,4 @@ def has_variable_pricing(provider: str, model: str, operation: str) -> bool:
     from app.services.model_registry import get_pricing_strategy_key
 
     key = get_pricing_strategy_key(provider, model, operation)
-    return key is not None and key in _STRATEGY_FUNCTIONS
+    return key is not None and (key in _STRATEGY_FUNCTIONS or key == TABLE_STRATEGY_KEY)

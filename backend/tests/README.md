@@ -4,7 +4,7 @@ This directory uses two deliberately different test tiers. The division keeps pu
 
 ## Dependency baseline and local verification
 
-`backend/constraints.txt` records the runtime packages captured on 2026-10-29 from the healthy DEV revision `cae-imggen-dev-backend--0000020`. Docker and CI use it with `pyproject.toml`, which remains the dependency list. Direct dev tools are pinned separately in `constraints-dev.txt` to locally observed versions; dev-only transitive dependencies and build tooling remain unpinned. NetworkX 3.4.2 is an intentional addition beyond that freeze, required for graph clustering and matched to the previously passing local environment. These version constraints do not pin artifacts, hashes, system packages, or platforms.
+`backend/constraints.txt` records the runtime packages captured on 2026-10-29 from the healthy DEV revision `cae-imggen-dev-backend--0000020` (minus `anthropic`, which the backend no longer depends on). Docker and CI use it with `pyproject.toml`, which remains the dependency list. Direct dev tools are pinned separately in `constraints-dev.txt` to locally observed versions; dev-only transitive dependencies and build tooling remain unpinned. NetworkX 3.4.2 is an intentional addition beyond that freeze, required for graph clustering and matched to the previously passing local environment. These version constraints do not pin artifacts, hashes, system packages, or platforms.
 
 To update intentionally, resolve and test a proposed set on Python 3.11, review the runtime and dev changes, and update the constraints together. Verify the resulting deployment before adopting its freeze as a new baseline; omit the editable application and build-only tools. From `backend/`, install and run the same CI checks in a clean Python 3.11 environment:
 
@@ -13,7 +13,7 @@ python -m pip install -c constraints.txt -c constraints-dev.txt -e ".[dev]"
 python -m pip check
 python -c "import app.db.base; print(app.db.base.engine.dialect.driver)"
 ruff check .
-pytest tests/test_fal_generator.py tests/test_fal_editor.py tests/test_dispatch.py tests/test_cost_calculator.py tests/test_no_retry_decorators.py tests/test_model_registry_drift.py tests/test_cluster_service_enum_guard.py tests/test_clustering_small_n.py -v
+pytest tests/test_fal_generator.py tests/test_fal_editor.py tests/test_dispatch.py tests/test_cost_calculator.py tests/test_no_retry_decorators.py tests/test_model_registry_drift.py tests/test_cluster_service_enum_guard.py tests/test_clustering_small_n.py tests/test_model_catalog_schema.py tests/test_model_catalog_billing_drift.py tests/test_model_catalog_settings.py tests/test_fal_language_routing.py tests/test_removed_models_rejected.py tests/test_migration_055.py -v
 ```
 
 ## Tier 1 — hermetic, every PR
@@ -28,8 +28,14 @@ This tier is for pure functions and services, plus carefully mocked provider and
 - `test_cost_calculator.py` — catalog resolution and precedence, Sparks estimation, cost calculation, and operation-specific token-estimation routing; its isolated SQLite fixture creates only `CostCatalog`.
 - `test_dispatch.py` — `dispatch_or_fail()` returns successful dispatches unchanged, but marks the `Job` and supplied `GeneratedImage` records `FAILED`, sets errors, commits, and returns HTTP 503 when Celery dispatch fails.
 - `test_fal_generator.py` — per-base-model request construction in `FalGenerator.generate()`, including LoRA/base endpoints, Nano Banana resolution/aspect arguments, and Flux 2 image-size presets, by asserting mocked `fal_client.submit()` calls.
-- `test_fal_editor.py` — per-edit-model request construction in `FalEditor.edit()`, including Qwen/WAN flags, Kling defaults, Grok's singular URL, face swap, and Nano Banana arguments, by asserting mocked `fal_client.submit()` calls.
-- `test_model_registry_drift.py` — both directions of consistency between `FAL_MODEL_CONFIG` / `FAL_EDIT_MODEL_CONFIG` in `fal_provider.py` and the independent fal billing entries in `model_registry.py`.
+- `test_fal_editor.py` — per-edit-model request construction in `FalEditor.edit()`, including fixed catalog flags, Kling defaults, the singular `image_url` of Ideogram, and Nano Banana arguments, by asserting mocked `fal_client.submit()` calls.
+- `test_model_registry_drift.py` — consistency between `FAL_MODEL_CONFIG` / `FAL_EDIT_MODEL_CONFIG`, the `model_registry` registrations, and `app/services/model_catalog.py` (all three are derived from the catalog).
+- `test_model_catalog_schema.py` — builds the real payload for every catalog image model and param option (and the OpenRouter router payloads) and checks it against `fixtures/fal_input_schemas.json`, a snapshot of fal's OpenAPI inputs (property names, required fields, enums, types, bounds).
+- `test_model_catalog_billing_drift.py` — keeps migration 055's literal billing data (`LANGUAGE_RATES`, `IMAGE_ROWS`) in sync with the catalog and checks registry resolution and price coverage.
+- `test_model_catalog_settings.py` — provider-config defaults and self-healing of stale stored models, the `/settings/model-catalog` payload, and the decision snapshot used by the pricing-engine fallback.
+- `test_fal_language_routing.py` — router endpoint choice (`openrouter/router` vs `/vision`), temperature handling per model, `FalClusterSummarizer`, and the `expand_prompt` / `suggest_prompt` routes with fal and billing mocked.
+- `test_removed_models_rejected.py` — removed/unknown models are rejected by the generation, edit, and vision APIs and by the providers; LoRA safety; table-driven pricing per option.
+- `test_migration_055.py` — runs migration 055's upgrade/downgrade/upgrade against in-memory SQLite (seeding, deactivation, user-settings rewrite); it does not cover Postgres itself.
 - `test_no_retry_decorators.py` — imports every non-recursive `app.providers` module and guards against tenacity imports, public methods carrying tenacity's `retry` wrapper attribute, and source-level `@retry` decorators. The policy is to surface provider failures immediately rather than silently multiply API cost.
 
 `verify_gpt52_tokens.py` and `verify_vision_costs.py` are also in this directory, but are verification scripts rather than `test_*.py` modules and are not in the CI command.
@@ -46,7 +52,7 @@ grep -rn "Vector(1536)\|postgresql.JSON" backend/app/models/
 
 currently reports the two vector declarations: `image.py` (`ImageMetadata.embedding`) and `cluster.py` (`Cluster.centroid_embedding`). `GeneratedImage` in `generated_image.py` imports PostgreSQL's `JSON` as `JSON` (so it does not literally match the grep spelling) for `generation_params` and `provider_metadata`; `VisionResult` in `vision_result.py` uses the same PostgreSQL `JSON` import for `result_tags`. These ORM tables need actual Postgres; SQLite substitution does not support this schema correctly. In practice, any path that touches `Image`/`ImageMetadata` or `Cluster` through the real ORM is Postgres-bound because of pgvector, and `GeneratedImage` is Postgres-bound because of its PostgreSQL JSON columns.
 
-Anything that calls real fal.ai, OpenAI, or Anthropic also belongs outside every-PR CI: it has real cost and nondeterministic responses. Keep those checks opt-in or scheduled.
+Anything that calls real fal.ai or OpenAI also belongs outside every-PR CI: it has real cost and nondeterministic responses. Keep those checks opt-in or scheduled.
 
 ### Recommended Tier 2 coverage
 

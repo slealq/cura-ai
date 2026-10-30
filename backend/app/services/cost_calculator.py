@@ -72,6 +72,18 @@ def get_catalog_entry(
     return None, "none"
 
 
+def _token_rates(entry, provider: str, model: str, input_tokens: int | None):
+    """Use the offered fal model's long-prompt tier when its threshold is met."""
+    input_rate, output_rate = entry.cost_per_input_token, entry.cost_per_output_token
+    if provider == "fal" and input_tokens is not None:
+        from app.services.model_catalog import get_language_model
+        language = get_language_model(model)
+        tier = language.tier if language else None
+        if tier and input_tokens >= tier["min_prompt_tokens"]:
+            return Decimal(str(tier["input"])) / Decimal(1_000_000), Decimal(str(tier["output"])) / Decimal(1_000_000)
+    return input_rate, output_rate
+
+
 def estimate_sparks(
     db: Session,
     provider: str,
@@ -105,13 +117,14 @@ def estimate_sparks(
             sparks = (Decimal(str(raw_cost)) * entry.platform_markup * USD_TO_SPARKS).quantize(_q2)
             return sparks, entry
 
+    input_rate, output_rate = _token_rates(entry, provider, model, estimated_input_tokens)
     raw = Decimal("0")
     if entry.cost_per_call and entry.cost_per_call > 0:
         raw += entry.cost_per_call
-    if estimated_input_tokens and entry.cost_per_input_token:
-        raw += entry.cost_per_input_token * estimated_input_tokens
-    if estimated_output_tokens and entry.cost_per_output_token:
-        raw += entry.cost_per_output_token * estimated_output_tokens
+    if estimated_input_tokens and input_rate:
+        raw += input_rate * estimated_input_tokens
+    if estimated_output_tokens and output_rate:
+        raw += output_rate * estimated_output_tokens
 
     charged = raw * entry.platform_markup
     sparks = (charged * USD_TO_SPARKS).quantize(_q2)
@@ -178,16 +191,17 @@ def calculate_cost(
         )
         return Decimal("0"), Decimal("0"), {"catalog_match_tier": "none"}
 
+    input_rate, output_rate = _token_rates(entry, provider, model, input_tokens)
     input_cost = Decimal("0")
     output_cost = Decimal("0")
     call_cost = Decimal("0")
 
     if entry.cost_per_call and entry.cost_per_call > 0:
         call_cost = entry.cost_per_call
-    if input_tokens and entry.cost_per_input_token:
-        input_cost = entry.cost_per_input_token * input_tokens
-    if output_tokens and entry.cost_per_output_token:
-        output_cost = entry.cost_per_output_token * output_tokens
+    if input_tokens and input_rate:
+        input_cost = input_rate * input_tokens
+    if output_tokens and output_rate:
+        output_cost = output_rate * output_tokens
 
     raw_cost = input_cost + output_cost + call_cost
     charged_cost = raw_cost * entry.platform_markup
@@ -201,8 +215,8 @@ def calculate_cost(
         "markup=%.1fx charged=$%.8f sparks=%.2f",
         user_email or "?", provider, model, operation,
         input_tokens, output_tokens,
-        float(entry.cost_per_input_token or 0),
-        float(entry.cost_per_output_token or 0),
+        float(input_rate or 0),
+        float(output_rate or 0),
         float(entry.cost_per_call or 0),
         float(raw_cost), float(input_cost), float(output_cost), float(call_cost),
         float(entry.platform_markup),
@@ -211,8 +225,8 @@ def calculate_cost(
 
     detail = {
         "cost_source": "catalog",
-        "cost_per_input_token": float(entry.cost_per_input_token or 0),
-        "cost_per_output_token": float(entry.cost_per_output_token or 0),
+        "cost_per_input_token": float(input_rate or 0),
+        "cost_per_output_token": float(output_rate or 0),
         "cost_per_call": float(entry.cost_per_call or 0),
         "input_cost": float(input_cost),
         "output_cost": float(output_cost),
@@ -278,13 +292,13 @@ def estimate_operation_tokens(
 
     if operation in ("tag", "describe"):
         mode = operation
-        inp = estimate_vision_input_tokens(provider, model, w, h, prompt_text or "")
+        inp = estimate_vision_input_tokens(model, w, h, prompt_text or "")
         out = estimate_output_tokens(model, mode)
         return inp, out
 
     if operation == "evaluate":
         # Vision evaluation — similar to describe
-        inp = estimate_vision_input_tokens(provider, model, w, h, prompt_text or "")
+        inp = estimate_vision_input_tokens(model, w, h, prompt_text or "")
         out = estimate_output_tokens(model, "custom")
         return inp, out
 
@@ -292,13 +306,11 @@ def estimate_operation_tokens(
         inp = estimate_embed_tokens(tags, description)
         return inp, None
 
-    if operation == "summarize":
+    if operation in ("summarize", "expand_prompt", "suggest_prompt", "summarize_eval", "generate_prompts", "evaluate_creative"):
+        from app.services.model_catalog import get_language_model
+        lm = get_language_model(model) if provider == "fal" else None
         inp = estimate_prompt_tokens(prompt_text or "")
-        return inp, 500
-
-    if operation == "expand_prompt":
-        inp = estimate_prompt_tokens(prompt_text or "")
-        return inp, 500
+        return inp, 2048 if lm and lm.requires_reasoning else 500
 
     # Per-call ops: generate, train, edit — use cost_per_call
     return None, None

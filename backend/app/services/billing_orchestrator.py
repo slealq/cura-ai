@@ -39,7 +39,7 @@ class ZeroCostActualError(Exception):
 ORCHESTRATOR_ENABLED_OPS: set[str] = {
     "tag", "describe", "embed",
     "generate", "edit",
-    "train", "evaluate", "summarize", "expand_prompt",
+    "train", "evaluate", "summarize", "expand_prompt", "suggest_prompt",
 }
 
 
@@ -103,6 +103,11 @@ class BillingOrchestrator:
                         data={"idempotency_key": idempotency_key, "status": existing.status},
                     )
                 return existing, False
+
+        # The pricing-engine fallback in record_actual() reads params from the snapshot,
+        # so every caller that passes generation_params gets them recorded.
+        if generation_params is not None and not (request_snapshot or {}).get("generation_params"):
+            request_snapshot = {**(request_snapshot or {}), "generation_params": generation_params}
 
         # Resolve short model names → full catalog names
         provider, model, operation = resolve_catalog_model(
@@ -296,7 +301,8 @@ class BillingOrchestrator:
                         "ORCH pricing-engine fallback | decision=%s %s/%s raw=$%.6f params=%s",
                         decision_id, decision.provider, decision.model, provider_cost, gen_params,
                     )
-                else:
+                elif decision.billing_model != "per_call":
+                    # Flat per-call models legitimately have no strategy: the catalog rate applies.
                     logger.error(
                         "ORCH MISSING PRICING STRATEGY | decision=%s %s/%s op=%s — "
                         "no pricing function registered and provider returned no cost. "

@@ -6,25 +6,20 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.api.model_validation import require_image_model, validate_model_params
 from app.core.security import get_current_user, get_current_user_from_token_param
 from app.db.base import get_db
 from app.models import Job, JobStatus, JobType
 from app.models.user import User
 from app.services.generation_service import get_generation_service
+from app.services.model_catalog import DEFAULT_EDIT_MODEL, offered_keys
 from app.workers.dispatch import dispatch_or_fail
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/edit", tags=["edit"])
 
-SUPPORTED_EDIT_MODELS = {
-    "nano-banana-pro-edit",
-    "kling-image",
-    "grok-imagine",
-    "seedream-5-pro-edit",
-    "qwen-image-2-pro-edit",
-    "flux-2-lora-edit",
-}
+SUPPORTED_EDIT_MODELS = set(offered_keys("edit"))
 
 # --- Schemas ---
 
@@ -37,21 +32,17 @@ class EditImageRequest(BaseModel):
     source_image_ids: list[int] | None = None
     source_generated_ids: list[int] | None = None
     source_upload_keys: list[str] | None = None
-    edit_model: str = "nano-banana-pro-edit"
+    edit_model: str = DEFAULT_EDIT_MODEL
     image_size: dict | str | None = None
     num_images: int = Field(1, ge=1, le=9)
     seed: int | None = Field(None, ge=0, le=2147483647)
-    output_format: str = "png"
-    enable_prompt_expansion: bool = True
-    enable_safety_checker: bool = True
-    # Kling-specific fields
-    resolution: str | None = None  # 1K, 2K, 4K
-    aspect_ratio: str | None = None  # 16:9, 9:16, 1:1, 4:3, 3:4, 3:2, 2:3, 21:9, auto
-    # Nano Banana Pro fields
+    # Params are validated against the model's declared options (see the model catalog);
+    # ones the model doesn't support are ignored.
+    resolution: str | None = None
+    aspect_ratio: str | None = None
+    quality: str | None = None
     safety_tolerance: str | None = None
     enable_web_search: bool | None = None
-    # Face swap fields
-    enable_occlusion_prevention: bool = False
 
 
 class EditImageResponse(BaseModel):
@@ -93,23 +84,10 @@ async def edit_images(
     current_user: User = Depends(get_current_user),
 ):
     """Submit an image edit request. Creates job + generated image records."""
-    from app.providers.fal_provider import FAL_EDIT_MODEL_CONFIG
+    model = require_image_model(request.edit_model, "edit")
 
-    # Validate edit model
-    if request.edit_model not in SUPPORTED_EDIT_MODELS:
-        raise HTTPException(status_code=400, detail=f"Unknown edit model: {request.edit_model}")
-
-    model_config = FAL_EDIT_MODEL_CONFIG[request.edit_model]
-
-    is_face_swap = model_config.get("uses_face_swap", False)
-
-    # Require prompt for non-face-swap models
-    if not is_face_swap and not request.prompt.strip():
+    if not request.prompt.strip():
         raise HTTPException(status_code=400, detail="Prompt is required for this model")
-
-    # Default prompt for face-swap display
-    if is_face_swap and not request.prompt.strip():
-        request.prompt = "Face swap"
 
     # Collect and validate source images
     source_count = 0
@@ -130,17 +108,11 @@ async def edit_images(
     if source_count == 0:
         raise HTTPException(status_code=400, detail="At least one source image is required")
 
-    max_sources = model_config.get("max_source_images", 3)
+    max_sources = model.max_source_images
     if source_count > max_sources:
         raise HTTPException(
             status_code=400,
             detail=f"Maximum {max_sources} source images allowed for {request.edit_model}",
-        )
-
-    if is_face_swap and source_count != 2:
-        raise HTTPException(
-            status_code=400,
-            detail="Face swap requires exactly 2 images: source face and target image",
         )
 
     # Validate gallery image IDs exist
@@ -160,29 +132,22 @@ async def edit_images(
             if not gen:
                 raise HTTPException(status_code=404, detail=f"Generated image {gen_id} not found")
 
-    # Build generation_params
+    # Build generation_params — only the params this model supports
     gen_params: dict = {
         "mode": "edit",
         "edit_model": request.edit_model,
         "sources": source_refs,
-        "output_format": request.output_format,
-        "enable_prompt_expansion": request.enable_prompt_expansion,
-        "enable_safety_checker": request.enable_safety_checker,
+        "output_format": "png",
+        **validate_model_params(model, {
+            "image_size": request.image_size,
+            "seed": request.seed,
+            "resolution": request.resolution,
+            "aspect_ratio": request.aspect_ratio,
+            "quality": request.quality,
+            "safety_tolerance": request.safety_tolerance,
+            "enable_web_search": request.enable_web_search,
+        }),
     }
-    if request.image_size is not None:
-        gen_params["image_size"] = request.image_size
-    if request.seed is not None:
-        gen_params["seed"] = request.seed
-    if request.resolution is not None:
-        gen_params["resolution"] = request.resolution
-    if request.aspect_ratio is not None:
-        gen_params["aspect_ratio"] = request.aspect_ratio
-    if request.safety_tolerance is not None:
-        gen_params["safety_tolerance"] = request.safety_tolerance
-    if request.enable_web_search is not None:
-        gen_params["enable_web_search"] = request.enable_web_search
-    if request.enable_occlusion_prevention:
-        gen_params["enable_occlusion_prevention"] = True
 
     # Create job
     try:

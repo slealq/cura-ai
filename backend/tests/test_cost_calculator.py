@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.billing import CostCatalog
 from app.services.cost_calculator import (
+    USD_TO_SPARKS,
     calculate_cost,
     estimate_operation_tokens,
     estimate_sparks,
@@ -285,21 +286,21 @@ def test_resolve_catalog_model_falls_back_on_registry_miss(monkeypatch):
 
 @pytest.mark.parametrize("operation", ["tag", "describe"])
 def test_estimate_operation_tokens_routes_vision_modes(operation):
-    provider, model, width, height, prompt = "openai", "gpt-4o-mini", 640, 480, "describe this"
+    provider, model, width, height, prompt = "fal", "anthropic/claude-haiku-5.5", 640, 480, "describe this"
 
     result = estimate_operation_tokens(provider, model, operation, width, height, prompt)
 
     assert result == (
-        estimate_vision_input_tokens(provider, model, width, height, prompt),
+        estimate_vision_input_tokens(model, width, height, prompt),
         estimate_output_tokens(model, operation),
     )
 
 
 def test_estimate_operation_tokens_routes_evaluate_mode():
-    provider, model, width, height, prompt = "openai", "gpt-4o-mini", 640, 480, "check quality"
+    provider, model, width, height, prompt = "fal", "anthropic/claude-haiku-5.5", 640, 480, "check quality"
 
     assert estimate_operation_tokens(provider, model, "evaluate", width, height, prompt) == (
-        estimate_vision_input_tokens(provider, model, width, height, prompt),
+        estimate_vision_input_tokens(model, width, height, prompt),
         estimate_output_tokens(model, "custom"),
     )
 
@@ -308,28 +309,64 @@ def test_estimate_operation_tokens_routes_embed_mode():
     tags, description = ["a", "b"], "a description"
 
     assert estimate_operation_tokens(
-        "openai", "gpt-4o-mini", "embed", tags=tags, description=description
+        "openai", "text-embedding-3-small", "embed", tags=tags, description=description
     ) == (estimate_embed_tokens(tags, description), None)
 
 
-@pytest.mark.parametrize("operation", ["summarize", "expand_prompt"])
+@pytest.mark.parametrize("operation", ["summarize", "expand_prompt", "suggest_prompt"])
 def test_estimate_operation_tokens_routes_prompt_modes(operation):
     prompt = "A sufficiently specific prompt."
 
-    assert estimate_operation_tokens("openai", "gpt-4o-mini", operation, prompt_text=prompt) == (
+    assert estimate_operation_tokens("fal", "anthropic/claude-haiku-5.5", operation, prompt_text=prompt) == (
         estimate_prompt_tokens(prompt), 500
     )
 
 
 @pytest.mark.parametrize("operation", ["generate", "train", "edit"])
 def test_estimate_operation_tokens_returns_none_for_per_call_operations(operation):
-    assert estimate_operation_tokens("openai", "gpt-4o-mini", operation) == (None, None)
+    assert estimate_operation_tokens("fal", "fal-ai/flux-2", operation) == (None, None)
 
 
 def test_estimate_operation_tokens_defaults_vision_dimensions():
-    provider, model, prompt = "openai", "gpt-4o-mini", "tag it"
+    provider, model, prompt = "fal", "anthropic/claude-haiku-5.5", "tag it"
 
     assert estimate_operation_tokens(provider, model, "tag", prompt_text=prompt) == (
-        estimate_vision_input_tokens(provider, model, 1024, 1024, prompt),
+        estimate_vision_input_tokens(model, 1024, 1024, prompt),
         estimate_output_tokens(model, "tag"),
     )
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["anthropic/claude-sonnet-5.5", "openai/gpt-6.1-sol", "google/gemini-4-argon", "qwen/qwen3.8-max-prime"],
+)
+def test_reasoning_heavy_models_get_reasoning_output_estimates(model):
+    assert estimate_output_tokens(model, "tag") == 2048
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic/claude-haiku-5.5", "openai/gpt-6-luna", "x-ai/grok-4.3",
+        "qwen/qwen3.8-flash", "deepseek/deepseek-v4.1-flash", "moonshotai/kimi-k3.1-pro",
+        "minimax/minimax-m3", "unknown/model",
+    ],
+)
+def test_other_models_do_not_get_reasoning_output_estimates(model):
+    assert estimate_output_tokens(model, "tag") == 50
+    assert estimate_output_tokens(model, "describe") == 300
+
+
+def test_fal_long_prompt_tier_estimate_actual_and_reported_cost(db, add_catalog_entry):
+    model = "anthropic/claude-haiku-5.5"
+    add_catalog_entry(provider="fal", model=model, operation="tag", cost_per_input_token=Decimal("0.0000001"),
+                      cost_per_output_token=Decimal("0.0000005"))
+    low, _, _ = calculate_cost(db, "fal", model, "tag", 99999, 1000)
+    high, charged, detail = calculate_cost(db, "fal", model, "tag", 100000, 1000)
+    assert low == Decimal("0.0104999")
+    assert high == Decimal("0.0525") and charged == Decimal("0.105")
+    assert detail["cost_per_input_token"] == 0.0000005
+    sparks, _ = estimate_sparks(db, "fal", model, "tag", 100000, 1000)
+    assert sparks == (charged * USD_TO_SPARKS).quantize(Decimal("0.01"))
+    reported, _, detail = calculate_cost(db, "fal", model, "tag", 100000, 1000, provider_cost=0.02)
+    assert reported == Decimal("0.02") and detail["cost_source"] == "provider"

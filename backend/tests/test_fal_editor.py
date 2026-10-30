@@ -53,35 +53,30 @@ def fal_submit(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("edit_model", "expected_flags"),
-    [
-        ("qwen-image-max-edit", {"enable_safety_checker": False, "enable_prompt_expansion": False}),
-        ("wan-25", {"enable_safety_checker": False}),
-    ],
-)
-async def test_edit_qwen_and_wan_include_supported_optional_arguments(fal_submit, edit_model, expected_flags):
-    result = await FalEditor(edit_model=edit_model).edit(
+async def test_edit_qwen_image_3_sends_fixed_flags_and_supported_params(fal_submit):
+    result = await FalEditor(edit_model="qwen-image-3-edit").edit(
         ["https://example.com/source.png"],
         "replace the sky",
         negative_prompt="rain",
-        image_size={"width": 768, "height": 512},
+        image_size="square_hd",
         seed=123,
+        # Request-level flags are ignored: the catalog fixes them for this model.
         enable_safety_checker=False,
-        enable_prompt_expansion=False,
+        enable_prompt_expansion=True,
     )
 
     endpoint, = fal_submit.call_args.args
-    assert endpoint == FAL_EDIT_MODEL_CONFIG[edit_model]["endpoint"]
+    assert endpoint == FAL_EDIT_MODEL_CONFIG["qwen-image-3-edit"]["endpoint"]
     assert fal_submit.call_args.kwargs["arguments"] == {
         "prompt": "replace the sky",
         "num_images": 1,
         "output_format": "png",
         "image_urls": ["https://example.com/source.png"],
-        **expected_flags,
         "negative_prompt": "rain",
-        "image_size": {"width": 768, "height": 512},
+        "image_size": "square_hd",
         "seed": 123,
+        "enable_safety_checker": True,
+        "enable_prompt_expansion": False,
     }
     assert result.provider == "fal"
     assert result.images == [b"fake-image-bytes"]
@@ -104,35 +99,40 @@ async def test_edit_kling_uses_resolution_and_aspect_ratio_defaults(fal_submit):
 
 
 @pytest.mark.asyncio
-async def test_edit_grok_uses_singular_image_url(fal_submit):
-    await FalEditor(edit_model="grok-imagine").edit(["https://example.com/source.png"], "replace the sky")
+async def test_edit_ideogram_uses_singular_image_url_and_no_output_format(fal_submit):
+    await FalEditor(edit_model="ideogram-v4.5-edit").edit(
+        ["https://example.com/source.png"], "replace the sky", quality="high", seed=7,
+    )
 
     endpoint, = fal_submit.call_args.args
-    assert endpoint == FAL_EDIT_MODEL_CONFIG["grok-imagine"]["endpoint"]
+    assert endpoint == FAL_EDIT_MODEL_CONFIG["ideogram-v4.5-edit"]["endpoint"]
     assert fal_submit.call_args.kwargs["arguments"] == {
         "prompt": "replace the sky",
         "num_images": 1,
-        "output_format": "png",
         "image_url": "https://example.com/source.png",
+        "image_size": "auto",
+        "quality": "high",
+        "seed": 7,
+        "enable_safety_checker": True,
     }
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("image_urls", "target_image_url"),
-    [
-        (["https://example.com/source.png", "https://example.com/target.png"], "https://example.com/target.png"),
-        (["https://example.com/source.png"], "https://example.com/source.png"),
-    ],
-)
-async def test_edit_face_swap_uses_source_and_target_urls_only(fal_submit, image_urls, target_image_url):
-    await FalEditor(edit_model="face-swap").edit(image_urls, "ignored prompt", num_images=3, output_format="jpeg")
+async def test_edit_grok_uses_plural_image_urls_and_fixed_quality(fal_submit):
+    await FalEditor(edit_model="grok-imagine-v2-edit").edit(
+        ["https://example.com/a.png", "https://example.com/b.png"], "replace the sky",
+    )
 
     endpoint, = fal_submit.call_args.args
-    assert endpoint == FAL_EDIT_MODEL_CONFIG["face-swap"]["endpoint"]
+    assert endpoint == "xai/grok-imagine-image/v2.0/edit"
     assert fal_submit.call_args.kwargs["arguments"] == {
-        "source_face_url": "https://example.com/source.png",
-        "target_image_url": target_image_url,
+        "prompt": "replace the sky",
+        "num_images": 1,
+        "output_format": "png",
+        "image_urls": ["https://example.com/a.png", "https://example.com/b.png"],
+        "aspect_ratio": "auto",
+        "resolution": "1k",
+        "quality": "medium",
     }
 
 
@@ -162,6 +162,22 @@ async def test_edit_nano_banana_uses_resolution_safety_and_web_search_arguments(
 
 
 @pytest.mark.asyncio
+async def test_edit_nano_banana_lite_omits_resolution_and_web_search(fal_submit):
+    await FalEditor(edit_model="nano-banana-lite-edit").edit(
+        ["https://example.com/source.png"], "replace the sky", resolution="2K", enable_web_search=True,
+    )
+
+    assert fal_submit.call_args.kwargs["arguments"] == {
+        "prompt": "replace the sky",
+        "num_images": 1,
+        "output_format": "png",
+        "image_urls": ["https://example.com/source.png"],
+        "aspect_ratio": "auto",
+        "safety_tolerance": "4",
+    }
+
+
+@pytest.mark.asyncio
 async def test_edit_seedream_5_pro_uses_image_size_enum_without_prompt_expansion(fal_submit):
     await FalEditor(edit_model="seedream-5-pro-edit").edit(
         ["https://example.com/source.png"],
@@ -180,35 +196,21 @@ async def test_edit_seedream_5_pro_uses_image_size_enum_without_prompt_expansion
         "num_images": 2,
         "output_format": "png",
         "image_urls": ["https://example.com/source.png"],
-        "enable_safety_checker": False,
+        "enable_safety_checker": True,
         "image_size": "auto_2K",
     }
 
 
 @pytest.mark.asyncio
-async def test_edit_qwen_image_2_pro_includes_supported_arguments(fal_submit):
-    await FalEditor(edit_model="qwen-image-2-pro-edit").edit(
-        ["https://example.com/source.png"],
-        "replace the sky",
-        negative_prompt="rain",
-        image_size={"width": 768, "height": 512},
-        seed=123,
-        enable_safety_checker=False,
-        enable_prompt_expansion=False,
-    )
+async def test_edit_flux_3_has_no_num_images_and_fixes_resolution(fal_submit):
+    await FalEditor(edit_model="flux-3-edit").edit(["https://example.com/source.png"], "replace the sky", seed=5)
 
-    endpoint, = fal_submit.call_args.args
-    assert endpoint == FAL_EDIT_MODEL_CONFIG["qwen-image-2-pro-edit"]["endpoint"]
     assert fal_submit.call_args.kwargs["arguments"] == {
         "prompt": "replace the sky",
-        "num_images": 1,
         "output_format": "png",
         "image_urls": ["https://example.com/source.png"],
-        "enable_safety_checker": False,
-        "enable_prompt_expansion": False,
-        "negative_prompt": "rain",
-        "image_size": {"width": 768, "height": 512},
-        "seed": 123,
+        "aspect_ratio": "auto",
+        "resolution": "1k",
     }
 
 
@@ -231,7 +233,19 @@ async def test_edit_flux_2_lora_uses_empty_loras_and_omits_negative_prompt(fal_s
         "image_urls": ["https://example.com/source.png"],
         "loras": [],
         "enable_safety_checker": True,
-        "enable_prompt_expansion": True,
+        "enable_prompt_expansion": False,
         "image_size": "landscape_4_3",
         "seed": 123,
     }
+
+
+def test_edit_rejects_unknown_and_removed_models():
+    for removed in ("face-swap", "wan-25", "grok-imagine", "qwen-image-max-edit", "qwen-image-2-pro-edit", "nope"):
+        with pytest.raises(ValueError):
+            FalEditor(edit_model=removed)
+
+
+def test_edit_rejects_too_many_source_images():
+    editor = FalEditor(edit_model="ideogram-v4.5-edit")
+    with pytest.raises(ValueError):
+        editor.build_arguments(["https://example.com/a.png", "https://example.com/b.png"], "x")

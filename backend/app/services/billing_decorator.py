@@ -3,7 +3,7 @@
 Usage::
 
     with billable(db, user_id, operation="generate", provider="fal",
-                  model="flux-dev", ...) as b:
+                  model="flux-2", ...) as b:
         # Option A (preferred): decorator wraps the call
         result = b.call(generator.generate, prompt=prompt, params=params)
 

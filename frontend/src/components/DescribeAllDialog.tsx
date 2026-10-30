@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import { foldersApi, settingsApi, billingApi } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import ModelSelector from '@/components/ModelSelector';
+import { useModelCatalog } from '@/hooks/useModelCatalog';
 import { Slider } from '@/components/Slider';
 import type { PromptPreset } from '@/types';
 
@@ -20,21 +21,9 @@ interface DescribeAllDialogProps {
 type Mode = 'manual' | 'auto';
 type AutoStep = 'idle' | 'analyzing' | 'questions' | 'generating' | 'done';
 
-const VISION_MODELS = [
-  { value: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'openai' },
-  { value: 'gpt-4o', label: 'GPT-4o', provider: 'openai' },
-  { value: 'gpt-5-mini', label: 'GPT-5 Mini', provider: 'openai' },
-  { value: 'gpt-5.2', label: 'GPT-5.2', provider: 'openai' },
-  { value: 'claude-3-haiku-20240307', label: 'Claude Haiku 3', provider: 'anthropic' },
-  { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', provider: 'anthropic' },
-  { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'anthropic' },
-  { value: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'anthropic' },
-  { value: 'x-ai/grok-4-fast', label: 'Grok 4 Fast', provider: 'fal' },
-  { value: 'qwen/qwen3-vl-235b-a22b-instruct', label: 'Qwen3 VL 235B', provider: 'fal' },
-  { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'fal' },
-];
-
 export default function DescribeAllDialog({ folderId, imageCount, onClose, onStarted }: DescribeAllDialogProps) {
+  const { data: catalog } = useModelCatalog();
+  const VISION_MODELS = (catalog?.language ?? []).map((m) => ({ value: m.id, label: m.label, provider: 'fal' }));
   const [mode, setMode] = useState<Mode>('manual');
   const [model, setModel] = useState('');
   const [tagPrompt, setTagPrompt] = useState('');
@@ -73,24 +62,15 @@ export default function DescribeAllDialog({ folderId, imageCount, onClose, onSta
 
   // Initialize model and advanced params from provider config
   useEffect(() => {
-    if (providerConfig && !hasInitialized.current) {
+    if (providerConfig && catalog && !hasInitialized.current) {
       hasInitialized.current = true;
-      const provider = providerConfig.vision_provider;
-      const modelId = provider === 'openai'
-        ? providerConfig.openai_vision_model
-        : provider === 'anthropic'
-          ? providerConfig.anthropic_vision_model
-          : providerConfig.fal_vision_model;
-      if (VISION_MODELS.some((m) => m.value === modelId)) {
-        setModel(modelId);
-      } else {
-        setModel(VISION_MODELS[0].value);
-      }
+      const modelId = providerConfig.fal_vision_model;
+      setModel(catalog?.language.some((m) => m.id === modelId) ? modelId : (catalog?.defaults.vision_model ?? ''));
       setTemperature(providerConfig.vision_temperature ?? 1.0);
       setMaxTokensTag(providerConfig.max_tokens_tagging ?? 1000);
       setMaxTokensDescribe(providerConfig.max_tokens_description ?? 3000);
     }
-  }, [providerConfig]);
+  }, [providerConfig, catalog]);
 
   const handlePresetSelect = (preset: PromptPreset) => {
     setTagPrompt(preset.tag_prompt);
@@ -430,7 +410,7 @@ export default function DescribeAllDialog({ folderId, imageCount, onClose, onSta
             {mode === 'manual' && (
               <button
                 onClick={handleSubmit}
-                disabled={submitting}
+                disabled={submitting || !catalog || !model}
                 className={cn(
                   'px-4 py-2 text-sm rounded-lg font-medium transition-colors',
                   'bg-primary text-primary-foreground hover:bg-primary/90',

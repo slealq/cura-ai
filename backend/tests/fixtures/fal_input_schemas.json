@@ -1,0 +1,3889 @@
+{
+ "alibaba/qwen-image-3/edit": {
+  "properties": {
+   "enable_prompt_expansion": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "image_urls": {
+    "types": [
+     "array"
+    ]
+   },
+   "negative_prompt": {
+    "default": "",
+    "types": [
+     "string"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 6,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt",
+   "image_urls"
+  ]
+ },
+ "alibaba/qwen-image-3/text-to-image": {
+  "properties": {
+   "enable_prompt_expansion": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "square_hd",
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "negative_prompt": {
+    "default": "",
+    "types": [
+     "string"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 6,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "blackforestlabs/flux-3/edit-image": {
+  "properties": {
+   "aspect_ratio": {
+    "default": "auto",
+    "enum": [
+     "auto",
+     "21:9",
+     "2:1",
+     "16:9",
+     "3:2",
+     "7:5",
+     "4:3",
+     "5:4",
+     "1:1",
+     "4:5",
+     "3:4",
+     "5:7",
+     "2:3",
+     "9:16",
+     "1:2"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_prompt_expansion": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_urls": {
+    "maxItems": 10,
+    "types": [
+     "array"
+    ]
+   },
+   "output_format": {
+    "default": "jpeg",
+    "enum": [
+     "jpeg",
+     "png"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "resolution": {
+    "default": "1k",
+    "enum": [
+     "768sq",
+     "1k",
+     "1.5k",
+     "2k",
+     "4k"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "safety_tolerance": {
+    "default": 2,
+    "maximum": 4,
+    "minimum": 0,
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "version": {
+    "default": "latest",
+    "types": [
+     "string"
+    ]
+   }
+  },
+  "required": [
+   "prompt",
+   "image_urls"
+  ]
+ },
+ "blackforestlabs/flux-3/klein/edit-image": {
+  "properties": {
+   "bounding_boxes": {
+    "types": [
+     "array"
+    ]
+   },
+   "enable_prompt_expansion": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "image_urls": {
+    "maxItems": 10,
+    "types": [
+     "array"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 4,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt",
+   "image_urls"
+  ]
+ },
+ "blackforestlabs/flux-3/klein/text-to-image": {
+  "properties": {
+   "bounding_boxes": {
+    "types": [
+     "array"
+    ]
+   },
+   "enable_prompt_expansion": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "square_hd",
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 4,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "blackforestlabs/flux-3/text-to-image": {
+  "properties": {
+   "aspect_ratio": {
+    "default": "auto",
+    "enum": [
+     "auto",
+     "21:9",
+     "2:1",
+     "16:9",
+     "3:2",
+     "7:5",
+     "4:3",
+     "5:4",
+     "1:1",
+     "4:5",
+     "3:4",
+     "5:7",
+     "2:3",
+     "9:16",
+     "1:2"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_prompt_expansion": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "output_format": {
+    "default": "jpeg",
+    "enum": [
+     "jpeg",
+     "png"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "resolution": {
+    "default": "1k",
+    "enum": [
+     "768sq",
+     "1k",
+     "1.5k",
+     "2k",
+     "4k"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "safety_tolerance": {
+    "default": 2,
+    "maximum": 4,
+    "minimum": 0,
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "version": {
+    "default": "latest",
+    "types": [
+     "string"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "bytedance/seedream/v5/flash/edit": {
+  "properties": {
+   "background": {
+    "default": "opaque",
+    "enum": [
+     "opaque",
+     "transparent"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "auto_2K",
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9",
+     "auto_1K",
+     "auto_1.5K",
+     "auto_2K"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "image_urls": {
+    "types": [
+     "array"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 6,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "jpeg",
+    "enum": [
+     "jpeg",
+     "png"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "watermark": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt",
+   "image_urls"
+  ]
+ },
+ "bytedance/seedream/v5/flash/text-to-image": {
+  "properties": {
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "auto_2K",
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9",
+     "auto_1K",
+     "auto_1.5K",
+     "auto_2K"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 6,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "jpeg",
+    "enum": [
+     "jpeg",
+     "png"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "watermark": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "bytedance/seedream/v5/pro/edit": {
+  "properties": {
+   "background": {
+    "default": "opaque",
+    "enum": [
+     "opaque",
+     "transparent"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "enhance_prompt_mode": {
+    "default": "standard",
+    "enum": [
+     "standard",
+     "fast"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "auto_2K",
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9",
+     "auto_1K",
+     "auto_1.5K",
+     "auto_2K"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "image_urls": {
+    "types": [
+     "array"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 6,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "jpeg",
+    "enum": [
+     "jpeg",
+     "png"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "watermark": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt",
+   "image_urls"
+  ]
+ },
+ "bytedance/seedream/v5/pro/text-to-image": {
+  "properties": {
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "enhance_prompt_mode": {
+    "default": "standard",
+    "enum": [
+     "standard",
+     "fast"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "auto_2K",
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9",
+     "auto_1K",
+     "auto_1.5K",
+     "auto_2K"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 6,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "jpeg",
+    "enum": [
+     "jpeg",
+     "png"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "watermark": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "fal-ai/flux-2": {
+  "properties": {
+   "acceleration": {
+    "default": "regular",
+    "enum": [
+     "none",
+     "regular",
+     "high"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_prompt_expansion": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "guidance_scale": {
+    "default": 2.5,
+    "maximum": 20,
+    "minimum": 0,
+    "types": [
+     "number"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "landscape_4_3",
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 4,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "num_inference_steps": {
+    "default": 28,
+    "maximum": 50,
+    "minimum": 4,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "fal-ai/flux-2-max": {
+  "properties": {
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "landscape_4_3",
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "output_format": {
+    "default": "jpeg",
+    "enum": [
+     "jpeg",
+     "png"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "safety_tolerance": {
+    "default": "2",
+    "enum": [
+     "1",
+     "2",
+     "3",
+     "4",
+     "5"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "fal-ai/flux-2-max/edit": {
+  "properties": {
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "auto",
+    "enum": [
+     "auto",
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "image_urls": {
+    "types": [
+     "array"
+    ]
+   },
+   "output_format": {
+    "default": "jpeg",
+    "enum": [
+     "jpeg",
+     "png"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "safety_tolerance": {
+    "default": "2",
+    "enum": [
+     "1",
+     "2",
+     "3",
+     "4",
+     "5"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt",
+   "image_urls"
+  ]
+ },
+ "fal-ai/flux-2-pro": {
+  "properties": {
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "landscape_4_3",
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "output_format": {
+    "default": "jpeg",
+    "enum": [
+     "jpeg",
+     "png"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "safety_tolerance": {
+    "default": "2",
+    "enum": [
+     "1",
+     "2",
+     "3",
+     "4",
+     "5"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "fal-ai/flux-2-pro/edit": {
+  "properties": {
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "auto",
+    "enum": [
+     "auto",
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "image_urls": {
+    "types": [
+     "array"
+    ]
+   },
+   "output_format": {
+    "default": "jpeg",
+    "enum": [
+     "jpeg",
+     "png"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "safety_tolerance": {
+    "default": "2",
+    "enum": [
+     "1",
+     "2",
+     "3",
+     "4",
+     "5"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt",
+   "image_urls"
+  ]
+ },
+ "fal-ai/flux-2/lora": {
+  "properties": {
+   "acceleration": {
+    "default": "regular",
+    "enum": [
+     "none",
+     "regular",
+     "high"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_prompt_expansion": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "guidance_scale": {
+    "default": 2.5,
+    "maximum": 20,
+    "minimum": 0,
+    "types": [
+     "number"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "landscape_4_3",
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "loras": {
+    "default": [],
+    "types": [
+     "array"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 4,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "num_inference_steps": {
+    "default": 28,
+    "maximum": 50,
+    "minimum": 4,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "fal-ai/flux-2/lora/edit": {
+  "properties": {
+   "acceleration": {
+    "default": "regular",
+    "enum": [
+     "none",
+     "regular",
+     "high"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_prompt_expansion": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "guidance_scale": {
+    "default": 2.5,
+    "maximum": 20,
+    "minimum": 0,
+    "types": [
+     "number"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "image_urls": {
+    "maxItems": 4,
+    "types": [
+     "array"
+    ]
+   },
+   "loras": {
+    "default": [],
+    "types": [
+     "array"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 4,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "num_inference_steps": {
+    "default": 28,
+    "maximum": 50,
+    "minimum": 4,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt",
+   "image_urls"
+  ]
+ },
+ "fal-ai/kling-image/o3/image-to-image": {
+  "properties": {
+   "aspect_ratio": {
+    "default": "auto",
+    "enum": [
+     "16:9",
+     "9:16",
+     "1:1",
+     "4:3",
+     "3:4",
+     "3:2",
+     "2:3",
+     "21:9",
+     "auto"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "elements": {
+    "types": [
+     "array"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_urls": {
+    "types": [
+     "array"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 9,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "resolution": {
+    "default": "1K",
+    "enum": [
+     "1K",
+     "2K",
+     "4K"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "result_type": {
+    "default": "single",
+    "enum": [
+     "single",
+     "series"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "series_amount": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt",
+   "image_urls"
+  ]
+ },
+ "fal-ai/nano-banana-2": {
+  "properties": {
+   "aspect_ratio": {
+    "default": "auto",
+    "enum": [
+     "auto",
+     "21:9",
+     "16:9",
+     "3:2",
+     "4:3",
+     "5:4",
+     "1:1",
+     "4:5",
+     "3:4",
+     "2:3",
+     "9:16",
+     "4:1",
+     "1:4",
+     "8:1",
+     "1:8"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "context": {
+    "types": [
+     "array"
+    ]
+   },
+   "enable_image_search": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "enable_web_search": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "history": {
+    "types": [
+     "array"
+    ]
+   },
+   "include_thoughts": {
+    "types": [
+     "boolean"
+    ]
+   },
+   "limit_generations": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "max_output_tokens": {
+    "types": [
+     "integer"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 4,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "resolution": {
+    "default": "1K",
+    "enum": [
+     "0.5K",
+     "1K",
+     "2K",
+     "4K"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "return_history": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "safety_tolerance": {
+    "default": "4",
+    "enum": [
+     "1",
+     "2",
+     "3",
+     "4",
+     "5",
+     "6"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "system_prompt": {
+    "default": "",
+    "types": [
+     "string"
+    ]
+   },
+   "temperature": {
+    "types": [
+     "number"
+    ]
+   },
+   "thinking_level": {
+    "enum": [
+     "minimal",
+     "high"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "top_p": {
+    "types": [
+     "number"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "fal-ai/nano-banana-pro": {
+  "properties": {
+   "aspect_ratio": {
+    "default": "1:1",
+    "enum": [
+     "auto",
+     "21:9",
+     "16:9",
+     "3:2",
+     "4:3",
+     "5:4",
+     "1:1",
+     "4:5",
+     "3:4",
+     "2:3",
+     "9:16",
+     "4:1",
+     "1:4",
+     "8:1",
+     "1:8"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "context": {
+    "types": [
+     "array"
+    ]
+   },
+   "enable_web_search": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "history": {
+    "types": [
+     "array"
+    ]
+   },
+   "include_thoughts": {
+    "types": [
+     "boolean"
+    ]
+   },
+   "limit_generations": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "max_output_tokens": {
+    "types": [
+     "integer"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 4,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "resolution": {
+    "default": "1K",
+    "enum": [
+     "1K",
+     "2K",
+     "4K"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "return_history": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "safety_tolerance": {
+    "default": "4",
+    "enum": [
+     "1",
+     "2",
+     "3",
+     "4",
+     "5",
+     "6"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "system_prompt": {
+    "default": "",
+    "types": [
+     "string"
+    ]
+   },
+   "temperature": {
+    "types": [
+     "number"
+    ]
+   },
+   "thinking_level": {
+    "types": [
+     "string"
+    ]
+   },
+   "top_p": {
+    "types": [
+     "number"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "fal-ai/nano-banana-pro/edit": {
+  "properties": {
+   "aspect_ratio": {
+    "default": "auto",
+    "enum": [
+     "auto",
+     "21:9",
+     "16:9",
+     "3:2",
+     "4:3",
+     "5:4",
+     "1:1",
+     "4:5",
+     "3:4",
+     "2:3",
+     "9:16",
+     "4:1",
+     "1:4",
+     "8:1",
+     "1:8"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "context": {
+    "types": [
+     "array"
+    ]
+   },
+   "enable_web_search": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "history": {
+    "types": [
+     "array"
+    ]
+   },
+   "image_urls": {
+    "types": [
+     "array"
+    ]
+   },
+   "include_thoughts": {
+    "types": [
+     "boolean"
+    ]
+   },
+   "limit_generations": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "max_output_tokens": {
+    "types": [
+     "integer"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 4,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "resolution": {
+    "default": "1K",
+    "enum": [
+     "1K",
+     "2K",
+     "4K"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "return_history": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "safety_tolerance": {
+    "default": "4",
+    "enum": [
+     "1",
+     "2",
+     "3",
+     "4",
+     "5",
+     "6"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "system_prompt": {
+    "default": "",
+    "types": [
+     "string"
+    ]
+   },
+   "temperature": {
+    "types": [
+     "number"
+    ]
+   },
+   "thinking_level": {
+    "types": [
+     "string"
+    ]
+   },
+   "top_p": {
+    "types": [
+     "number"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "fal-ai/qwen-image-2512": {
+  "properties": {
+   "acceleration": {
+    "default": "regular",
+    "enum": [
+     "none",
+     "regular",
+     "high"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "guidance_scale": {
+    "default": 4,
+    "maximum": 20,
+    "minimum": 0,
+    "types": [
+     "number"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "landscape_4_3",
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "negative_prompt": {
+    "default": "",
+    "types": [
+     "string"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 4,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "num_inference_steps": {
+    "default": 28,
+    "maximum": 50,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "fal-ai/qwen-image-2512/lora": {
+  "properties": {
+   "acceleration": {
+    "default": "regular",
+    "enum": [
+     "none",
+     "regular",
+     "high"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "guidance_scale": {
+    "default": 4,
+    "maximum": 20,
+    "minimum": 0,
+    "types": [
+     "number"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "landscape_4_3",
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "loras": {
+    "default": [],
+    "types": [
+     "array"
+    ]
+   },
+   "negative_prompt": {
+    "default": "",
+    "types": [
+     "string"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 4,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "num_inference_steps": {
+    "default": 28,
+    "maximum": 50,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "google/nano-banana-2-lite": {
+  "properties": {
+   "aspect_ratio": {
+    "default": "auto",
+    "enum": [
+     "auto",
+     "21:9",
+     "16:9",
+     "3:2",
+     "4:3",
+     "5:4",
+     "1:1",
+     "4:5",
+     "3:4",
+     "2:3",
+     "9:16",
+     "4:1",
+     "1:4",
+     "8:1",
+     "1:8"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "limit_generations": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 4,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "safety_tolerance": {
+    "default": "4",
+    "enum": [
+     "1",
+     "2",
+     "3",
+     "4",
+     "5",
+     "6"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "system_prompt": {
+    "default": "",
+    "types": [
+     "string"
+    ]
+   },
+   "thinking_level": {
+    "enum": [
+     "minimal",
+     "high"
+    ],
+    "types": [
+     "string"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "google/nano-banana-2.1": {
+  "properties": {
+   "aspect_ratio": {
+    "default": "auto",
+    "enum": [
+     "auto",
+     "21:9",
+     "16:9",
+     "3:2",
+     "4:3",
+     "5:4",
+     "1:1",
+     "4:5",
+     "3:4",
+     "2:3",
+     "9:16",
+     "4:1",
+     "1:4",
+     "8:1",
+     "1:8"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_web_search": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "limit_generations": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 4,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "resolution": {
+    "default": "1K",
+    "enum": [
+     "1K",
+     "2K",
+     "4K"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "safety_tolerance": {
+    "default": "4",
+    "enum": [
+     "1",
+     "2",
+     "3",
+     "4",
+     "5",
+     "6"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "system_prompt": {
+    "default": "",
+    "types": [
+     "string"
+    ]
+   },
+   "thinking_level": {
+    "default": "medium",
+    "enum": [
+     "minimal",
+     "medium",
+     "high"
+    ],
+    "types": [
+     "string"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "google/nano-banana-2.1/edit": {
+  "properties": {
+   "aspect_ratio": {
+    "default": "auto",
+    "enum": [
+     "auto",
+     "21:9",
+     "16:9",
+     "3:2",
+     "4:3",
+     "5:4",
+     "1:1",
+     "4:5",
+     "3:4",
+     "2:3",
+     "9:16",
+     "4:1",
+     "1:4",
+     "8:1",
+     "1:8"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_web_search": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_urls": {
+    "types": [
+     "array"
+    ]
+   },
+   "limit_generations": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 4,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "pdf_url": {
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "resolution": {
+    "default": "1K",
+    "enum": [
+     "1K",
+     "2K",
+     "4K"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "safety_tolerance": {
+    "default": "4",
+    "enum": [
+     "1",
+     "2",
+     "3",
+     "4",
+     "5",
+     "6"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "system_prompt": {
+    "default": "",
+    "types": [
+     "string"
+    ]
+   },
+   "thinking_level": {
+    "default": "medium",
+    "enum": [
+     "minimal",
+     "medium",
+     "high"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "video_url": {
+    "types": [
+     "string"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "google/nano-banana-lite": {
+  "properties": {
+   "aspect_ratio": {
+    "default": "auto",
+    "enum": [
+     "auto",
+     "21:9",
+     "16:9",
+     "3:2",
+     "4:3",
+     "5:4",
+     "1:1",
+     "4:5",
+     "3:4",
+     "2:3",
+     "9:16",
+     "4:1",
+     "1:4",
+     "8:1",
+     "1:8"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "limit_generations": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 4,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "safety_tolerance": {
+    "default": "4",
+    "enum": [
+     "1",
+     "2",
+     "3",
+     "4",
+     "5",
+     "6"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "system_prompt": {
+    "default": "",
+    "types": [
+     "string"
+    ]
+   },
+   "thinking_level": {
+    "enum": [
+     "minimal",
+     "high"
+    ],
+    "types": [
+     "string"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "google/nano-banana-lite/edit": {
+  "properties": {
+   "aspect_ratio": {
+    "default": "auto",
+    "enum": [
+     "auto",
+     "21:9",
+     "16:9",
+     "3:2",
+     "4:3",
+     "5:4",
+     "1:1",
+     "4:5",
+     "3:4",
+     "2:3",
+     "9:16",
+     "4:1",
+     "1:4",
+     "8:1",
+     "1:8"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "image_urls": {
+    "types": [
+     "array"
+    ]
+   },
+   "limit_generations": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 4,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "safety_tolerance": {
+    "default": "4",
+    "enum": [
+     "1",
+     "2",
+     "3",
+     "4",
+     "5",
+     "6"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "system_prompt": {
+    "default": "",
+    "types": [
+     "string"
+    ]
+   },
+   "thinking_level": {
+    "enum": [
+     "minimal",
+     "high"
+    ],
+    "types": [
+     "string"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "ideogram/v4.5": {
+  "properties": {
+   "enable_prompt_expansion": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "square_hd",
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 8,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "quality": {
+    "default": "medium",
+    "enum": [
+     "low",
+     "medium",
+     "high"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "ideogram/v4.5/edit": {
+  "properties": {
+   "context_window": {
+    "default": "none",
+    "enum": [
+     "none",
+     "auto"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "context_window_box": {},
+   "edit_precision": {
+    "default": "regular",
+    "enum": [
+     "regular",
+     "high"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "auto",
+    "enum": [
+     "auto",
+     "square",
+     "square_hd",
+     "portrait_4_3",
+     "landscape_4_3",
+     "portrait_16_9",
+     "landscape_16_9"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "image_url": {
+    "types": [
+     "string"
+    ]
+   },
+   "mask_url": {
+    "types": [
+     "string"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 8,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "quality": {
+    "default": "medium",
+    "enum": [
+     "very_low",
+     "low",
+     "medium",
+     "high"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "reference_image_urls": {
+    "maxItems": 4,
+    "types": [
+     "array"
+    ]
+   },
+   "seed": {
+    "types": [
+     "integer"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt",
+   "image_url"
+  ]
+ },
+ "openai/gpt-image-2": {
+  "properties": {
+   "background": {
+    "default": "auto",
+    "enum": [
+     "auto",
+     "transparent",
+     "opaque"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "landscape_4_3",
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9",
+     "auto"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 10,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_compression": {
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "quality": {
+    "default": "high",
+    "enum": [
+     "auto",
+     "low",
+     "medium",
+     "high"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "openai/gpt-image-2.5/flare/edit": {
+  "properties": {
+   "background": {
+    "default": "auto",
+    "enum": [
+     "auto",
+     "transparent",
+     "opaque"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "auto",
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9",
+     "auto"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "image_urls": {
+    "maxItems": 16,
+    "types": [
+     "array"
+    ]
+   },
+   "mask_url": {
+    "types": [
+     "string"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 10,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_compression": {
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "quality": {
+    "default": "high",
+    "enum": [
+     "auto",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt",
+   "image_urls"
+  ]
+ },
+ "openai/gpt-image-2.5/flare/text-to-image": {
+  "properties": {
+   "background": {
+    "default": "auto",
+    "enum": [
+     "auto",
+     "transparent",
+     "opaque"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "landscape_4_3",
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9",
+     "auto"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 10,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_compression": {
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "quality": {
+    "default": "high",
+    "enum": [
+     "auto",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "openai/gpt-image-2.5/sunburst/edit": {
+  "properties": {
+   "background": {
+    "default": "auto",
+    "enum": [
+     "auto",
+     "transparent",
+     "opaque"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "auto",
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9",
+     "auto"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "image_urls": {
+    "maxItems": 16,
+    "types": [
+     "array"
+    ]
+   },
+   "mask_url": {
+    "types": [
+     "string"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 10,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_compression": {
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "quality": {
+    "default": "high",
+    "enum": [
+     "auto",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt",
+   "image_urls"
+  ]
+ },
+ "openai/gpt-image-2.5/sunburst/text-to-image": {
+  "properties": {
+   "background": {
+    "default": "auto",
+    "enum": [
+     "auto",
+     "transparent",
+     "opaque"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "landscape_4_3",
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9",
+     "auto"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 10,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_compression": {
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "quality": {
+    "default": "high",
+    "enum": [
+     "auto",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "openai/gpt-image-2/edit": {
+  "properties": {
+   "background": {
+    "default": "auto",
+    "enum": [
+     "auto",
+     "transparent",
+     "opaque"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_size": {
+    "custom_size": true,
+    "default": "auto",
+    "enum": [
+     "square_hd",
+     "square",
+     "portrait_4_3",
+     "portrait_16_9",
+     "landscape_4_3",
+     "landscape_16_9",
+     "auto"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "image_urls": {
+    "maxItems": 16,
+    "types": [
+     "array"
+    ]
+   },
+   "mask_url": {
+    "types": [
+     "string"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 10,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_compression": {
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "png",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "quality": {
+    "default": "high",
+    "enum": [
+     "auto",
+     "low",
+     "medium",
+     "high"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt",
+   "image_urls"
+  ]
+ },
+ "openrouter/router": {
+  "properties": {
+   "enable_web_search": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "max_tokens": {
+    "types": [
+     "integer"
+    ]
+   },
+   "model": {
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "reasoning": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "system_prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "temperature": {
+    "default": 1,
+    "maximum": 2,
+    "minimum": 0,
+    "types": [
+     "number"
+    ]
+   },
+   "web_search_options": {}
+  },
+  "required": [
+   "prompt",
+   "model"
+  ]
+ },
+ "openrouter/router/vision": {
+  "properties": {
+   "enable_web_search": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_urls": {
+    "types": [
+     "array"
+    ]
+   },
+   "max_tokens": {
+    "types": [
+     "integer"
+    ]
+   },
+   "model": {
+    "types": [
+     "string"
+    ]
+   },
+   "pdf_urls": {
+    "types": [
+     "array"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "reasoning": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   },
+   "system_prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "temperature": {
+    "default": 1,
+    "maximum": 2,
+    "minimum": 0,
+    "types": [
+     "number"
+    ]
+   },
+   "web_search_options": {}
+  },
+  "required": [
+   "prompt",
+   "model"
+  ]
+ },
+ "xai/grok-imagine-image/quality/edit": {
+  "properties": {
+   "aspect_ratio": {
+    "default": "auto",
+    "enum": [
+     "auto",
+     "2:1",
+     "20:9",
+     "19.5:9",
+     "16:9",
+     "4:3",
+     "3:2",
+     "1:1",
+     "2:3",
+     "3:4",
+     "9:16",
+     "9:19.5",
+     "9:20",
+     "1:2"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_urls": {
+    "types": [
+     "array"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 4,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "jpeg",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "resolution": {
+    "default": "1k",
+    "enum": [
+     "1k",
+     "2k"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "xai/grok-imagine-image/quality/text-to-image": {
+  "properties": {
+   "aspect_ratio": {
+    "default": "1:1",
+    "enum": [
+     "2:1",
+     "20:9",
+     "19.5:9",
+     "16:9",
+     "4:3",
+     "3:2",
+     "1:1",
+     "2:3",
+     "3:4",
+     "9:16",
+     "9:19.5",
+     "9:20",
+     "1:2"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 4,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "jpeg",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "resolution": {
+    "default": "1k",
+    "enum": [
+     "1k",
+     "2k"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "xai/grok-imagine-image/v2.0/edit": {
+  "properties": {
+   "aspect_ratio": {
+    "default": "auto",
+    "enum": [
+     "2:1",
+     "20:9",
+     "19.5:9",
+     "16:9",
+     "4:3",
+     "3:2",
+     "1:1",
+     "2:3",
+     "3:4",
+     "9:16",
+     "9:19.5",
+     "9:20",
+     "1:2",
+     "auto",
+     "21:9",
+     "5:2"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "image_urls": {
+    "types": [
+     "array"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 10,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "jpeg",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "quality": {
+    "default": "medium",
+    "enum": [
+     "low",
+     "medium",
+     "auto"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "resolution": {
+    "default": "1k",
+    "enum": [
+     "1k",
+     "1.5k",
+     "2k"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ },
+ "xai/grok-imagine-image/v2.0/text-to-image": {
+  "properties": {
+   "aspect_ratio": {
+    "default": "1:1",
+    "enum": [
+     "2:1",
+     "20:9",
+     "19.5:9",
+     "16:9",
+     "4:3",
+     "3:2",
+     "1:1",
+     "2:3",
+     "3:4",
+     "9:16",
+     "9:19.5",
+     "9:20",
+     "1:2",
+     "auto",
+     "21:9",
+     "5:2"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "enable_safety_checker": {
+    "default": true,
+    "types": [
+     "boolean"
+    ]
+   },
+   "num_images": {
+    "default": 1,
+    "maximum": 10,
+    "minimum": 1,
+    "types": [
+     "integer"
+    ]
+   },
+   "output_format": {
+    "default": "jpeg",
+    "enum": [
+     "jpeg",
+     "png",
+     "webp"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "prompt": {
+    "types": [
+     "string"
+    ]
+   },
+   "quality": {
+    "default": "medium",
+    "enum": [
+     "low",
+     "medium",
+     "auto"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "resolution": {
+    "default": "1k",
+    "enum": [
+     "1k",
+     "1.5k",
+     "2k"
+    ],
+    "types": [
+     "string"
+    ]
+   },
+   "sync_mode": {
+    "default": false,
+    "types": [
+     "boolean"
+    ]
+   }
+  },
+  "required": [
+   "prompt"
+  ]
+ }
+}

@@ -43,26 +43,18 @@ class Settings(BaseSettings):
     watch_folder_enabled: bool = True
 
     # AI Provider settings
-    default_vision_provider: Literal["openai", "anthropic", "fal"] = "openai"
     default_embedding_provider: Literal["openai", "local"] = "openai"
 
     # OpenAI
     openai_api_key: str = ""
-    openai_vision_model: str = "gpt-4o-mini"
     openai_embedding_model: str = "text-embedding-3-small"
-
-    # Anthropic
-    anthropic_api_key: str = ""
-    anthropic_vision_model: str = "claude-3-haiku-20240307"
 
     # fal.ai
     fal_api_key: str = ""
-    fal_vision_model: str = "x-ai/grok-4-fast"
 
     # Generation / Training providers
     default_training_provider: str = "fal"
     default_generation_provider: str = "fal"
-    default_base_model: str = "flux-dev"
 
     # Clustering
     clustering_method: Literal["hdbscan", "kmeans", "graph"] = "hdbscan"
@@ -108,6 +100,8 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        # Deployed environments may still set removed vars (e.g. ANTHROPIC_API_KEY).
+        extra = "ignore"
 
 
 @lru_cache

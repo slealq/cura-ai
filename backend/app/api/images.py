@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, lazyload
 
+from app.api.model_validation import require_language_model
 from app.core.config import get_settings
 from app.core.security import get_current_user, get_current_user_from_token_param
 from app.db.base import get_db
@@ -471,7 +472,7 @@ class ReprocessRequest(BaseModel):
 
     tag_prompt: str | None = None
     description_prompt: str | None = None
-    provider: str | None = None
+    provider: str | None = None  # ignored: vision always runs on fal; accepted for older clients
     model: str | None = None
     temperature: float | None = None
     max_tokens_tag: int | None = None
@@ -494,8 +495,8 @@ async def reprocess_image(
 
     tag_prompt = request.tag_prompt if request else None
     description_prompt = request.description_prompt if request else None
-    provider = request.provider if request else None
     model = request.model if request else None
+    require_language_model(model)
     temperature = request.temperature if request else None
     max_tokens_tag = request.max_tokens_tag if request else None
     max_tokens_describe = request.max_tokens_describe if request else None
@@ -506,7 +507,7 @@ async def reprocess_image(
         status=JobStatus.PENDING,
         image_id=image_id,
         total_items=1,
-        parameters={"tag_prompt": tag_prompt, "description_prompt": description_prompt, "provider": provider, "model": model, "temperature": temperature, "max_tokens_tag": max_tokens_tag, "max_tokens_describe": max_tokens_describe},
+        parameters={"tag_prompt": tag_prompt, "description_prompt": description_prompt, "model": model, "temperature": temperature, "max_tokens_tag": max_tokens_tag, "max_tokens_describe": max_tokens_describe},
         user_id=current_user.id,
     )
     db.add(job)
@@ -515,7 +516,7 @@ async def reprocess_image(
 
     # Reset status and queue for reprocessing
     image_service.update_status(image_id, ImageStatus.INGESTED)
-    task = dispatch(process_image_pipeline, image_id, tag_prompt=tag_prompt, description_prompt=description_prompt, provider=provider, model=model, temperature=temperature, max_tokens_tag=max_tokens_tag, max_tokens_describe=max_tokens_describe, job_id=job.id, user_id=current_user.id)
+    task = dispatch(process_image_pipeline, image_id, tag_prompt=tag_prompt, description_prompt=description_prompt, model=model, temperature=temperature, max_tokens_tag=max_tokens_tag, max_tokens_describe=max_tokens_describe, job_id=job.id, user_id=current_user.id)
     job.celery_task_id = task.id
     db.commit()
 
@@ -526,7 +527,7 @@ class TagRequest(BaseModel):
     """Request to tag an image."""
 
     tag_prompt: str | None = None
-    provider: str | None = None
+    provider: str | None = None  # ignored: vision always runs on fal; accepted for older clients
     model: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
@@ -536,7 +537,7 @@ class DescribeRequest(BaseModel):
     """Request to describe an image."""
 
     description_prompt: str | None = None
-    provider: str | None = None
+    provider: str | None = None  # ignored: vision always runs on fal; accepted for older clients
     model: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
@@ -565,8 +566,8 @@ async def tag_image_endpoint(
         raise HTTPException(status_code=400, detail=f"Image status '{image.status}' does not allow tagging")
 
     tag_prompt = request.tag_prompt if request else None
-    provider = request.provider if request else None
     model = request.model if request else None
+    require_language_model(model)
     temperature = request.temperature if request else None
     max_tokens = request.max_tokens if request else None
 
@@ -575,14 +576,14 @@ async def tag_image_endpoint(
         status=JobStatus.PENDING,
         image_id=image_id,
         total_items=1,
-        parameters={"tag_prompt": tag_prompt, "provider": provider, "model": model, "temperature": temperature, "max_tokens": max_tokens},
+        parameters={"tag_prompt": tag_prompt, "model": model, "temperature": temperature, "max_tokens": max_tokens},
         user_id=current_user.id,
     )
     db.add(job)
     db.commit()
     db.refresh(job)
 
-    task = dispatch(tag_image, image_id, tag_prompt=tag_prompt, provider=provider, model=model, temperature=temperature, max_tokens_override=max_tokens, job_id=job.id, user_id=current_user.id)
+    task = dispatch(tag_image, image_id, tag_prompt=tag_prompt, model=model, temperature=temperature, max_tokens_override=max_tokens, job_id=job.id, user_id=current_user.id)
     job.celery_task_id = task.id
     db.commit()
 
@@ -607,8 +608,8 @@ async def describe_image_endpoint(
         raise HTTPException(status_code=400, detail=f"Image status '{image.status}' does not allow describing")
 
     description_prompt = request.description_prompt if request else None
-    provider = request.provider if request else None
     model = request.model if request else None
+    require_language_model(model)
     temperature = request.temperature if request else None
     max_tokens = request.max_tokens if request else None
 
@@ -617,14 +618,14 @@ async def describe_image_endpoint(
         status=JobStatus.PENDING,
         image_id=image_id,
         total_items=1,
-        parameters={"description_prompt": description_prompt, "provider": provider, "model": model, "temperature": temperature, "max_tokens": max_tokens},
+        parameters={"description_prompt": description_prompt, "model": model, "temperature": temperature, "max_tokens": max_tokens},
         user_id=current_user.id,
     )
     db.add(job)
     db.commit()
     db.refresh(job)
 
-    task = dispatch(describe_image, image_id, description_prompt=description_prompt, provider=provider, model=model, temperature=temperature, max_tokens_override=max_tokens, job_id=job.id, user_id=current_user.id)
+    task = dispatch(describe_image, image_id, description_prompt=description_prompt, model=model, temperature=temperature, max_tokens_override=max_tokens, job_id=job.id, user_id=current_user.id)
     job.celery_task_id = task.id
     db.commit()
 

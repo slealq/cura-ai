@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.api.model_validation import require_language_model
 from app.core.security import get_current_user, get_current_user_from_token_param
 from app.db.base import get_db
 from app.models.user import User
@@ -38,7 +39,7 @@ class VisionAnalyzeRequest(BaseModel):
     source_image_id: int | None = None
     source_generated_id: int | None = None
     source_upload_key: str | None = None
-    provider: str = "openai"
+    provider: str | None = None  # ignored: vision always runs on fal; accepted for older clients
     model: str | None = None
     mode: Literal["tag", "describe", "custom"] = "describe"
     custom_prompt: str | None = Field(None, max_length=4000)
@@ -214,6 +215,8 @@ async def analyze_image(
     if sum(s is not None for s in sources) != 1:
         raise HTTPException(status_code=400, detail="Exactly one image source must be provided")
 
+    require_language_model(request.model)
+
     if request.mode == "custom" and not request.custom_prompt:
         raise HTTPException(status_code=400, detail="custom_prompt is required for custom mode")
 
@@ -257,7 +260,7 @@ async def analyze_image(
             else:
                 prompt = settings_service.get_tag_prompt()
             tagger = get_tagger(
-                provider=request.provider, db=db, user_id=current_user.id, model=request.model,
+                db=db, user_id=current_user.id, model=request.model,
                 temperature=request.temperature, max_tokens_override=request.max_tokens,
             )
 
@@ -269,7 +272,7 @@ async def analyze_image(
             if orch:
                 idem_key = make_idempotency_key(current_user.id, trace_id, operation, request.source_image_id or request.source_generated_id)
                 decision, is_new = orch.create_decision(
-                    operation=operation, provider=request.provider, model=tagger.get_model_name(),
+                    operation=operation, provider="fal", model=tagger.get_model_name(),
                     trace_id=trace_id, idempotency_key=idem_key,
                     image_id=request.source_image_id,
                     image_width=_img_w, image_height=_img_h,
@@ -289,11 +292,11 @@ async def analyze_image(
                 )
                 charged_cost = usage_record.charged_cost
             else:
-                charged_cost = _get_charged_cost_from_context(db) or _get_latest_charged_cost(db, current_user.id, request.provider, result.model, "tag")
+                charged_cost = _get_charged_cost_from_context(db) or _get_latest_charged_cost(db, current_user.id, "fal", result.model, "tag")
 
             saved = vision_service.create_result(
                 mode="tag",
-                provider=request.provider,
+                provider="fal",
                 model=result.model,
                 prompt_text=prompt,
                 result_tags=result.tags,
@@ -312,7 +315,7 @@ async def analyze_image(
             else:
                 prompt = settings_service.get_description_prompt()
             describer = get_describer(
-                provider=request.provider, db=db, user_id=current_user.id, model=request.model,
+                db=db, user_id=current_user.id, model=request.model,
                 temperature=request.temperature, max_tokens_override=request.max_tokens,
             )
 
@@ -324,7 +327,7 @@ async def analyze_image(
             if orch:
                 idem_key = make_idempotency_key(current_user.id, trace_id, operation, request.source_image_id or request.source_generated_id)
                 decision, is_new = orch.create_decision(
-                    operation=operation, provider=request.provider, model=describer.get_model_name(),
+                    operation=operation, provider="fal", model=describer.get_model_name(),
                     trace_id=trace_id, idempotency_key=idem_key,
                     image_id=request.source_image_id,
                     image_width=_img_w, image_height=_img_h,
@@ -344,11 +347,11 @@ async def analyze_image(
                 )
                 charged_cost = usage_record.charged_cost
             else:
-                charged_cost = _get_charged_cost_from_context(db) or _get_latest_charged_cost(db, current_user.id, request.provider, result.model, "describe")
+                charged_cost = _get_charged_cost_from_context(db) or _get_latest_charged_cost(db, current_user.id, "fal", result.model, "describe")
 
             saved = vision_service.create_result(
                 mode="describe",
-                provider=request.provider,
+                provider="fal",
                 model=result.model,
                 prompt_text=prompt,
                 result_text=result.description,
@@ -364,7 +367,7 @@ async def analyze_image(
         else:  # custom
             prompt = request.custom_prompt
             describer = get_describer(
-                provider=request.provider, db=db, user_id=current_user.id, model=request.model,
+                db=db, user_id=current_user.id, model=request.model,
                 temperature=request.temperature, max_tokens_override=request.max_tokens,
             )
 
@@ -376,7 +379,7 @@ async def analyze_image(
             if orch:
                 idem_key = make_idempotency_key(current_user.id, trace_id, "custom", request.source_image_id or request.source_generated_id)
                 decision, is_new = orch.create_decision(
-                    operation=operation, provider=request.provider, model=describer.get_model_name(),
+                    operation=operation, provider="fal", model=describer.get_model_name(),
                     trace_id=trace_id, idempotency_key=idem_key,
                     image_id=request.source_image_id,
                     image_width=_img_w, image_height=_img_h,
@@ -396,11 +399,11 @@ async def analyze_image(
                 )
                 charged_cost = usage_record.charged_cost
             else:
-                charged_cost = _get_charged_cost_from_context(db) or _get_latest_charged_cost(db, current_user.id, request.provider, result.model, "describe")
+                charged_cost = _get_charged_cost_from_context(db) or _get_latest_charged_cost(db, current_user.id, "fal", result.model, "describe")
 
             saved = vision_service.create_result(
                 mode="custom",
-                provider=request.provider,
+                provider="fal",
                 model=result.model,
                 prompt_text=prompt,
                 result_text=result.description,

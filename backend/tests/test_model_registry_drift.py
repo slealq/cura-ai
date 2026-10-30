@@ -1,13 +1,26 @@
 """Guard fal.ai provider model configs against billing registry drift.
 
 The fal provider configs drive the models exposed by generation and edit flows,
-while model_registry independently supplies billing and cost-catalog metadata.
-Keep their fal model short names aligned so newly exposed models can resolve
-their billing metadata and removed models do not leave stale registrations.
+while model_registry supplies billing and cost-catalog metadata.  Both are derived
+from app.services.model_catalog; these tests make sure neither drifts from it, so
+newly exposed models resolve their billing metadata and removed models do not leave
+stale registrations.
 """
 
 from app.providers.fal_provider import FAL_EDIT_MODEL_CONFIG, FAL_MODEL_CONFIG
 from app.services import model_registry
+from app.services.model_catalog import offered_keys
+
+
+def test_provider_configs_match_the_catalog():
+    assert set(FAL_MODEL_CONFIG) == set(offered_keys("generate"))
+    assert set(FAL_EDIT_MODEL_CONFIG) == set(offered_keys("edit"))
+
+
+def test_registry_generation_and_edit_entries_match_the_catalog():
+    for operation in ("generate", "edit"):
+        registered = {e.short_name for e in model_registry.entries_for_operation(operation)}
+        assert registered == set(offered_keys(operation))
 
 
 def test_fal_generation_models_are_registered_for_billing():

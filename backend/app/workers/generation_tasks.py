@@ -18,7 +18,7 @@ from app.models.lora_evaluation import EvaluationStatus
 from app.models.lora_model import LoraModelStatus
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers import get_describer, get_editor, get_embedder, get_evaluator, get_generator, get_trainer
-from app.providers.fal_provider import GenerationCancelledError
+from app.providers.fal_provider import GenerationCancelledError, get_trainer_config
 from app.services.billing_context import (
     get_trace_id,
     init_token_container,
@@ -35,6 +35,7 @@ from app.services.evaluation_service import get_evaluation_service
 from app.services.generation_service import get_generation_service
 from app.services.image_service import get_image_service
 from app.services.log_service import write_log
+from app.services.model_catalog import DEFAULT_EDIT_MODEL
 from app.workers.celery_app import celery_app
 from app.workers.dispatch import dispatch
 from app.workers.tasks import run_async as _run_async
@@ -343,8 +344,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
             caption_include_description = training_config.get("caption_include_description", True)
 
             # Get model config to determine ZIP requirements and param names
-            from app.providers.fal_provider import FAL_MODEL_CONFIG
-            model_config = FAL_MODEL_CONFIG.get(lora.base_model, FAL_MODEL_CONFIG["flux-dev"])
+            model_config = get_trainer_config(lora.base_model)
             requires_zip = not model_config["supports_base64"]
             zip_param_name = model_config["zip_param"]
 
@@ -463,7 +463,7 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
         with billable(
             db, user_id, operation="train",
             provider=lora.training_provider or "fal",
-            model=lora.base_model or "flux-dev",
+            model=lora.base_model,
             resource_id=lora_model_id, job_id=job_id,
             defer_debit=False,
         ) as b_train:
@@ -645,7 +645,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
         with billable(
             db, user_id, operation="generate",
             provider=gen.generation_provider or "fal",
-            model=gen.base_model or "flux-dev",
+            model=gen.base_model,
             trace_id=trace_id, resource_id=generated_image_id, job_id=job_id,
             with_lora=bool(loras_for_provider),
             generation_params=params,
@@ -677,6 +677,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
                     safety_tolerance=params.get("safety_tolerance"),
                     enable_web_search=params.get("enable_web_search"),
                     image_size=params.get("image_size"),
+                    quality=params.get("quality"),
                 ),
             )
 
@@ -987,7 +988,7 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
         db.commit()
 
         params = gen.generation_params or {}
-        edit_model = params.get("edit_model", "qwen-image-max-edit")
+        edit_model = params.get("edit_model", DEFAULT_EDIT_MODEL)
 
         # Resolve source images to data URIs
         image_urls = _resolve_edit_sources(db, params, user_id)
@@ -1005,31 +1006,18 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
             except Exception:
                 return False
 
-        # Build edit kwargs
+        # Build edit kwargs (the editor only sends the params the model declares)
         edit_kwargs = {
             "image_urls": image_urls,
             "prompt": gen.prompt,
             "negative_prompt": gen.negative_prompt,
             "num_images": 1,
-            "output_format": params.get("output_format", "png"),
-            "enable_prompt_expansion": params.get("enable_prompt_expansion", True),
-            "enable_safety_checker": params.get("enable_safety_checker", True),
             "cancel_check": _is_cancelled,
         }
-        if "image_size" in params:
-            edit_kwargs["image_size"] = params["image_size"]
-        if "seed" in params and params["seed"] is not None:
-            edit_kwargs["seed"] = params["seed"]
-        if "resolution" in params:
-            edit_kwargs["resolution"] = params["resolution"]
-        if "aspect_ratio" in params:
-            edit_kwargs["aspect_ratio"] = params["aspect_ratio"]
-        if params.get("enable_occlusion_prevention"):
-            edit_kwargs["enable_occlusion_prevention"] = True
-        if "safety_tolerance" in params:
-            edit_kwargs["safety_tolerance"] = params["safety_tolerance"]
-        if "enable_web_search" in params:
-            edit_kwargs["enable_web_search"] = params["enable_web_search"]
+        for key in ("image_size", "seed", "resolution", "aspect_ratio", "quality",
+                    "safety_tolerance", "enable_web_search"):
+            if params.get(key) is not None:
+                edit_kwargs[key] = params[key]
 
         editor = get_editor(db=db, edit_model=edit_model, user_id=user_id)
         trace_id = get_trace_id()
@@ -1040,6 +1028,7 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
             provider="fal", model=edit_model,
             trace_id=trace_id, resource_id=generated_image_id, job_id=job_id,
             generation_params=params,
+            request_snapshot={"generation_params": params, "prompt": gen.prompt[:200] if gen.prompt else None},
             defer_debit=False,
         ) as b_edit:
             if b_edit.skipped:
@@ -1339,7 +1328,6 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
         config = evaluation.config or {}
         metrics_enabled = config.get("metrics_enabled", ["embedding_similarity"])
         gen_params = config.get("generation_params", {})
-        vision_eval_provider = config.get("vision_eval_provider")
         creative_count = config.get("creative_count", 0)
 
         # Load source images from folder/cluster
@@ -1390,7 +1378,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
         # Get evaluator (used for both vision_eval and creative eval)
         evaluator = None
         if "vision_eval" in metrics_enabled or creative_count > 0:
-            evaluator = get_evaluator(provider=vision_eval_provider, db=db, user_id=user_id)
+            evaluator = get_evaluator(db=db, user_id=user_id)
 
         # Get embedder + describer for embedding similarity
         embedder = None
@@ -1401,12 +1389,12 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
 
         # Resolve provider strings for billing decisions
         _gen_provider = "fal"
-        _gen_model = lora.base_model or "flux-dev"
-        _desc_provider = getattr(describer, "provider_name", "openai") if describer else "openai"
+        _gen_model = lora.base_model
+        _desc_provider = "fal"
         _desc_model = describer.get_model_name() if describer else "unknown"
         _embed_provider = "openai"
         _embed_model = embedder.get_model_name() if embedder else "unknown"
-        _eval_provider = vision_eval_provider or "fal"
+        _eval_provider = "fal"
         _eval_model = evaluator.get_model_name() if evaluator else "unknown"
 
         def _orch_call(sub_op, provider, model, resource_id, call_fn, **decision_kwargs):

@@ -1,5 +1,7 @@
 'use client';
 
+import { useModelCatalog } from '@/hooks/useModelCatalog';
+
 import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -430,19 +432,9 @@ function LoraJobActions({
   return null;
 }
 
-const MODEL_DISPLAY_NAMES: Record<string, string> = {
-  'flux-dev': 'Flux Dev',
-  'qwen-2.5': 'Qwen 2.5',
-  'fal-ai/nano-banana-pro': 'Nano Banana',
-  'qwen-image-max-edit': 'Qwen Max Edit',
-  'kling-image-o3': 'Kling O3',
-  'wan-25-preview': 'Wan 2.5',
-  'grok-imagine-edit': 'Grok Edit',
-  'face-swap': 'Face Swap',
-  'nano-banana-edit': 'Nano Banana Edit',
-};
-
 function JobModel({ job }: { job: Job }) {
+  const { data: catalog } = useModelCatalog();
+  const models = [...(catalog?.generation ?? []), ...(catalog?.edit ?? [])];
   const params = job.parameters as Record<string, unknown> | null;
   const baseModel = params?.base_model as string | undefined;
   const editModel = params?.edit_model as string | undefined;
@@ -450,7 +442,7 @@ function JobModel({ job }: { job: Job }) {
 
   if (!model) return <span className="text-xs text-muted-foreground">-</span>;
 
-  const displayName = MODEL_DISPLAY_NAMES[model] || model;
+  const displayName = models.find(m => m.key === model || m.endpoint === model)?.label || model;
   return (
     <span className="text-xs font-medium text-muted-foreground" title={model}>
       {displayName}

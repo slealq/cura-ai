@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, Suspense } from 'react';
+import { useState, useEffect, useRef, useMemo, Suspense } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { generationApi, settingsApi, billingApi } from '@/lib/api';
 import { Loader2, Sparkles, ChevronDown, ChevronUp, X, Plus, Trash2, Zap, Wand2 } from 'lucide-react';
@@ -11,6 +11,7 @@ import { useSearchParams } from 'next/navigation';
 import GeneratedImageCard from '@/components/GeneratedImageCard';
 import ModelSelector from '@/components/ModelSelector';
 import { cn } from '@/lib/utils';
+import { useModelCatalog } from '@/hooks/useModelCatalog';
 import { Slider } from '@/components/Slider';
 
 const SIZE_PRESETS = [
@@ -21,61 +22,6 @@ const SIZE_PRESETS = [
   { label: '768 x 1344', w: 768, h: 1344 },
   { label: '1344 x 768', w: 1344, h: 768 },
 ];
-
-const BASE_MODELS = [
-  { value: 'nano-banana-pro', label: 'Nano Banana Pro', defaultGuidance: 0, hasLora: false, hasStepsGuidance: false, hasWidthHeight: false, usesResolutionAspect: true, hasSafetyTolerance: true, hasWebSearch: true, hasImageSizePreset: false, hasNegativePrompt: false, maxSafetyLevel: 6, maxImages: 4 },
-  { value: 'nano-banana-2', label: 'Nano Banana 2', defaultGuidance: 0, hasLora: false, hasStepsGuidance: false, hasWidthHeight: false, usesResolutionAspect: true, hasSafetyTolerance: true, hasWebSearch: true, hasImageSizePreset: false, hasNegativePrompt: false, maxSafetyLevel: 6, maxImages: 4 },
-  { value: 'flux-2-pro', label: 'Flux 2 Pro', defaultGuidance: 0, hasLora: false, hasStepsGuidance: false, hasWidthHeight: false, usesResolutionAspect: false, hasSafetyTolerance: true, hasWebSearch: false, hasImageSizePreset: true, hasNegativePrompt: false, maxSafetyLevel: 5, maxImages: 8 },
-  { value: 'flux-dev', label: 'Flux', defaultGuidance: 3.5, hasLora: true, hasStepsGuidance: true, hasWidthHeight: true, usesResolutionAspect: false, hasSafetyTolerance: false, hasWebSearch: false, hasImageSizePreset: false, hasNegativePrompt: true, maxSafetyLevel: 6, maxImages: 8 },
-  { value: 'qwen-2.5', label: 'Qwen Image 2512', defaultGuidance: 4.0, hasLora: true, hasStepsGuidance: true, hasWidthHeight: true, usesResolutionAspect: false, hasSafetyTolerance: false, hasWebSearch: false, hasImageSizePreset: false, hasNegativePrompt: true, maxSafetyLevel: 6, maxImages: 8 },
-];
-
-const RESOLUTIONS = [
-  { value: '0.5K', label: '0.5K' },
-  { value: '1K', label: '1K' },
-  { value: '2K', label: '2K' },
-  { value: '4K', label: '4K' },
-];
-
-const ASPECT_RATIOS = [
-  { value: '1:1', label: '1:1' },
-  { value: '16:9', label: '16:9' },
-  { value: '9:16', label: '9:16' },
-  { value: '4:3', label: '4:3' },
-  { value: '3:4', label: '3:4' },
-  { value: '3:2', label: '3:2' },
-  { value: '2:3', label: '2:3' },
-  { value: '21:9', label: '21:9' },
-  { value: '7:4', label: '7:4' },
-  { value: '4:7', label: '4:7' },
-  { value: '5:4', label: '5:4' },
-];
-
-const SAFETY_LEVELS = [
-  { value: '1', label: '1 (Strictest)', level: 1 },
-  { value: '2', label: '2', level: 2 },
-  { value: '3', label: '3', level: 3 },
-  { value: '4', label: '4', level: 4 },
-  { value: '5', label: '5', level: 5 },
-  { value: '6', label: '6 (Most Permissive)', level: 6 },
-];
-
-const IMAGE_SIZE_PRESETS = [
-  { value: 'square_hd', label: 'Square HD', ratio: '1:1' },
-  { value: 'square', label: 'Square', ratio: '1:1' },
-  { value: 'landscape_4_3', label: 'Landscape 4:3', ratio: '4:3' },
-  { value: 'landscape_16_9', label: 'Landscape 16:9', ratio: '16:9' },
-  { value: 'portrait_4_3', label: 'Portrait 3:4', ratio: '3:4' },
-  { value: 'portrait_16_9', label: 'Portrait 9:16', ratio: '9:16' },
-  { value: 'custom', label: 'Custom', ratio: '1:1' },
-] as const;
-
-// Default safety tolerance per model (matches backend FAL_MODEL_CONFIG.default_safety_tolerance)
-const DEFAULT_SAFETY_TOLERANCE: Record<string, string> = {
-  'nano-banana-pro': '4',
-  'nano-banana-2': '4',
-  'flux-2-pro': '2',
-};
 
 function AspectIcon({ ratio, className }: { ratio: string; className?: string }) {
   const dims: Record<string, [number, number]> = {
@@ -108,7 +54,8 @@ function GeneratePageInner() {
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [baseModel, setBaseModel] = useState('nano-banana-pro');
+  const [baseModel, setBaseModel] = useState('');
+  const [quality, setQuality] = useState('');
   const [loraSelections, setLoraSelections] = useState<Array<{ id: number; scale: number }>>([]);
   const [width, setWidth] = useState(1024);
   const [height, setHeight] = useState(1024);
@@ -124,8 +71,39 @@ function GeneratePageInner() {
   const [autoExpand, setAutoExpand] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
 
-  // Current model capabilities
-  const modelCaps = BASE_MODELS.find((m) => m.value === baseModel) || BASE_MODELS[0];
+  const { data: catalog } = useModelCatalog();
+  const BASE_MODELS = useMemo(() => (catalog?.generation ?? []).map(m => ({ value: m.key, label: m.label, defaultGuidance: m.params.steps_guidance?.guidance?.default ?? 0, hasLora: m.supports_lora, hasStepsGuidance: !!m.params.steps_guidance, hasWidthHeight: false, usesResolutionAspect: !!(m.params.resolution || m.params.aspect_ratio), hasSafetyTolerance: !!m.params.safety_tolerance, hasWebSearch: !!m.params.enable_web_search, hasImageSizePreset: !!m.params.image_size, hasNegativePrompt: !!m.params.negative_prompt, maxSafetyLevel: 6, maxImages: m.max_num_images || 1 })), [catalog]);
+  const modelCaps = BASE_MODELS.find(m => m.value === baseModel) ?? { hasLora: false, hasStepsGuidance: false, hasWidthHeight: false, usesResolutionAspect: false, hasSafetyTolerance: false, hasWebSearch: false, hasImageSizePreset: false, hasNegativePrompt: false, maxSafetyLevel: 6, maxImages: 1 };
+  const model = catalog?.generation.find(m => m.key === baseModel);
+  const spec = model?.params ?? {};
+  const RESOLUTIONS = (spec.resolution?.options ?? []).map(value => ({ value, label: value }));
+  const ASPECT_RATIOS = (spec.aspect_ratio?.options ?? []).map(value => ({ value, label: value }));
+  const SAFETY_LEVELS = (spec.safety_tolerance?.options ?? []).map(value => ({ value, label: value, level: Number(value) }));
+  const IMAGE_SIZE_PRESETS = [...(spec.image_size?.options ?? []), ...(spec.image_size?.custom_size ? ['custom'] : [])].map(value => ({ value, label: value.replaceAll('_', ' '), ratio: '1:1' }));
+  useEffect(() => {
+    if (!model) return;
+    setResolution(spec.resolution?.default ?? ''); setAspectRatio(spec.aspect_ratio?.default ?? '');
+    setSafetyTolerance(spec.safety_tolerance?.default ?? ''); setImageSizePreset(spec.image_size?.default ?? '');
+    setQuality(spec.quality?.default ?? '');
+    setSteps(spec.steps_guidance?.steps?.default ?? 28); setGuidance(spec.steps_guidance?.guidance?.default ?? 0);
+  }, [model, spec.resolution?.default, spec.aspect_ratio?.default, spec.safety_tolerance?.default, spec.image_size?.default, spec.quality?.default, spec.steps_guidance?.steps?.default, spec.steps_guidance?.guidance?.default]);
+
+  const { data: generationConfig } = useQuery({
+    queryKey: ['generation-config', baseModel],
+    queryFn: () => settingsApi.getGenerationConfig(baseModel),
+    enabled: !!model,
+  });
+  useEffect(() => {
+    if (!generationConfig || !model) return;
+    if (model.params.image_size?.custom_size) {
+      setWidth(generationConfig.width); setHeight(generationConfig.height);
+    }
+    const bounds = model.params.steps_guidance;
+    if (bounds?.steps && bounds.guidance) {
+      setSteps(Math.max(bounds.steps.minimum, Math.min(bounds.steps.maximum, generationConfig.num_inference_steps)));
+      setGuidance(Math.max(bounds.guidance.minimum, Math.min(bounds.guidance.maximum, generationConfig.guidance_scale)));
+    }
+  }, [generationConfig, model]);
 
   // Multi-LoRA helpers
   const addLora = () => {
@@ -167,19 +145,19 @@ function GeneratePageInner() {
   });
 
   useEffect(() => {
-    if (baseModelData && !hasInitialized.current) {
+    if (catalog && baseModelData && !hasInitialized.current) {
       hasInitialized.current = true;
-      const modelEntry = BASE_MODELS.find((m) => m.value === baseModelData.base_model);
+      const modelEntry = BASE_MODELS.find((m) => m.value === baseModelData.base_model) ?? BASE_MODELS.find(m => m.value === catalog.defaults.generation_model);
       if (modelEntry) {
         setBaseModel(modelEntry.value);
         setGuidance(modelEntry.defaultGuidance);
       }
     }
-  }, [baseModelData]);
+  }, [baseModelData, catalog, BASE_MODELS]);
 
   // Read URL params (?lora=ID&prompt=TEXT)
   useEffect(() => {
-    if (hasAppliedUrlParams.current) return;
+    if (!catalog || hasAppliedUrlParams.current) return;
     const loraParam = searchParams.get('lora');
     const promptParam = searchParams.get('prompt');
 
@@ -204,7 +182,7 @@ function GeneratePageInner() {
       hasAppliedUrlParams.current = true;
       setPrompt(decodeURIComponent(promptParam));
     }
-  }, [searchParams]);
+  }, [searchParams, catalog, BASE_MODELS]);
 
   // Fetch completed + uploaded LoRA models filtered by base model
   const { data: loraList } = useQuery({
@@ -231,7 +209,7 @@ function GeneratePageInner() {
 
   // Dynamic cost query — only fires for models with variable pricing
   const { data: dynamicEstimate } = useQuery({
-    queryKey: ['generation-estimate', baseModel, resolution, enableWebSearch, width, height, imageSizePreset, loraSelections.length > 0],
+    queryKey: ['generation-estimate', baseModel, resolution, enableWebSearch, width, height, imageSizePreset, quality, loraSelections.length > 0],
     queryFn: () => billingApi.estimateGenerationCost({
       base_model: baseModel,
       resolution: modelCaps.usesResolutionAspect ? resolution : undefined,
@@ -239,6 +217,7 @@ function GeneratePageInner() {
       width: (modelCaps.hasWidthHeight || (modelCaps.hasImageSizePreset && imageSizePreset === 'custom')) ? width : undefined,
       height: (modelCaps.hasWidthHeight || (modelCaps.hasImageSizePreset && imageSizePreset === 'custom')) ? height : undefined,
       image_size: (modelCaps.hasImageSizePreset && imageSizePreset !== 'custom') ? imageSizePreset : undefined,
+      quality: spec.quality ? quality : undefined,
       with_lora: modelCaps.hasLora && loraSelections.length > 0,
     }),
     enabled: hasVariablePricing,
@@ -309,7 +288,8 @@ function GeneratePageInner() {
     };
 
     if (modelCaps.hasNegativePrompt && negativePrompt.trim()) params.negative_prompt = negativePrompt.trim();
-    if (seed) params.seed = parseInt(seed);
+    if (spec.seed && seed) params.seed = parseInt(seed);
+    if (spec.quality && quality) params.quality = quality;
 
     if (modelCaps.hasLora && loraSelections.length > 0) {
       params.loras = loraSelections.map((s) => ({ lora_model_id: s.id, lora_scale: s.scale }));
@@ -324,14 +304,14 @@ function GeneratePageInner() {
       params.guidance_scale = guidance;
     }
     if (modelCaps.usesResolutionAspect) {
-      params.resolution = resolution;
-      params.aspect_ratio = aspectRatio;
+      if (spec.resolution && resolution) params.resolution = resolution;
+      if (spec.aspect_ratio && aspectRatio) params.aspect_ratio = aspectRatio;
     }
     if (modelCaps.hasImageSizePreset) {
       if (imageSizePreset === 'custom') {
         params.width = width;
         params.height = height;
-      } else {
+      } else if (imageSizePreset) {
         params.image_size = imageSizePreset;
       }
     }
@@ -346,6 +326,7 @@ function GeneratePageInner() {
   };
 
   const handleGenerate = async () => {
+    if (!model) { toast.error('Model catalog is not ready'); return; }
     if (!prompt.trim()) {
       toast.error('Please enter a prompt');
       return;
@@ -457,8 +438,7 @@ function GeneratePageInner() {
               setGuidance(caps?.defaultGuidance ?? 0);
               if (numImages > (caps?.maxImages ?? 8)) setNumImages(caps?.maxImages ?? 8);
               // Reset safety tolerance to model default
-              const defaultSafety = DEFAULT_SAFETY_TOLERANCE[v];
-              if (defaultSafety) setSafetyTolerance(defaultSafety);
+
             }}
             size="sm"
           />
@@ -663,7 +643,7 @@ function GeneratePageInner() {
             {/* Resolution + Aspect Ratio (resolution/aspect models) */}
             {modelCaps.usesResolutionAspect && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
+                {spec.resolution && <div>
                   <label className="block text-xs text-muted-foreground mb-1">Resolution</label>
                   <div className="flex gap-2">
                     {RESOLUTIONS.map((r) => (
@@ -681,8 +661,8 @@ function GeneratePageInner() {
                       </button>
                     ))}
                   </div>
-                </div>
-                <div>
+                </div>}
+                {spec.aspect_ratio && <div>
                   <label className="block text-xs text-muted-foreground mb-1">Aspect Ratio</label>
                   <select
                     value={aspectRatio}
@@ -693,10 +673,11 @@ function GeneratePageInner() {
                       <option key={ar.value} value={ar.value}>{ar.label}</option>
                     ))}
                   </select>
-                </div>
+                </div>}
               </div>
             )}
 
+            {spec.quality && <label className="block text-sm">Quality <select value={quality} onChange={e => setQuality(e.target.value)} className="ml-2 border rounded p-1">{spec.quality.options?.map(v => <option key={v} value={v}>{v}</option>)}</select></label>}
             {/* Safety Tolerance + Web Search */}
             {(modelCaps.hasSafetyTolerance || modelCaps.hasWebSearch) && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -738,8 +719,8 @@ function GeneratePageInner() {
                     Steps: {steps}
                   </label>
                   <Slider
-                    min={1}
-                    max={50}
+                    min={spec.steps_guidance?.steps?.minimum ?? 1}
+                    max={spec.steps_guidance?.steps?.maximum ?? 50}
                     value={steps}
                     onChange={(v) => setSteps(v)}
                     className="w-full"
@@ -754,8 +735,8 @@ function GeneratePageInner() {
                     Guidance: {guidance.toFixed(1)}
                   </label>
                   <Slider
-                    min={0}
-                    max={200}
+                    min={(spec.steps_guidance?.guidance?.minimum ?? 0) * 10}
+                    max={(spec.steps_guidance?.guidance?.maximum ?? 20) * 10}
                     value={Math.round(guidance * 10)}
                     onChange={(v) => setGuidance(v / 10)}
                     className="w-full"
@@ -764,7 +745,7 @@ function GeneratePageInner() {
               )}
 
               {/* Seed */}
-              <div>
+              {spec.seed && <div>
                 <label className="block text-xs text-muted-foreground mb-1">Seed</label>
                 <input
                   type="text"
@@ -773,7 +754,7 @@ function GeneratePageInner() {
                   placeholder="Random"
                   className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
                 />
-              </div>
+              </div>}
             </div>
           </div>
         )}
@@ -858,7 +839,7 @@ function GeneratePageInner() {
                     </div>
                   )}
                   <div className="flex flex-wrap gap-4">
-                    <span><span className="font-medium">Model:</span> {selectedImage.base_model}</span>
+                    <span><span className="font-medium">Model:</span> {catalog?.generation.find(m => m.key === selectedImage.base_model)?.label || selectedImage.base_model}</span>
                     {selectedImage.width && selectedImage.height && (
                       <span><span className="font-medium">Size:</span> {selectedImage.width}x{selectedImage.height}</span>
                     )}

@@ -7,16 +7,19 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.api.model_validation import require_language_model
 from app.core.security import get_current_user, get_current_user_from_token_param
 from app.db.base import get_db
 from app.models import ImageStatus, Job, JobStatus, JobType
 from app.models.folder import Folder
 from app.models.user import User
-from app.providers import get_describer
+from app.providers import _resolve_config
+from app.providers.fal_vision_provider import fal_text_completion
 from app.schemas import ImageListResponse, ImageResponse
 from app.services.billing_service import InsufficientBalanceError
 from app.services.folder_service import get_folder_service
 from app.services.image_service import get_image_service
+from app.services.model_catalog import DEFAULT_LANGUAGE_MODEL, DEFAULT_VISION_MODEL
 from app.services.settings_service import get_settings_service
 from app.services.storage import get_storage_service
 from app.workers.dispatch import dispatch
@@ -39,7 +42,7 @@ class FolderUpdateRequest(BaseModel):
 
 
 class FolderDescribeRequest(BaseModel):
-    provider: str | None = None
+    provider: str | None = None  # ignored: vision always runs on fal; accepted for older clients
     model: str | None = None
     tag_prompt: str | None = None
     description_prompt: str | None = None
@@ -309,7 +312,8 @@ async def describe_folder(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Describe all images in a folder with custom prompts and provider/model."""
+    """Describe all images in a folder with custom prompts and model."""
+    require_language_model(request.model)
     folder_service = get_folder_service(db, current_user.id)
     folder = folder_service.get_folder(folder_id)
     if not folder:
@@ -326,7 +330,6 @@ async def describe_folder(
         user_id=current_user.id,
         parameters={
             "folder_id": folder_id,
-            "provider": request.provider,
             "model": request.model,
         },
     )
@@ -339,7 +342,6 @@ async def describe_folder(
         job.id, current_user.id, image_ids,
         tag_prompt=request.tag_prompt,
         description_prompt=request.description_prompt,
-        provider=request.provider,
         model=request.model,
         temperature=request.temperature,
         max_tokens_tag=request.max_tokens_tag,
@@ -389,7 +391,7 @@ async def auto_prompt_questions(
             continue
         b64 = base64.b64encode(image_data).decode("utf-8")
         mime = image.mime_type or "image/jpeg"
-        image_contents.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+        image_contents.append(f"data:{mime};base64,{b64}")
 
     if not image_contents:
         raise HTTPException(status_code=400, detail="Could not load any sample images")
@@ -408,26 +410,16 @@ async def auto_prompt_questions(
         '{"sample_analysis": "your analysis here", "questions": ["question 1", "question 2", "question 3"]}'
     )
 
-    # Use the user's configured vision provider
-    describer = get_describer(db=db, user_id=current_user.id)
-    client = describer.client
-    model_name = describer.model
-
     import json as json_module
     try:
-        # OpenAI-style multi-image call
-        response = await client.chat.completions.create(
-            model=model_name,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": meta_prompt},
-                    *image_contents,
-                ],
-            }],
-            max_tokens=2000,
+        # Multi-image call on the user's configured vision model
+        keys, config = _resolve_config(db, current_user.id)
+        completion = await fal_text_completion(
+            meta_prompt, config.get("fal_vision_model") or DEFAULT_VISION_MODEL, 2000,
+            api_key=keys.get("fal"), image_urls=image_contents,
+            temperature=config.get("vision_temperature"),
         )
-        raw = response.choices[0].message.content.strip()
+        raw = completion.text
         # Parse JSON from response (handle markdown code blocks)
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
@@ -480,18 +472,14 @@ async def auto_prompt_generate(
         '{"tag_prompt": "guidance text", "description_prompt": "guidance text", "explanation": "brief explanation"}'
     )
 
-    describer = get_describer(db=db, user_id=current_user.id)
-    client = describer.client
-    model_name = describer.model
-
     import json as json_module
     try:
-        response = await client.chat.completions.create(
-            model=model_name,
-            messages=[{"role": "user", "content": generate_prompt}],
-            max_tokens=3000,
+        keys, config = _resolve_config(db, current_user.id)
+        completion = await fal_text_completion(
+            generate_prompt, config.get("fal_language_model") or DEFAULT_LANGUAGE_MODEL, 3000,
+            api_key=keys.get("fal"), temperature=config.get("vision_temperature"),
         )
-        raw = response.choices[0].message.content.strip()
+        raw = completion.text
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
         parsed = json_module.loads(raw)
