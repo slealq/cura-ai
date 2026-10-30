@@ -258,6 +258,16 @@ npm run build        # Production build
 npm run lint         # ESLint
 ```
 
+## Issue Tracking
+
+**When you detect an issue, open a GitHub issue for it right away — don't ask first.** This covers bugs, broken pages, failing or stuck jobs, data inconsistencies, security or cost risks, and tech debt you find while working on something else. The goal is that nothing found in a session gets lost.
+
+- Run `gh issue list --state open` first and comment on an existing issue instead of filing a duplicate.
+- Label it (`bug`, `enhancement`, `documentation`, …) and write the body for someone without this session's context: what you saw (exact error text, URL, job ID, timestamp, environment), where in the code it lives (`path:line`), why it matters, and the expected behavior or a proposed fix with acceptance criteria.
+- Only state what you verified; mark hypotheses as such ("possibly…", "to check: …").
+- Mention the issue number to the user, and reference it in commits/PRs that address it (`Fixes #N`).
+- Not an issue: things fixed within the same change, or the user's own in-progress work.
+
 ## UI Principles
 
 **Never block the UI on long-running operations.** All potentially slow actions (upload, delete with images, reprocess, train, generate, evaluate, etc.) must be dispatched as background Jobs via Celery. The frontend shows an immediate toast notification with a "View Jobs" link, then navigates away. Job completion/failure is surfaced via the `useJobNotifications` polling hook. The confirm dialog should close immediately on user click — never show a "Loading..." state for background-dispatched work.
