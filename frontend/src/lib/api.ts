@@ -662,6 +662,10 @@ export const jobsApi = {
     return data;
   },
 
+  delete: async (id: number): Promise<void> => {
+    await api.delete(`/jobs/${id}`);
+  },
+
   cancel: async (id: number): Promise<void> => {
     await api.post(`/jobs/${id}/cancel`);
   },
