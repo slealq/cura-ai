@@ -30,6 +30,7 @@ export interface ProcessingCostResponse {
 }
 
 export interface Image {
+  error_message?: string | null;
   id: number;
   source: string;
   original_filename: string | null;

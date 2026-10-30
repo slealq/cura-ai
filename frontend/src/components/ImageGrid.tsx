@@ -1,13 +1,13 @@
 'use client';
 
 import { Suspense, useState, useEffect, useMemo, useRef } from 'react';
-import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { Check, FileText, FolderMinus, FolderPlus, Loader2, RefreshCw, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
-import { imagesApi, jobsApi, foldersApi } from '@/lib/api';
+import { imagesApi, jobsApi } from '@/lib/api';
 import ImageDrawer from '@/components/ImageDrawer';
-import AddToFolderDialog from '@/components/AddToFolderDialog';
+import Inspector, { type InspectorTool } from '@/components/Inspector';
 import DescribeAllDialog from '@/components/DescribeAllDialog';
 import { cn } from '@/lib/utils';
 import type { Image, ImageListResponse } from '@/types';
@@ -149,10 +149,16 @@ function Tile({
             alt=""
             loading="lazy"
             style={{ aspectRatio: ratio }}
-            className={cn('block w-full object-cover transition-transform duration-200', selected && 'scale-[0.94] rounded')}
+            className={cn(
+              'block w-full object-cover transition-transform duration-200',
+              selected && 'scale-[0.94] rounded'
+            )}
           />
         ) : (
-          <div style={{ aspectRatio: ratio }} className="grid w-full place-items-center text-xs text-muted-foreground">
+          <div
+            style={{ aspectRatio: ratio }}
+            className="grid w-full place-items-center text-xs text-muted-foreground"
+          >
             No preview
           </div>
         )}
@@ -165,7 +171,8 @@ function Tile({
         className={cn(
           'absolute left-2 top-2 grid h-[22px] w-[22px] place-items-center rounded-full border-[1.5px] text-white transition-opacity',
           selected ? 'border-selection bg-selection opacity-100' : 'border-white/95 bg-black/20',
-          !selected && (selecting ? 'opacity-100' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100')
+          !selected &&
+            (selecting ? 'opacity-100' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100')
         )}
       >
         <Check className={cn('h-3 w-3', selected ? 'opacity-100' : 'opacity-0')} strokeWidth={3} />
@@ -176,7 +183,12 @@ function Tile({
         </span>
       )}
       {flag && (
-        <span className={cn('pointer-events-none absolute right-2 top-2 rounded bg-white px-1.5 py-0.5 text-[10.5px] font-medium', flag.cls)}>
+        <span
+          className={cn(
+            'pointer-events-none absolute right-2 top-2 rounded bg-white px-1.5 py-0.5 text-[10.5px] font-medium',
+            flag.cls
+          )}
+        >
           {flag.text}
         </span>
       )}
@@ -201,13 +213,27 @@ function ImageGridContent({
   const sourceParam = searchParams.get('source') as SourceKey | null;
   const source = showSourceFilter && SOURCE_FILTERS.some((s) => s.key === sourceParam) ? sourceParam : null;
 
+  const [inspectorHidden, setInspectorHidden] = useState(false);
+  const [wide, setWide] = useState(false);
+  const [mobileInspector, setMobileInspector] = useState(false);
+  const [tool, setTool] = useState<InspectorTool | null>(null);
+  const [toolImages, setToolImages] = useState<Image[] | null>(null);
+  useEffect(() => {
+    try {
+      setInspectorHidden(localStorage.getItem('library-inspector-hidden') === 'true');
+    } catch {}
+    const media = window.matchMedia('(min-width: 1100px)');
+    const update = () => setWide(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+  const inspectorVisible = wide && !inspectorHidden;
   const [openImage, setOpenImage] = useState<Image | null>(null);
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [density, setDensity] = useState<Density>('M');
-  const [showAddToFolder, setShowAddToFolder] = useState(false);
   const [showDescribeAll, setShowDescribeAll] = useState(false);
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -237,39 +263,47 @@ function ImageGridContent({
     setSelectedIds(new Set());
   };
 
-  // Auto-open drawer when image_id is in URL params
-  const hasOpenedLinked = useRef(false);
+  // Auto-open viewer when image_id is in URL params
+  const hasOpenedLinked = useRef<number | null>(null);
   const { data: linkedImage } = useQuery({
     queryKey: ['images', Number(imageIdParam)],
     queryFn: () => imagesApi.get(Number(imageIdParam)),
     enabled: !!imageIdParam,
   });
   useEffect(() => {
-    if (linkedImage && !hasOpenedLinked.current) {
-      hasOpenedLinked.current = true;
+    if (linkedImage && linkedImage.id !== hasOpenedLinked.current) {
+      hasOpenedLinked.current = linkedImage.id;
       setOpenImage(linkedImage);
     }
   }, [linkedImage]);
+  useEffect(() => {
+    if (!imageIdParam) hasOpenedLinked.current = null;
+  }, [imageIdParam]);
 
   const filterParams: FetchParams = (() => {
     switch (activeFilter) {
-      case 'failed': return { status: 'failed' };
-      case 'not_described': return { max_status: 'tagged' };
-      case 'not_clustered': return { max_status: 'embedded' };
-      default: return {};
+      case 'failed':
+        return { status: 'failed' };
+      case 'not_described':
+        return { max_status: 'tagged' };
+      case 'not_clustered':
+        return { max_status: 'embedded' };
+      default:
+        return {};
     }
   })();
 
-  const { data, isLoading, isError, error, refetch, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
-    queryKey: [queryKeyPrefix, activeFilter, source],
-    queryFn: ({ pageParam }) =>
-      fetchImages({ ...filterParams, ...(source ? { source } : {}), skip: pageParam, limit: PAGE_SIZE }),
-    initialPageParam: 0,
-    getNextPageParam: (last, pages) => {
-      const loaded = pages.reduce((n, p) => n + p.items.length, 0);
-      return loaded < last.total && last.items.length > 0 ? loaded : undefined;
-    },
-  });
+  const { data, isLoading, isError, error, refetch, fetchNextPage, hasNextPage, isFetchingNextPage } =
+    useInfiniteQuery({
+      queryKey: [queryKeyPrefix, activeFilter, source],
+      queryFn: ({ pageParam }) =>
+        fetchImages({ ...filterParams, ...(source ? { source } : {}), skip: pageParam, limit: PAGE_SIZE }),
+      initialPageParam: 0,
+      getNextPageParam: (last, pages) => {
+        const loaded = pages.reduce((n, p) => n + p.items.length, 0);
+        return loaded < last.total && last.items.length > 0 ? loaded : undefined;
+      },
+    });
 
   const images = useMemo(() => data?.pages.flatMap((p) => p.items) ?? [], [data]);
   const total = data?.pages[0]?.total ?? 0;
@@ -293,49 +327,17 @@ function ImageGridContent({
     queryFn: () => jobsApi.list({ limit: 50 }),
     refetchInterval: 5000,
   });
-  const hasBatchRunning = jobs?.items.some(
-    (j) => (j.job_type === 'batch_reprocess' || j.job_type === 'batch_describe') && (j.status === 'running' || j.status === 'pending')
-  ) ?? false;
+  const hasBatchRunning =
+    jobs?.items.some(
+      (j) =>
+        (j.job_type === 'batch_reprocess' || j.job_type === 'batch_describe') &&
+        (j.status === 'running' || j.status === 'pending')
+    ) ?? false;
 
-  const clearSelection = () => setSelectedIds(new Set());
-
-  const reprocessSelectedMutation = useMutation({
-    mutationFn: (imageIds: number[]) => jobsApi.reprocessSelected(imageIds),
-    onSuccess: (res) => {
-      toast.success(`Describing ${selectedIds.size} images`, {
-        description: `Job #${res.job_id}`,
-        action: { label: 'View Jobs', onClick: () => router.push('/jobs') },
-      });
-      queryClient.invalidateQueries({ queryKey: ['jobs'] });
-      queryClient.invalidateQueries({ queryKey: [queryKeyPrefix] });
-      queryClient.invalidateQueries({ queryKey: ['pipeline-stats'] });
-      clearSelection();
-    },
-    onError: () => toast.error('Could not start describing. Try again in a moment.'),
-  });
-
-  const removeFromFolderMutation = useMutation({
-    mutationFn: (imageIds: number[]) => foldersApi.removeImages(folderId!, imageIds),
-    onSuccess: (res) => {
-      toast.success(`Removed ${res.removed} images from this folder`);
-      queryClient.invalidateQueries({ queryKey: [queryKeyPrefix] });
-      queryClient.invalidateQueries({ queryKey: ['folders'] });
-      clearSelection();
-    },
-    onError: () => toast.error('Could not remove images from the folder'),
-  });
-
-  const deleteSelectedMutation = useMutation({
-    mutationFn: (imageIds: number[]) => imagesApi.batchDelete(imageIds),
-    onSuccess: (res) => {
-      toast.success(`Deleted ${res.deleted} images`);
-      queryClient.invalidateQueries({ queryKey: [queryKeyPrefix] });
-      queryClient.invalidateQueries({ queryKey: ['stats'] });
-      queryClient.invalidateQueries({ queryKey: ['folders'] });
-      clearSelection();
-    },
-    onError: () => toast.error('Could not delete images'),
-  });
+  const clearSelection = () => {
+    setSelectedIds(new Set());
+    setToolImages(null);
+  };
 
   const toggle = (id: number) =>
     setSelectedIds((prev) => {
@@ -351,216 +353,275 @@ function ImageGridContent({
   useEffect(() => {
     if (!selecting) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !openImage && !showAddToFolder && !showDeleteConfirm) clearSelection();
+      if (e.key === 'Escape' && !tool && !openImage) clearSelection();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [selecting, openImage, showAddToFolder, showDeleteConfirm]);
+  }, [selecting, openImage, tool]);
 
   const dockButton =
     'flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium text-primary-foreground/90 transition-colors hover:bg-primary-foreground/10 hover:text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50';
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <h1 className="flex items-baseline gap-2 text-xl font-semibold tracking-tight">
-          {title}
-          <span className="font-mono text-[13px] font-normal tabular-nums text-muted-foreground">{total}</span>
-        </h1>
-        {headerActions && <div className="ml-auto flex flex-wrap items-center gap-1.5">{headerActions}</div>}
-      </div>
-      {subtitle}
-
-      <div className="flex flex-wrap items-center gap-2">
-        {showSourceFilter && (
-          <Segmented label="Source" options={SOURCE_FILTERS} value={source} onChange={changeSource} />
-        )}
-        <Segmented
-          label="Status"
-          options={STATUS_FILTERS}
-          value={activeFilter}
-          onChange={(v) => {
-            setActiveFilter(v);
-            clearSelection();
-          }}
-        />
-        <div className="ml-auto flex items-center gap-1.5">
-          {folderId && (
-            <button
-              onClick={() => setShowDescribeAll(true)}
-              disabled={hasBatchRunning}
-              title={hasBatchRunning ? 'A describe job is already running' : 'Describe every image in this folder'}
-              className="flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12.5px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <FileText className="h-3.5 w-3.5" />
-              Describe all
-            </button>
+    <div className="flex items-start gap-5">
+      <div className="min-w-0 flex-1 space-y-3">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <h1 className="flex items-baseline gap-2 text-xl font-semibold tracking-tight">
+            {title}
+            <span className="font-mono text-[13px] font-normal tabular-nums text-muted-foreground">
+              {total}
+            </span>
+          </h1>
+          <button
+            aria-pressed={inspectorVisible}
+            onClick={() => {
+              const hidden = !inspectorHidden;
+              setInspectorHidden(hidden);
+              try {
+                localStorage.setItem('library-inspector-hidden', String(hidden));
+              } catch {}
+            }}
+            className="rounded-md border border-border px-2 py-1 text-xs min-[1100px]:block hidden"
+          >
+            {inspectorVisible ? 'Hide inspector' : 'Show inspector'}
+          </button>
+          {headerActions && (
+            <div className="ml-auto flex flex-wrap items-center gap-1.5">{headerActions}</div>
           )}
-          {images.length > 0 && (
-            <button
-              onClick={() => (allLoadedSelected ? clearSelection() : setSelectedIds(new Set(images.map((i) => i.id))))}
-              className="h-7 rounded-md px-2.5 text-[12.5px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
-            >
-              {allLoadedSelected ? 'Deselect all' : 'Select all'}
-            </button>
+        </div>
+        {!inspectorVisible && (
+          <button
+            onClick={() => {
+              setMobileInspector(true);
+              setTool('Create');
+            }}
+            className="rounded-md border border-border px-3 py-1.5 text-sm"
+          >
+            Create
+          </button>
+        )}
+        {subtitle}
+
+        <div className="flex flex-wrap items-center gap-2">
+          {showSourceFilter && (
+            <Segmented label="Source" options={SOURCE_FILTERS} value={source} onChange={changeSource} />
           )}
           <Segmented
-            label="Thumbnail size"
-            options={(['S', 'M', 'L'] as Density[]).map((d) => ({ key: d, label: d }))}
-            value={density}
-            onChange={changeDensity}
+            label="Status"
+            options={STATUS_FILTERS}
+            value={activeFilter}
+            onChange={(v) => {
+              setActiveFilter(v);
+              clearSelection();
+            }}
           />
-        </div>
-      </div>
-
-      {isLoading ? (
-        <div className="flex h-64 items-center justify-center">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        </div>
-      ) : isError ? (
-        <div className="flex h-64 flex-col items-center justify-center gap-2 text-center">
-          <p className="font-medium">Couldn&apos;t load these images</p>
-          <p className="max-w-md text-sm text-muted-foreground">{error?.message}</p>
-          <button
-            onClick={() => refetch()}
-            className="mt-1 rounded-md border border-input px-3 py-1.5 text-[13px] font-medium hover:bg-accent"
-          >
-            Try again
-          </button>
-        </div>
-      ) : images.length === 0 ? (
-        <div className="flex h-64 flex-col items-center justify-center gap-1 text-center">
-          <p className="font-medium">No images here</p>
-          <p className="text-sm text-muted-foreground">
-            {activeFilter || source
-              ? 'Nothing matches these filters. Try a different source or status.'
-              : 'Upload images or create some to start your library.'}
-          </p>
-        </div>
-      ) : (
-        <>
-          <div style={{ columnWidth: COLUMN_WIDTH[density], columnGap: 8 }} className="pb-24">
-            {images.map((image) => (
-              <Tile
-                key={image.id}
-                image={image}
-                selected={selectedIds.has(image.id)}
-                selecting={selecting}
-                onOpen={() => setOpenImage(image)}
-                onToggle={() => toggle(image.id)}
-              />
-            ))}
+          <div className="ml-auto flex items-center gap-1.5">
+            {folderId && (
+              <button
+                onClick={() => setShowDescribeAll(true)}
+                disabled={hasBatchRunning}
+                title={
+                  hasBatchRunning
+                    ? 'A describe job is already running'
+                    : 'Describe every image in this folder'
+                }
+                className="flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12.5px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FileText className="h-3.5 w-3.5" />
+                Describe all
+              </button>
+            )}
+            {images.length > 0 && (
+              <button
+                onClick={() =>
+                  allLoadedSelected ? clearSelection() : setSelectedIds(new Set(images.map((i) => i.id)))
+                }
+                className="h-7 rounded-md px-2.5 text-[12.5px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                {allLoadedSelected ? 'Deselect all' : 'Select all'}
+              </button>
+            )}
+            <Segmented
+              label="Thumbnail size"
+              options={(['S', 'M', 'L'] as Density[]).map((d) => ({ key: d, label: d }))}
+              value={density}
+              onChange={changeDensity}
+            />
           </div>
-          <div ref={sentinelRef} className="flex h-10 items-center justify-center">
-            {isFetchingNextPage && <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />}
-          </div>
-        </>
-      )}
+        </div>
 
-      {/* Selection toolbar — moves into the inspector panel in a later stage */}
-      {selecting && (
-        <div
-          role="toolbar"
-          aria-label="Selection actions"
-          className="fixed bottom-5 left-1/2 z-40 flex -translate-x-1/2 items-center gap-0.5 whitespace-nowrap rounded-xl bg-primary p-1.5 text-primary-foreground shadow-[0_18px_40px_-12px_rgb(0_0_0/0.45)]"
-        >
-          <button onClick={clearSelection} className={cn(dockButton, 'px-2')} aria-label="Clear selection">
-            <X className="h-4 w-4" />
-          </button>
-          <span className="px-1.5 text-[13px] font-semibold tabular-nums">{selectedIds.size} selected</span>
-          <span className="mx-1 h-5 w-px bg-primary-foreground/20" />
-          <button
-            onClick={() => reprocessSelectedMutation.mutate(Array.from(selectedIds))}
-            disabled={reprocessSelectedMutation.isPending || hasBatchRunning}
-            title={hasBatchRunning ? 'A describe job is already running' : 'Tag, describe and embed these images'}
-            className={dockButton}
-          >
-            <RefreshCw className={cn('h-4 w-4', reprocessSelectedMutation.isPending && 'animate-spin')} />
-            Describe
-          </button>
-          <button onClick={() => setShowAddToFolder(true)} className={dockButton}>
-            <FolderPlus className="h-4 w-4" />
-            Add to folder
-          </button>
-          {folderId && (
+        {isLoading ? (
+          <div className="flex h-64 items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : isError ? (
+          <div className="flex h-64 flex-col items-center justify-center gap-2 text-center">
+            <p className="font-medium">Couldn&apos;t load these images</p>
+            <p className="max-w-md text-sm text-muted-foreground">{error?.message}</p>
             <button
-              onClick={() => removeFromFolderMutation.mutate(Array.from(selectedIds))}
-              disabled={removeFromFolderMutation.isPending}
+              onClick={() => refetch()}
+              className="mt-1 rounded-md border border-input px-3 py-1.5 text-[13px] font-medium hover:bg-accent"
+            >
+              Try again
+            </button>
+          </div>
+        ) : images.length === 0 ? (
+          <div className="flex h-64 flex-col items-center justify-center gap-1 text-center">
+            <p className="font-medium">No images here</p>
+            <p className="text-sm text-muted-foreground">
+              {activeFilter || source
+                ? 'Nothing matches these filters. Try a different source or status.'
+                : 'Upload images or create some to start your library.'}
+            </p>
+          </div>
+        ) : (
+          <>
+            <div style={{ columnWidth: COLUMN_WIDTH[density], columnGap: 8 }} className="pb-24">
+              {images.map((image) => (
+                <Tile
+                  key={image.id}
+                  image={image}
+                  selected={selectedIds.has(image.id)}
+                  selecting={selecting}
+                  onOpen={() => setOpenImage(image)}
+                  onToggle={() => toggle(image.id)}
+                />
+              ))}
+            </div>
+            <div ref={sentinelRef} className="flex h-10 items-center justify-center">
+              {isFetchingNextPage && <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />}
+            </div>
+          </>
+        )}
+
+        {/* Compact fallback when the inspector is hidden. */}
+        {selecting && !inspectorVisible && (
+          <div
+            role="toolbar"
+            aria-label="Selection actions"
+            className="fixed bottom-5 left-1/2 z-40 flex max-w-[calc(100vw-24px)] -translate-x-1/2 overflow-x-auto items-center gap-0.5 whitespace-nowrap rounded-xl bg-primary p-1.5 text-primary-foreground shadow-[0_18px_40px_-12px_rgb(0_0_0/0.45)]"
+          >
+            <button onClick={clearSelection} className={cn(dockButton, 'px-2')} aria-label="Clear selection">
+              <X className="h-4 w-4" />
+            </button>
+            <span className="px-1.5 text-[13px] font-semibold tabular-nums">{selectedIds.size} selected</span>
+            <span className="mx-1 h-5 w-px bg-primary-foreground/20" />
+            <button
+              onClick={() => setTool('Describe')}
+              disabled={hasBatchRunning}
+              title={
+                hasBatchRunning ? 'A describe job is already running' : 'Tag, describe and embed these images'
+              }
               className={dockButton}
             >
-              <FolderMinus className="h-4 w-4" />
-              Remove from folder
+              <RefreshCw className="h-4 w-4" />
+              Describe
             </button>
+            <button onClick={() => setTool('Add to folder')} className={dockButton}>
+              <FolderPlus className="h-4 w-4" />
+              Add to folder
+            </button>
+            {folderId && (
+              <button onClick={() => setTool('Remove from folder')} className={dockButton}>
+                <FolderMinus className="h-4 w-4" />
+                Remove from folder
+              </button>
+            )}
+            <button
+              className={dockButton}
+              onClick={() => {
+                setToolImages(images.filter((i) => selectedIds.has(i.id)));
+                setMobileInspector(true);
+              }}
+            >
+              More tools
+            </button>
+            <span className="mx-1 h-5 w-px bg-primary-foreground/20" />
+            <button onClick={() => setTool('Delete')} className={dockButton}>
+              <Trash2 className="h-4 w-4" />
+              Delete
+            </button>
+          </div>
+        )}
+
+        {showDescribeAll && folderId && (
+          <DescribeAllDialog
+            folderId={folderId}
+            imageCount={total}
+            onClose={() => setShowDescribeAll(false)}
+            onStarted={(jobId, count) => {
+              setShowDescribeAll(false);
+              toast.success(`Describing ${count} images`, {
+                description: `Job #${jobId}`,
+                action: { label: 'View Jobs', onClick: () => router.push('/jobs') },
+              });
+              queryClient.invalidateQueries({ queryKey: ['jobs'] });
+              queryClient.invalidateQueries({ queryKey: [queryKeyPrefix] });
+            }}
+          />
+        )}
+
+        {openImage && (
+          <ImageDrawer
+            key={openImage.id}
+            image={openImage}
+            images={images}
+            onNavigate={setOpenImage}
+            onTool={(next, image) => {
+              setSelectedIds(new Set([image.id]));
+              setToolImages([image]);
+              setTool(next);
+              // Explicit tool handoffs can open a temporary inspector without changing the saved preference.
+              setMobileInspector(true);
+              setOpenImage(null);
+            }}
+            onClose={() => {
+              setOpenImage(null);
+              const next = new URLSearchParams(searchParams.toString());
+              next.delete('image_id');
+              router.replace(next.size ? `${pathname}?${next}` : pathname);
+            }}
+          />
+        )}
+      </div>
+      {(inspectorVisible || tool || mobileInspector) && (
+        <div
+          className={cn(
+            'sticky top-4 h-[calc(100vh-120px)] w-[340px] shrink-0',
+            !inspectorVisible && 'fixed inset-0 z-50 h-full w-full bg-background sm:left-auto sm:w-[340px]'
           )}
-          <span className="mx-1 h-5 w-px bg-primary-foreground/20" />
-          <button onClick={() => setShowDeleteConfirm(true)} className={dockButton}>
-            <Trash2 className="h-4 w-4" />
-            Delete
-          </button>
+        >
+          <Inspector
+            onDismiss={
+              !inspectorVisible
+                ? () => {
+                    setMobileInspector(false);
+                    setTool(null);
+                    setToolImages(null);
+                  }
+                : undefined
+            }
+            title={title}
+            total={total}
+            images={toolImages ?? images.filter((image) => selectedIds.has(image.id))}
+            tool={tool}
+            onTool={(next) => {
+              setTool(next);
+              if (!next) setToolImages(null);
+            }}
+            onClear={() => {
+              clearSelection();
+              setToolImages(null);
+            }}
+            folderId={folderId}
+            hasBatchRunning={hasBatchRunning}
+            onDispatched={() => {
+              setMobileInspector(false);
+              void queryClient.invalidateQueries({ queryKey: [queryKeyPrefix] });
+            }}
+          />
         </div>
       )}
-
-      {showAddToFolder && (
-        <AddToFolderDialog
-          imageIds={Array.from(selectedIds)}
-          onClose={() => setShowAddToFolder(false)}
-          onDone={() => {
-            setShowAddToFolder(false);
-            clearSelection();
-            queryClient.invalidateQueries({ queryKey: [queryKeyPrefix] });
-          }}
-        />
-      )}
-
-      {showDescribeAll && folderId && (
-        <DescribeAllDialog
-          folderId={folderId}
-          imageCount={total}
-          onClose={() => setShowDescribeAll(false)}
-          onStarted={(jobId, count) => {
-            setShowDescribeAll(false);
-            toast.success(`Describing ${count} images`, {
-              description: `Job #${jobId}`,
-              action: { label: 'View Jobs', onClick: () => router.push('/jobs') },
-            });
-            queryClient.invalidateQueries({ queryKey: ['jobs'] });
-            queryClient.invalidateQueries({ queryKey: [queryKeyPrefix] });
-          }}
-        />
-      )}
-
-      {showDeleteConfirm && (
-        <>
-          <div className="fixed inset-0 z-50 bg-black/50" onClick={() => setShowDeleteConfirm(false)} />
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="w-full max-w-sm space-y-4 rounded-xl bg-card p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
-              <h3 className="text-lg font-semibold">Delete {selectedIds.size} image{selectedIds.size !== 1 ? 's' : ''}?</h3>
-              <p className="text-sm text-muted-foreground">
-                They are removed from your library, folders and clusters. This cannot be undone.
-              </p>
-              <div className="flex justify-end gap-2">
-                <button
-                  onClick={() => setShowDeleteConfirm(false)}
-                  className="rounded-lg border border-border px-4 py-2 text-sm hover:bg-muted"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => {
-                    setShowDeleteConfirm(false);
-                    deleteSelectedMutation.mutate(Array.from(selectedIds));
-                  }}
-                  className="rounded-lg bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700"
-                >
-                  Delete
-                </button>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
-
-      {openImage && <ImageDrawer image={openImage} onClose={() => setOpenImage(null)} />}
     </div>
   );
 }
