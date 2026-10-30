@@ -5,23 +5,50 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { X, ExternalLink, RefreshCw, FolderOpen, Zap, ChevronDown, ChevronUp, Clock } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
-import type { Image, PromptPreset } from '@/types';
-import { imagesApi, jobsApi, settingsApi, billingApi } from '@/lib/api';
+import type { Image } from '@/types';
+import { imagesApi, jobsApi, settingsApi, billingApi, generationApi, editApi } from '@/lib/api';
+import { STATUS_RANK } from '@/lib/pipeline';
 import { cn, formatDate, formatDateCompact, formatFileSize } from '@/lib/utils';
 import ImageCard from './ImageCard';
 import ModelSelector from './ModelSelector';
 import PipelineProgress from './PipelineProgress';
 import { useModelCatalog } from '@/hooks/useModelCatalog';
 import { Slider } from './Slider';
+import { thumbnail, type InspectorTool } from './Inspector';
 
 interface ImageDrawerProps {
   image: Image;
   onClose: () => void;
+  images?: Image[];
+  onNavigate?: (image: Image) => void;
+  onTool?: (tool: InspectorTool, image: Image) => void;
 }
 
-export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
+export default function ImageDrawer({ image, onClose, images, onNavigate, onTool }: ImageDrawerProps) {
+  const [tab, setTab] = useState('Details');
+  const index = images?.findIndex((i) => i.id === image.id) ?? -1;
+  const navigate = useCallback(
+    (delta: number) => {
+      if (index < 0) return;
+      const next = images?.[index + delta];
+      if (next && onNavigate) onNavigate(next);
+    },
+    [images, index, onNavigate]
+  );
+  const { data: generation } = useQuery({
+    queryKey: ['viewer-generation', image.generated_image_id],
+    queryFn: () =>
+      image.source === 'edited'
+        ? editApi.getImage(image.generated_image_id!)
+        : generationApi.getImage(image.generated_image_id!),
+    enabled: !!image.generated_image_id,
+  });
   const { data: catalog } = useModelCatalog();
-  const VISION_MODELS = (catalog?.language ?? []).map((m) => ({ value: m.id, label: m.label, provider: 'fal' }));
+  const VISION_MODELS = (catalog?.language ?? []).map((m) => ({
+    value: m.id,
+    label: m.label,
+    provider: 'fal',
+  }));
   const queryClient = useQueryClient();
   const hasInitModel = useRef(false);
   const [showDescribeDialog, setShowDescribeDialog] = useState(false);
@@ -34,6 +61,53 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
   const [temperature, setTemperature] = useState<number | null>(null);
   const [maxTokensTag, setMaxTokensTag] = useState<number | null>(null);
   const [maxTokensDescribe, setMaxTokensDescribe] = useState<number | null>(null);
+
+  const isViewer = !!images;
+  const viewerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isViewer) return;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    viewerRef.current?.querySelector<HTMLButtonElement>('[data-viewer-close]')?.focus();
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previous;
+      previousFocus?.focus();
+    };
+  }, [isViewer]);
+  useEffect(() => {
+    if (!isViewer) return;
+    const key = (e: KeyboardEvent) => {
+      if (showDescribeDialog) return;
+      if (e.key === 'Tab') {
+        const controls = Array.from(
+          viewerRef.current?.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), a[href], input, textarea, select'
+          ) ?? []
+        ).filter((element) => element.getClientRects().length > 0);
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last?.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first?.focus();
+        }
+      }
+      if ((e.target as HTMLElement).matches('input, textarea, select')) return;
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        navigate(-1);
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        navigate(1);
+      }
+    };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, [isViewer, navigate, showDescribeDialog]);
 
   // Live image data — polls every 3s while processing
   const { data: liveImage } = useQuery({
@@ -48,16 +122,27 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
     queryKey: ['jobs', 'image', image.id],
     queryFn: () => jobsApi.listByImage(image.id),
     refetchInterval: isProcessing ? 3000 : false,
-    enabled: isProcessing,
+    enabled: isProcessing || liveImage.status === 'failed',
   });
+
+  const { data: batches } = useQuery({
+    queryKey: ['jobs'],
+    queryFn: () => jobsApi.list({ limit: 50 }),
+    enabled: showDescribeDialog,
+    refetchInterval: showDescribeDialog ? 5000 : false,
+  });
+  const batchRunning =
+    batches?.items.some(
+      (job) =>
+        ['batch_reprocess', 'batch_describe'].includes(job.job_type) &&
+        ['running', 'pending'].includes(job.status)
+    ) ?? false;
 
   // Detect completion from job polling
   useEffect(() => {
     if (!isProcessing || !imageJobs) return;
 
-    const activeJobs = imageJobs.items.filter(
-      (j) => j.status === 'pending' || j.status === 'running'
-    );
+    const activeJobs = imageJobs.items.filter((j) => j.status === 'pending' || j.status === 'running');
 
     if (activeJobs.length === 0 && imageJobs.items.length > 0) {
       const failedJobs = imageJobs.items.filter((j) => j.status === 'failed');
@@ -78,8 +163,7 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
   const { data: similarImages } = useQuery({
     queryKey: ['similar-images', image.id],
     queryFn: () => imagesApi.getSimilar(image.id, 6),
-    enabled:
-      liveImage.status === 'embedded' || liveImage.status === 'clustered',
+    enabled: liveImage.status === 'embedded' || liveImage.status === 'clustered',
   });
 
   const { data: imageFolders } = useQuery({
@@ -113,7 +197,10 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
   });
 
   // Per-image processing costs — only fetch when drawer is open and image has been processed
-  const hasProcessing = liveImage.metadata?.tagging_model || liveImage.metadata?.caption_model || liveImage.metadata?.embedding_model;
+  const hasProcessing =
+    liveImage.metadata?.tagging_model ||
+    liveImage.metadata?.caption_model ||
+    liveImage.metadata?.embedding_model;
   const { data: processingCosts } = useQuery({
     queryKey: ['processing-costs', image.id],
     queryFn: () => imagesApi.getProcessingCosts(image.id),
@@ -126,7 +213,9 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
     if (providerConfig && catalog && !hasInitModel.current) {
       hasInitModel.current = true;
       const modelId = providerConfig.fal_vision_model;
-      setSelectedModel(catalog?.language.some((m) => m.id === modelId) ? modelId : (catalog?.defaults.vision_model ?? ''));
+      setSelectedModel(
+        catalog?.language.some((m) => m.id === modelId) ? modelId : (catalog?.defaults.vision_model ?? '')
+      );
     }
   }, [providerConfig, catalog]);
 
@@ -141,7 +230,15 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
       max_tokens_describe?: number;
     }) => imagesApi.reprocess(image.id, options),
     onSuccess: (data) => {
-      toast.success('Describe started', { description: `Job #${data.job_id}` });
+      toast.success('Describe started', {
+        description: `Job #${data.job_id}`,
+        action: {
+          label: 'View Jobs',
+          onClick: () => {
+            window.location.href = '/jobs';
+          },
+        },
+      });
       setIsProcessing(true);
       setStaleSteps([]);
       setShowDescribeDialog(false);
@@ -159,7 +256,9 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
     // Reset model to configured default
     if (providerConfig) {
       const modelId = providerConfig.fal_vision_model;
-      setSelectedModel(catalog?.language.some((m) => m.id === modelId) ? modelId : (catalog?.defaults.vision_model ?? ''));
+      setSelectedModel(
+        catalog?.language.some((m) => m.id === modelId) ? modelId : (catalog?.defaults.vision_model ?? '')
+      );
       // Init advanced params from settings
       setTemperature(providerConfig.vision_temperature ?? 1.0);
       setMaxTokensTag(providerConfig.max_tokens_tagging ?? 1000);
@@ -203,11 +302,12 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
     if (!provCosts) return null;
     const modelCosts = provCosts[selectedModel];
     if (!modelCosts) return null;
-    return modelCosts.total || ((modelCosts.tag || 0) + (modelCosts.describe || 0));
+    return modelCosts.total || (modelCosts.tag || 0) + (modelCosts.describe || 0);
   };
   const describeCost = getDescribeCost();
 
   const handleDescribeSubmit = () => {
+    setShowDescribeDialog(false);
     reprocessMutation.mutate({
       description_prompt: descriptionPrompt || undefined,
       tag_prompt: tagPrompt || undefined,
@@ -216,6 +316,25 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
       max_tokens_tag: maxTokensTag ?? undefined,
       max_tokens_describe: maxTokensDescribe ?? undefined,
     });
+  };
+
+  const download = async () => {
+    const notice = toast.loading('Preparing download');
+    try {
+      const response = await fetch(imagesApi.getImageUrl(liveImage.object_key));
+      if (!response.ok) throw new Error('Download request failed');
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = liveImage.original_filename || `image-${liveImage.id}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast.dismiss(notice);
+    } catch {
+      toast.error('Could not download image. Try opening the original.', { id: notice });
+    }
   };
 
   const imageUrl = imagesApi.getImageUrl(liveImage.object_key);
@@ -227,245 +346,435 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
       <div className="fixed inset-0 bg-black/50 z-40" onClick={onClose} />
 
       {/* Drawer */}
-      <div className="fixed inset-y-0 right-0 w-full max-w-xl bg-card shadow-xl z-50 overflow-y-auto">
-        {/* Header */}
-        <div className="sticky top-0 bg-card border-b border-border px-6 py-4 flex items-center justify-between">
-          <h2 className="font-semibold truncate">
-            {liveImage.original_filename || liveImage.object_key}
-          </h2>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-muted rounded-lg transition-colors"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        <div className="p-6 space-y-6">
-          {/* Image */}
-          <div className="rounded-lg overflow-hidden bg-muted">
-            <img
-              src={imageUrl}
-              alt={liveImage.original_filename || ''}
-              className="w-full h-auto"
-            />
+      <div
+        ref={viewerRef}
+        role={images ? 'dialog' : undefined}
+        aria-modal={images ? true : undefined}
+        aria-label={images ? 'Image viewer' : undefined}
+        className={
+          images
+            ? 'fixed inset-0 z-50 flex bg-background'
+            : 'fixed inset-y-0 right-0 w-full max-w-xl bg-card shadow-xl z-50 overflow-y-auto'
+        }
+      >
+        {images && (
+          <div className="relative flex min-w-0 flex-1 flex-col bg-chrome p-4 max-md:hidden">
+            <div className="flex min-h-0 flex-1 items-center justify-center">
+              <img
+                src={imageUrl}
+                alt={image.original_filename || ''}
+                className="max-h-[calc(100vh-120px)] max-w-full object-contain"
+              />
+            </div>
+            <div className="flex items-center justify-center gap-2 pt-3">
+              <button
+                aria-label="Previous image"
+                disabled={index <= 0}
+                onClick={() => navigate(-1)}
+                className="p-2 disabled:opacity-30"
+              >
+                ←
+              </button>
+              {images.slice(Math.max(0, index - 4), Math.max(0, index - 4) + 9).map((item) => (
+                <button
+                  key={item.id}
+                  aria-label={`View image ${item.id}`}
+                  onClick={() => onNavigate?.(item)}
+                  className={cn(
+                    'rounded border-2',
+                    item.id === image.id ? 'border-selection' : 'border-transparent'
+                  )}
+                >
+                  <img src={thumbnail(item)} alt="" className="h-12 w-12 rounded object-cover" />
+                </button>
+              ))}
+              <button
+                aria-label="Next image"
+                disabled={index < 0 || index >= images.length - 1}
+                onClick={() => navigate(1)}
+                className="p-2 disabled:opacity-30"
+              >
+                →
+              </button>
+            </div>
           </div>
-
-          {/* Pipeline Status */}
-          <PipelineProgress
-            status={liveImage.status}
-            variant="full"
-            staleSteps={staleSteps}
-          />
-
-          {/* Actions */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <a
-              href={imageUrl}
-              target="_blank"
-              rel="noopener noreferrer"
+        )}
+        <div
+          className={
+            images ? 'flex w-[380px] max-w-full shrink-0 flex-col border-l border-border max-md:w-full' : ''
+          }
+        >
+          {/* Header */}
+          <div className="sticky top-0 bg-card border-b border-border px-6 py-4 flex items-center justify-between">
+            <h2 className="font-semibold truncate">{liveImage.original_filename || liveImage.object_key}</h2>
+            <button
+              data-viewer-close
+              aria-label="Close viewer"
+              onClick={onClose}
               className="p-2 hover:bg-muted rounded-lg transition-colors"
             >
-              <ExternalLink className="h-4 w-4" />
-            </a>
-            <button
-              onClick={() => setShowDescribeDialog(true)}
-              disabled={isProcessing}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
-            >
-              <RefreshCw className={cn('h-4 w-4', isProcessing && 'animate-spin')} />
-              {isProcessing ? 'Processing...' : 'Describe'}
+              <X className="h-5 w-5" />
             </button>
           </div>
 
-          {/* Folders */}
-          {imageFolders && imageFolders.length > 0 && (
-            <div>
-              <h3 className="text-sm font-medium text-muted-foreground mb-2">
-                Folders
-              </h3>
-              <div className="flex flex-wrap gap-1">
-                {imageFolders.map((f) => (
-                  <Link
-                    key={f.id}
-                    href={`/images/folder/${f.id}`}
-                    onClick={onClose}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 bg-muted rounded-full text-xs hover:bg-muted/80 transition-colors"
+          {images && (
+            <div className="flex items-center justify-between border-b border-border px-4 py-2 text-sm md:hidden">
+              <button aria-label="Previous image" disabled={index <= 0} onClick={() => navigate(-1)}>
+                ← Previous
+              </button>
+              <span>{index >= 0 ? `${index + 1} / ${images.length}` : 'Linked image'}</span>
+              <button
+                aria-label="Next image"
+                disabled={index < 0 || index >= images.length - 1}
+                onClick={() => navigate(1)}
+              >
+                Next →
+              </button>
+            </div>
+          )}
+          {images && (
+            <div role="tablist" aria-label="Image information" className="flex border-b border-border">
+              {['Details', 'Tags', 'Description'].map((name) => (
+                <button
+                  key={name}
+                  role="tab"
+                  aria-selected={tab === name}
+                  onClick={() => setTab(name)}
+                  className={cn('flex-1 p-3 text-sm', tab === name && 'border-b-2 border-selection')}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="p-6 space-y-6 overflow-y-auto flex-1">
+            {(!images || tab === 'Details') && (
+              <>
+                {generation && (
+                  <div className="space-y-2 text-sm">
+                    <h3 className="font-medium">Generation</h3>
+                    <p>{generation.base_model}</p>
+                    <p className="whitespace-pre-wrap">{generation.prompt}</p>
+                    {generation.lora_model_id && (
+                      <p>LoRA: {generation.lora_model_name || `#${generation.lora_model_id}`}</p>
+                    )}
+                  </div>
+                )}
+                {images && (
+                  <div className="grid grid-cols-5 gap-1">
+                    {['ingested', 'tagged', 'described', 'embedded', 'clustered'].map((step) => {
+                      const current = STATUS_RANK[liveImage.status] ?? -1;
+                      return (
+                        <div key={step} title={step} className="text-[9px] text-muted-foreground">
+                          <div
+                            className={cn(
+                              'mb-1 h-1 rounded',
+                              liveImage.status === 'failed'
+                                ? 'bg-danger'
+                                : current >= (STATUS_RANK[step] ?? 100)
+                                  ? 'bg-success'
+                                  : 'bg-muted'
+                            )}
+                          />
+                          {step}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {liveImage.status === 'failed' && (
+                  <p className="text-sm text-danger">
+                    {liveImage.error_message ||
+                      imageJobs?.items.find((job) => job.status === 'failed')?.error_message ||
+                      'Processing failed. See Jobs for error details.'}
+                  </p>
+                )}
+                {/* Image */}
+                <div className={cn('rounded-lg overflow-hidden bg-muted', images && 'md:hidden')}>
+                  <img src={imageUrl} alt={liveImage.original_filename || ''} className="w-full h-auto" />
+                </div>
+
+                {/* Pipeline Status */}
+                {!images && (
+                  <PipelineProgress status={liveImage.status} variant="full" staleSteps={staleSteps} />
+                )}
+
+                {/* Actions */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <a
+                    href={imageUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2 hover:bg-muted rounded-lg transition-colors"
                   >
-                    <FolderOpen className="h-3 w-3" />
-                    {f.name}
-                  </Link>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Description */}
-          {liveImage.metadata?.description_long && (
-            <div>
-              <h3 className="text-sm font-medium text-muted-foreground mb-1">
-                Description
-              </h3>
-              <div className="text-sm whitespace-pre-line">
-                {liveImage.metadata.description_long}
-              </div>
-            </div>
-          )}
-
-          {/* Tags */}
-          {tags.length > 0 && (
-            <div>
-              <h3 className="text-sm font-medium text-muted-foreground mb-2">
-                Tags
-              </h3>
-              <div className="flex flex-wrap gap-1">
-                {tags.map((tag) => (
-                  <span
-                    key={tag}
-                    className="px-2 py-0.5 bg-muted rounded-full text-xs"
+                    <ExternalLink className="h-4 w-4" />
+                  </a>
+                  <button
+                    onClick={() => setShowDescribeDialog(true)}
+                    disabled={isProcessing}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
                   >
-                    {tag}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
+                    <RefreshCw className={cn('h-4 w-4', isProcessing && 'animate-spin')} />
+                    {isProcessing ? 'Processing...' : 'Describe'}
+                  </button>
+                </div>
 
-          {/* Metadata */}
-          <div>
-            <h3 className="text-sm font-medium text-muted-foreground mb-2">
-              Details
-            </h3>
-            <dl className="grid grid-cols-2 gap-2 text-sm">
-              <dt className="text-muted-foreground">Dimensions</dt>
-              <dd>
-                {liveImage.width && liveImage.height
-                  ? `${liveImage.width} × ${liveImage.height}`
-                  : 'N/A'}
-              </dd>
-              <dt className="text-muted-foreground">File Size</dt>
-              <dd>{formatFileSize(liveImage.file_size)}</dd>
-              <dt className="text-muted-foreground">Source</dt>
-              <dd className="capitalize">
-                {liveImage.source.replace('_', ' ')}
-              </dd>
-              <dt className="text-muted-foreground">Ingested</dt>
-              <dd>{formatDate(liveImage.ingested_at)}</dd>
-            </dl>
+                {/* Folders */}
+                {imageFolders && imageFolders.length > 0 && (
+                  <div>
+                    <h3 className="text-sm font-medium text-muted-foreground mb-2">Folders</h3>
+                    <div className="flex flex-wrap gap-1">
+                      {imageFolders.map((f) => (
+                        <Link
+                          key={f.id}
+                          href={`/images/folder/${f.id}`}
+                          onClick={onClose}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 bg-muted rounded-full text-xs hover:bg-muted/80 transition-colors"
+                        >
+                          <FolderOpen className="h-3 w-3" />
+                          {f.name}
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+            {(!images || tab === 'Description') && (
+              <>
+                {/* Description */}
+                {!liveImage.metadata?.description_long && (
+                  <p className="text-sm text-muted-foreground">No description yet.</p>
+                )}
+                {liveImage.metadata?.description_long && (
+                  <div>
+                    <h3 className="text-sm font-medium text-muted-foreground mb-1">Description</h3>
+                    <div className="text-sm whitespace-pre-line">{liveImage.metadata.description_long}</div>
+                  </div>
+                )}
+              </>
+            )}
+            {(!images || tab === 'Tags') && (
+              <>
+                {/* Tags */}
+                {!tags.length && (
+                  <p className="text-sm text-muted-foreground">
+                    No tags yet. Describe this image to add tags.
+                  </p>
+                )}
+                {tags.length > 0 && (
+                  <div>
+                    <h3 className="text-sm font-medium text-muted-foreground mb-2">Tags</h3>
+                    <div className="flex flex-wrap gap-1">
+                      {tags.map((tag) => (
+                        <span key={tag} className="px-2 py-0.5 bg-muted rounded-full text-xs">
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+            {(!images || tab === 'Details') && (
+              <>
+                {/* Metadata */}
+                <div>
+                  <h3 className="text-sm font-medium text-muted-foreground mb-2">Details</h3>
+                  <dl className="grid grid-cols-2 gap-2 text-sm">
+                    <dt className="text-muted-foreground">Dimensions</dt>
+                    <dd>
+                      {liveImage.width && liveImage.height
+                        ? `${liveImage.width} × ${liveImage.height}`
+                        : 'N/A'}
+                    </dd>
+                    <dt className="text-muted-foreground">File Size</dt>
+                    <dd>{formatFileSize(liveImage.file_size)}</dd>
+                    <dt className="text-muted-foreground">Source</dt>
+                    <dd className="capitalize">{liveImage.source.replace('_', ' ')}</dd>
+                    <dt className="text-muted-foreground">Ingested</dt>
+                    <dd>{formatDate(liveImage.ingested_at)}</dd>
+                    <dt className="text-muted-foreground">Created</dt>
+                    <dd>{formatDate(liveImage.created_at)}</dd>
+                  </dl>
+                </div>
+
+                {/* Processing Info */}
+                {hasProcessing && (
+                  <div>
+                    <h3 className="text-sm font-medium text-muted-foreground mb-2">Processing Info</h3>
+                    <div className="rounded-lg border border-border overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-border bg-muted/50">
+                            <th className="text-left px-3 py-1.5 font-medium text-muted-foreground">Step</th>
+                            <th className="text-left px-3 py-1.5 font-medium text-muted-foreground">Model</th>
+                            <th className="text-right px-3 py-1.5 font-medium text-muted-foreground">Time</th>
+                            <th className="text-right px-3 py-1.5 font-medium text-muted-foreground">Cost</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {liveImage.metadata?.tagging_model && (
+                            <tr className="border-b border-border/50">
+                              <td className="px-3 py-1.5">Tag</td>
+                              <td className="px-3 py-1.5 font-mono text-muted-foreground">
+                                {liveImage.metadata.tagging_model}
+                              </td>
+                              <td className="px-3 py-1.5 text-right text-muted-foreground">
+                                {liveImage.metadata.tagging_duration_ms != null
+                                  ? `${(liveImage.metadata.tagging_duration_ms / 1000).toFixed(1)}s`
+                                  : '-'}
+                              </td>
+                              <td className="px-3 py-1.5 text-right">
+                                {processingCosts?.operations.find((o) => o.operation === 'tag') ? (
+                                  <span className="inline-flex items-center gap-0.5 text-warning">
+                                    <Zap className="h-3 w-3" />
+                                    {processingCosts.operations
+                                      .find((o) => o.operation === 'tag')!
+                                      .sparks.toFixed(2)}
+                                  </span>
+                                ) : (
+                                  <span className="text-muted-foreground">-</span>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                          {liveImage.metadata?.caption_model && (
+                            <tr className="border-b border-border/50">
+                              <td className="px-3 py-1.5">Describe</td>
+                              <td className="px-3 py-1.5 font-mono text-muted-foreground">
+                                {liveImage.metadata.caption_model}
+                              </td>
+                              <td className="px-3 py-1.5 text-right text-muted-foreground">
+                                {liveImage.metadata.caption_duration_ms != null
+                                  ? `${(liveImage.metadata.caption_duration_ms / 1000).toFixed(1)}s`
+                                  : '-'}
+                              </td>
+                              <td className="px-3 py-1.5 text-right">
+                                {processingCosts?.operations.find((o) => o.operation === 'describe') ? (
+                                  <span className="inline-flex items-center gap-0.5 text-warning">
+                                    <Zap className="h-3 w-3" />
+                                    {processingCosts.operations
+                                      .find((o) => o.operation === 'describe')!
+                                      .sparks.toFixed(2)}
+                                  </span>
+                                ) : (
+                                  <span className="text-muted-foreground">-</span>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                          {liveImage.metadata?.embedding_model && (
+                            <tr className="border-b border-border/50">
+                              <td className="px-3 py-1.5">Embed</td>
+                              <td className="px-3 py-1.5 font-mono text-muted-foreground">
+                                {liveImage.metadata.embedding_model}
+                              </td>
+                              <td className="px-3 py-1.5 text-right text-muted-foreground">
+                                {liveImage.metadata.embedding_duration_ms != null
+                                  ? `${(liveImage.metadata.embedding_duration_ms / 1000).toFixed(1)}s`
+                                  : '-'}
+                              </td>
+                              <td className="px-3 py-1.5 text-right">
+                                {processingCosts?.operations.find((o) => o.operation === 'embed') ? (
+                                  <span className="inline-flex items-center gap-0.5 text-warning">
+                                    <Zap className="h-3 w-3" />
+                                    {processingCosts.operations
+                                      .find((o) => o.operation === 'embed')!
+                                      .sparks.toFixed(2)}
+                                  </span>
+                                ) : (
+                                  <span className="text-muted-foreground">-</span>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                        {processingCosts && processingCosts.total_sparks > 0 && (
+                          <tfoot>
+                            <tr className="bg-muted/30">
+                              <td colSpan={3} className="px-3 py-1.5 text-right font-medium">
+                                Total
+                              </td>
+                              <td className="px-3 py-1.5 text-right">
+                                <span className="inline-flex items-center gap-0.5 font-medium text-warning">
+                                  <Zap className="h-3 w-3" />
+                                  {processingCosts.total_sparks.toFixed(2)}
+                                </span>
+                              </td>
+                            </tr>
+                          </tfoot>
+                        )}
+                      </table>
+                    </div>
+                    {/* Processed timestamp */}
+                    {(liveImage.metadata?.embedded_at ||
+                      liveImage.metadata?.described_at ||
+                      liveImage.metadata?.tagged_at) && (
+                      <p className="text-xs text-muted-foreground mt-1.5 flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        Processed{' '}
+                        {formatDateCompact(
+                          liveImage.metadata.embedded_at ||
+                            liveImage.metadata.described_at ||
+                            liveImage.metadata.tagged_at
+                        )}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Similar Images */}
+                {similarImages && similarImages.length > 0 && (
+                  <div>
+                    <h3 className="text-sm font-medium text-muted-foreground mb-2">Similar Images</h3>
+                    <div className="grid grid-cols-3 gap-2">
+                      {similarImages.map((img) =>
+                        images && onNavigate ? (
+                          <button
+                            key={img.id}
+                            aria-label={`View similar image ${img.id}`}
+                            onClick={() => onNavigate(img)}
+                          >
+                            <img
+                              src={thumbnail(img)}
+                              alt={img.original_filename || ''}
+                              className="aspect-square w-full rounded object-cover"
+                            />
+                          </button>
+                        ) : (
+                          <ImageCard key={img.id} image={img} />
+                        )
+                      )}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
-
-          {/* Processing Info */}
-          {hasProcessing && (
-            <div>
-              <h3 className="text-sm font-medium text-muted-foreground mb-2">
-                Processing Info
-              </h3>
-              <div className="rounded-lg border border-border overflow-hidden">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b border-border bg-muted/50">
-                      <th className="text-left px-3 py-1.5 font-medium text-muted-foreground">Step</th>
-                      <th className="text-left px-3 py-1.5 font-medium text-muted-foreground">Model</th>
-                      <th className="text-right px-3 py-1.5 font-medium text-muted-foreground">Time</th>
-                      <th className="text-right px-3 py-1.5 font-medium text-muted-foreground">Cost</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {liveImage.metadata?.tagging_model && (
-                      <tr className="border-b border-border/50">
-                        <td className="px-3 py-1.5">Tag</td>
-                        <td className="px-3 py-1.5 font-mono text-muted-foreground">{liveImage.metadata.tagging_model}</td>
-                        <td className="px-3 py-1.5 text-right text-muted-foreground">
-                          {liveImage.metadata.tagging_duration_ms != null
-                            ? `${(liveImage.metadata.tagging_duration_ms / 1000).toFixed(1)}s`
-                            : '-'}
-                        </td>
-                        <td className="px-3 py-1.5 text-right">
-                          {processingCosts?.operations.find(o => o.operation === 'tag')
-                            ? <span className="inline-flex items-center gap-0.5 text-amber-600 dark:text-amber-400">
-                                <Zap className="h-3 w-3" />
-                                {processingCosts.operations.find(o => o.operation === 'tag')!.sparks.toFixed(2)}
-                              </span>
-                            : <span className="text-muted-foreground">-</span>}
-                        </td>
-                      </tr>
+          {images && onTool && (
+            <footer className="flex flex-wrap gap-2 border-t border-border bg-background p-3">
+              {(['Edit', 'Describe', 'Ask Vision', 'Add to folder', 'Delete'] as InspectorTool[]).map(
+                (tool) => (
+                  <button
+                    key={tool}
+                    onClick={() => onTool(tool, liveImage)}
+                    className={cn(
+                      'rounded border border-border px-2 py-1.5 text-xs hover:bg-accent',
+                      tool === 'Delete' && 'text-danger'
                     )}
-                    {liveImage.metadata?.caption_model && (
-                      <tr className="border-b border-border/50">
-                        <td className="px-3 py-1.5">Describe</td>
-                        <td className="px-3 py-1.5 font-mono text-muted-foreground">{liveImage.metadata.caption_model}</td>
-                        <td className="px-3 py-1.5 text-right text-muted-foreground">
-                          {liveImage.metadata.caption_duration_ms != null
-                            ? `${(liveImage.metadata.caption_duration_ms / 1000).toFixed(1)}s`
-                            : '-'}
-                        </td>
-                        <td className="px-3 py-1.5 text-right">
-                          {processingCosts?.operations.find(o => o.operation === 'describe')
-                            ? <span className="inline-flex items-center gap-0.5 text-amber-600 dark:text-amber-400">
-                                <Zap className="h-3 w-3" />
-                                {processingCosts.operations.find(o => o.operation === 'describe')!.sparks.toFixed(2)}
-                              </span>
-                            : <span className="text-muted-foreground">-</span>}
-                        </td>
-                      </tr>
-                    )}
-                    {liveImage.metadata?.embedding_model && (
-                      <tr className="border-b border-border/50">
-                        <td className="px-3 py-1.5">Embed</td>
-                        <td className="px-3 py-1.5 font-mono text-muted-foreground">{liveImage.metadata.embedding_model}</td>
-                        <td className="px-3 py-1.5 text-right text-muted-foreground">
-                          {liveImage.metadata.embedding_duration_ms != null
-                            ? `${(liveImage.metadata.embedding_duration_ms / 1000).toFixed(1)}s`
-                            : '-'}
-                        </td>
-                        <td className="px-3 py-1.5 text-right">
-                          {processingCosts?.operations.find(o => o.operation === 'embed')
-                            ? <span className="inline-flex items-center gap-0.5 text-amber-600 dark:text-amber-400">
-                                <Zap className="h-3 w-3" />
-                                {processingCosts.operations.find(o => o.operation === 'embed')!.sparks.toFixed(2)}
-                              </span>
-                            : <span className="text-muted-foreground">-</span>}
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                  {processingCosts && processingCosts.total_sparks > 0 && (
-                    <tfoot>
-                      <tr className="bg-muted/30">
-                        <td colSpan={3} className="px-3 py-1.5 text-right font-medium">Total</td>
-                        <td className="px-3 py-1.5 text-right">
-                          <span className="inline-flex items-center gap-0.5 font-medium text-amber-600 dark:text-amber-400">
-                            <Zap className="h-3 w-3" />
-                            {processingCosts.total_sparks.toFixed(2)}
-                          </span>
-                        </td>
-                      </tr>
-                    </tfoot>
-                  )}
-                </table>
-              </div>
-              {/* Processed timestamp */}
-              {(liveImage.metadata?.embedded_at || liveImage.metadata?.described_at || liveImage.metadata?.tagged_at) && (
-                <p className="text-xs text-muted-foreground mt-1.5 flex items-center gap-1">
-                  <Clock className="h-3 w-3" />
-                  Processed {formatDateCompact(liveImage.metadata.embedded_at || liveImage.metadata.described_at || liveImage.metadata.tagged_at)}
-                </p>
+                  >
+                    {tool === 'Ask Vision' ? 'Ask' : tool}
+                  </button>
+                )
               )}
-            </div>
-          )}
-
-          {/* Similar Images */}
-          {similarImages && similarImages.length > 0 && (
-            <div>
-              <h3 className="text-sm font-medium text-muted-foreground mb-2">
-                Similar Images
-              </h3>
-              <div className="grid grid-cols-3 gap-2">
-                {similarImages.map((img) => (
-                  <ImageCard key={img.id} image={img} />
-                ))}
-              </div>
-            </div>
+              <button
+                onClick={() => void download()}
+                className="rounded border border-border px-2 py-1.5 text-xs"
+              >
+                Download
+              </button>
+            </footer>
           )}
         </div>
       </div>
@@ -473,16 +782,14 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
       {/* Describe Dialog */}
       {showDescribeDialog && (
         <>
-          <div
-            className="fixed inset-0 bg-black/50 z-50"
-            onClick={() => setShowDescribeDialog(false)}
-          />
+          <div className="fixed inset-0 bg-black/50 z-50" onClick={() => setShowDescribeDialog(false)} />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div
               className="bg-card rounded-xl shadow-xl max-w-2xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
               <h3 className="text-lg font-semibold">Describe Image</h3>
+              {batchRunning && <p className="text-sm text-warning">A describe batch is already running.</p>}
               <p className="text-sm text-muted-foreground">
                 Tag, describe, and embed this image using the selected vision model.
               </p>
@@ -501,10 +808,13 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
                       }
                     }}
                   >
-                    <option value="" disabled>Load from preset...</option>
+                    <option value="" disabled>
+                      Load from preset...
+                    </option>
                     {presets.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.name}{p.is_default ? ' (active)' : ''}
+                        {p.name}
+                        {p.is_default ? ' (active)' : ''}
                       </option>
                     ))}
                   </select>
@@ -520,9 +830,7 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
               />
 
               <div>
-                <label className="block text-sm font-medium mb-2">
-                  Tag Instructions
-                </label>
+                <label className="block text-sm font-medium mb-2">Tag Instructions</label>
                 <textarea
                   value={tagPrompt}
                   onChange={(e) => setTagPrompt(e.target.value)}
@@ -531,9 +839,7 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-2">
-                  Description Instructions
-                </label>
+                <label className="block text-sm font-medium mb-2">Description Instructions</label>
                 <textarea
                   value={descriptionPrompt}
                   onChange={(e) => setDescriptionPrompt(e.target.value)}
@@ -609,9 +915,8 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
 
               <div className="flex items-center gap-2 justify-end">
                 {describeCost !== null && describeCost > 0 && (
-                  <span className="inline-flex items-center gap-0.5 text-xs text-amber-600 dark:text-amber-400 mr-auto">
-                    <Zap className="h-3 w-3" />
-                    ~{Math.round(describeCost)} sparks
+                  <span className="inline-flex items-center gap-0.5 text-xs text-warning mr-auto">
+                    <Zap className="h-3 w-3" />~{Math.round(describeCost)} sparks
                   </span>
                 )}
                 <button
@@ -622,7 +927,7 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
                 </button>
                 <button
                   onClick={handleDescribeSubmit}
-                  disabled={reprocessMutation.isPending || !catalog || !selectedModel}
+                  disabled={reprocessMutation.isPending || !catalog || !selectedModel || batchRunning}
                   className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
                 >
                   {reprocessMutation.isPending ? 'Starting...' : 'Describe'}
