@@ -218,8 +218,12 @@ api.interceptors.response.use(
       return Promise.reject(error);
     }
 
-    if (error.response?.data?.detail) {
-      error.message = error.response.data.detail;
+    const detail = error.response?.data?.detail;
+    if (typeof detail === 'string') {
+      error.message = detail;
+    } else if (Array.isArray(detail)) {
+      // FastAPI 422 validation errors: [{type, loc, msg, input}, ...]
+      error.message = detail.map((d: { msg?: string }) => d?.msg ?? String(d)).join('; ');
     }
     return Promise.reject(error);
   }

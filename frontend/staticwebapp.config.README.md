@@ -29,3 +29,11 @@ Next.js hydration corrects the page component almost immediately.
 Routes with a single trailing wildcard work (`/section/*`). If you need a
 new nested dynamic route like `/section/[a]/subsection/[b]`, you'll hit the
 same constraint — use a `/section/*` catch-all and rely on client-side routing.
+
+## List pages need exact routes above their catch-alls
+
+A `/section/*` wildcard also matches the bare `/section` path. Without an exact
+route listed first, `/models` and `/clusters` were served the *detail* page shell,
+which then fetched `/evaluations/NaN` or `/clusters/NaN` (422) and broke the page.
+Any section that has both a list page and a `/section/*` catch-all needs
+`{ "route": "/section", "rewrite": "/section.html" }` above the wildcard.

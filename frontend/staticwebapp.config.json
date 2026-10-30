@@ -1,5 +1,7 @@
 {
   "routes": [
+    { "route": "/clusters", "rewrite": "/clusters.html" },
+    { "route": "/models", "rewrite": "/models.html" },
     { "route": "/clusters/*.txt", "rewrite": "/clusters/_.txt" },
     { "route": "/clusters/*", "rewrite": "/clusters/_.html" },
     { "route": "/images/folder/*.txt", "rewrite": "/images/folder/_.txt" },
