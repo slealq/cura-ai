@@ -13,7 +13,7 @@ python -m pip install -c constraints.txt -c constraints-dev.txt -e ".[dev]"
 python -m pip check
 python -c "import app.db.base; print(app.db.base.engine.dialect.driver)"
 ruff check .
-pytest tests/test_fal_generator.py tests/test_fal_editor.py tests/test_dispatch.py tests/test_cost_calculator.py tests/test_no_retry_decorators.py tests/test_model_registry_drift.py tests/test_cluster_service_enum_guard.py tests/test_clustering_small_n.py tests/test_model_catalog_schema.py tests/test_model_catalog_billing_drift.py tests/test_model_catalog_settings.py tests/test_fal_language_routing.py tests/test_removed_models_rejected.py tests/test_migration_055.py -v
+pytest tests/test_fal_generator.py tests/test_fal_editor.py tests/test_dispatch.py tests/test_cost_calculator.py tests/test_no_retry_decorators.py tests/test_model_registry_drift.py tests/test_cluster_service_enum_guard.py tests/test_clustering_small_n.py tests/test_model_catalog_schema.py tests/test_model_catalog_billing_drift.py tests/test_model_catalog_settings.py tests/test_fal_language_routing.py tests/test_removed_models_rejected.py tests/test_migration_055.py tests/test_library_generated_images.py tests/test_generated_image_deletion.py tests/test_empty_cluster_cleanup.py tests/test_stuck_job_reconciliation.py tests/test_discord_job_alerts.py -v
 ```
 
 ## Tier 1 — hermetic, every PR
@@ -35,6 +35,7 @@ This tier is for pure functions and services, plus carefully mocked provider and
 - `test_model_catalog_settings.py` — provider-config defaults and self-healing of stale stored models, the `/settings/model-catalog` payload, and the decision snapshot used by the pricing-engine fallback.
 - `test_fal_language_routing.py` — router endpoint choice (`openrouter/router` vs `/vision`), temperature handling per model, `FalClusterSummarizer`, and the `expand_prompt` / `suggest_prompt` routes with fal and billing mocked.
 - `test_removed_models_rejected.py` — removed/unknown models are rejected by the generation, edit, and vision APIs and by the providers; LoRA safety; table-driven pricing per option.
+- `test_library_generated_images.py` — finished generations/edits are copied into the image library through the upload path (`generated`/`edited` source, linked by `generated_image_id`); skips already-linked and duplicate files, never fails the generation, and survives an ingest-dispatch failure.
 - `test_migration_055.py` — runs migration 055's upgrade/downgrade/upgrade against in-memory SQLite (seeding, deactivation, user-settings rewrite); it does not cover Postgres itself.
 - `test_no_retry_decorators.py` — imports every non-recursive `app.providers` module and guards against tenacity imports, public methods carrying tenacity's `retry` wrapper attribute, and source-level `@retry` decorators. The policy is to surface provider failures immediately rather than silently multiply API cost.
 

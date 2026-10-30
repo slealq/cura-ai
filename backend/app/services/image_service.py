@@ -352,9 +352,12 @@ class ImageService:
         min_status: ImageStatus | None = None,
         max_status: ImageStatus | None = None,
         in_folder: bool | None = None,
+        source: ImageSource | None = None,
     ) -> int:
         """Count images with optional status filter."""
         query = self.db.query(Image).filter(Image.user_id == self.user_id)
+        if source:
+            query = query.filter(Image.source == source)
         if status:
             query = query.filter(Image.status == status)
         elif min_status:

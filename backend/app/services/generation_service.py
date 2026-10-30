@@ -233,7 +233,48 @@ class GenerationService:
 
         self.db.commit()
         self.db.refresh(gen)
+
+        await self.add_to_library(gen, image_data)
         return gen
+
+    async def add_to_library(self, gen: GeneratedImage, image_data: bytes):
+        """Copy a finished generation or edit into the image library.
+
+        The library image gets its own copy of the file (via the normal upload
+        path) so every library tool works on it and it outlives the generation.
+        Best effort: a failure here never fails the generation itself.
+        Returns the new Image, or None if skipped or failed.
+        """
+        from app.models.image import Image, ImageSource
+        from app.services.image_service import get_image_service
+
+        try:
+            if self.db.query(Image.id).filter(Image.generated_image_id == gen.id).first():
+                return None
+            is_edit = (gen.generation_params or {}).get("mode") == "edit"
+            source = ImageSource.EDITED if is_edit else ImageSource.GENERATED
+            image = await get_image_service(self.db, gen.user_id).fast_ingest(
+                file_data=image_data,
+                filename=f"{source.value}-{gen.id}.png",
+                source=source,
+            )
+            if image is None:
+                # Identical file is already in the library
+                return None
+            image.generated_image_id = gen.id
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            logger.warning("Failed to add generated image %s to the library", gen.id, exc_info=True)
+            return None
+
+        try:
+            from app.workers.tasks import process_ingest
+
+            process_ingest.delay(image.id, gen.user_id)
+        except Exception:
+            logger.warning("Failed to queue ingest for library image %s", image.id, exc_info=True)
+        return image
 
     def get_generated_image(self, gen_id: int) -> GeneratedImage | None:
         """Get a generated image by ID."""
