@@ -9,17 +9,13 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.api.settings import (
-    CURATED_OPENAI_VISION_MODELS,
-    _get_anthropic_models,
-    _get_fal_models,
-)
 from app.core.security import get_current_user, require_admin
 from app.db.base import get_db
 from app.models.billing import BillingAnomaly, CostCatalog, UsageRecord
 from app.models.user import User
 from app.services.billing_service import BillingService
 from app.services.cost_calculator import estimate_sparks as _estimate_sparks
+from app.services.model_catalog import offered_language_ids
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +139,7 @@ class GenerationEstimateRequest(BaseModel):
     width: int | None = None
     height: int | None = None
     image_size: str | None = None
+    quality: str | None = None
     with_lora: bool = False
 
 
@@ -400,16 +397,18 @@ def get_generation_costs(
     db: Session = Depends(get_db),
 ):
     """Get per-image generation cost in sparks for each base model."""
+    from app.services.settings_service import SettingsService
     from app.services.token_estimator import estimate_prompt_tokens
 
-    # Estimate expand_prompt cost using estimate_sparks()
+    # Estimate expand_prompt cost for the user's selected language model
+    language_model = SettingsService(db, current_user.id).get_provider_config()["fal_language_model"]
     input_tokens = estimate_prompt_tokens("Expand this prompt into a detailed description")
     db_avg_out = BillingService.get_average_output_tokens(
-        db, "openai", "gpt-4o-mini", "expand_prompt",
+        db, "fal", language_model, "expand_prompt",
     )
     output_tokens = db_avg_out if db_avg_out is not None else 200
     expand_sparks, _ = _estimate_sparks(
-        db, "openai", "gpt-4o-mini", "expand_prompt",
+        db, "fal", language_model, "expand_prompt",
         estimated_input_tokens=input_tokens,
         estimated_output_tokens=output_tokens,
     )
@@ -459,6 +458,8 @@ def estimate_generation_cost(
         gen_params["height"] = body.height
     if body.image_size:
         gen_params["image_size"] = body.image_size
+    if body.quality:
+        gen_params["quality"] = body.quality
 
     sparks, _ = _estimate_sparks(
         db, provider, model, operation,
@@ -513,12 +514,10 @@ class VisionCostEstimateRequest(BaseModel):
     folder_id: int | None = None
 
 
-# Map provider → (catalog_provider, list of vision model IDs)
-# Curated lists imported from app.api.settings at top of file.
+# Map provider → (catalog_provider, list of vision model IDs).
+# All vision/language models run through fal's OpenRouter routers.
 _VISION_PROVIDER_MODELS = {
-    "openai": ("openai", [m.id for m in CURATED_OPENAI_VISION_MODELS]),
-    "anthropic": ("anthropic", [m.id for m in _get_anthropic_models()]),
-    "fal": ("fal", [m.id for m in _get_fal_models() if "vision" in m.capabilities]),
+    "fal": ("fal", offered_language_ids()),
 }
 
 
@@ -568,9 +567,7 @@ def _compute_vision_costs(
                 operation = "tag" if mode == "tag" else "describe"
                 prompt_text = tag_prompt_text if mode == "tag" else desc_prompt_text
 
-                img_tokens = estimate_image_tokens(
-                    cat_provider, model_id, width, height,
-                )
+                img_tokens = estimate_image_tokens(model_id, width, height)
                 prompt_tokens = estimate_prompt_tokens(prompt_text)
                 input_tokens = img_tokens + prompt_tokens
                 output_tokens = estimate_output_tokens(model_id, mode)
@@ -645,10 +642,9 @@ def estimate_vision_costs(
 
 @router.get("/evaluation-costs", response_model=EvaluationCostsResponse)
 def get_evaluation_costs(
-    base_model: str = Query("flux-dev"),
+    base_model: str = Query("flux-2"),
     sample_count: int = Query(5, ge=1, le=50),
     creative_count: int = Query(0, ge=0, le=20),
-    vision_eval_provider: str | None = None,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -658,7 +654,6 @@ def get_evaluation_costs(
         base_model=base_model,
         sample_count=sample_count,
         creative_count=creative_count,
-        vision_eval_provider=vision_eval_provider,
     )
 
 

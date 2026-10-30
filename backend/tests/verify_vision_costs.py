@@ -61,7 +61,7 @@ def build_prompts():
 
 def estimate_costs(model, operation, prompt_text, width, height):
     """Compute pre-run cost estimate using our formulas."""
-    img_tokens = estimate_image_tokens("openai", model, width, height)
+    img_tokens = estimate_image_tokens(model, width, height)
     prompt_tokens = estimate_prompt_tokens(prompt_text)
     est_input = img_tokens + prompt_tokens
     est_output = DEFAULT_OUTPUT_TOKENS.get(operation, 500)

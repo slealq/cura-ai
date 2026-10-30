@@ -1,16 +1,14 @@
 """Pure functions for estimating token counts for vision API cost previews.
 
-No DB dependency — caller provides dimensions and text.
-
-Formulas sourced from official documentation and empirical verification:
-  - OpenAI gpt-4o:       tile-based (512x512 tiles, 170 tokens/tile + 85 base)
-  - OpenAI gpt-4o-mini:  tile-based (5667 tokens/tile + 2838 base, empirically verified 2026-02-25)
-  - OpenAI gpt-5-mini:   not officially documented, approximate as pixels/500 (2048/768 scaling)
-  - OpenAI gpt-5.2:      not officially documented, empirical ~pixels/850 (2048 long cap + 1.5M area cap)
-  - Anthropic:           pixels/750 with 1568px side cap + ~1.19M pixel area cap
-  - Gemini 2.5:          tile-based (768x768 tiles, 258 tokens/tile; <=384px = 258 flat)
-  - Qwen3-VL:            32x32 effective patches (pixels/1024)
-  - Grok (xAI):          undisclosed formula, documented range 256–1792 tokens/image
+No DB dependency except the static model catalog — caller provides dimensions and text.
+All vision/language calls run through fal's OpenRouter routers, so image
+formulas are chosen by the model's vendor prefix (``anthropic/...``):
+  - anthropic:           pixels/750 with 1568px side cap + ~1.19M pixel area cap
+  - openai:              not officially documented, empirical ~pixels/850 (2048 long cap + 1.5M area cap)
+  - google (Gemini):     tile-based (768x768 tiles, 258 tokens/tile; <=384px = 258 flat)
+  - qwen:                32x32 effective patches (pixels/1024)
+  - x-ai (Grok):         undisclosed formula, documented range 256–1792 tokens/image
+  - others:              Anthropic-style heuristic
 
 Cost estimation always uses these formulas. Actual billing uses real token
 counts from provider API responses.
@@ -18,26 +16,20 @@ counts from provider API responses.
 import logging
 import math
 
+from app.services.model_catalog import get_language_model
+
 logger = logging.getLogger(__name__)
 
 # --- Output token estimates by mode ---
-# Non-reasoning models produce only visible output tokens.
-# Reasoning models also burn invisible reasoning tokens that OpenAI
-# counts as completion_tokens.
+# Non-reasoning models produce only visible output tokens.  Reasoning-heavy
+# models (flagged ``reasoning_heavy`` in the model catalog) also burn invisible
+# reasoning tokens that providers count as completion_tokens.
 #
 # Empirical data (gpt-5-mini, 4 tag / 5 describe samples):
 #   tag:      avg 823 total (avg ~700 reasoning + ~100 visible)
 #   describe: avg 723 total (avg ~350 reasoning + ~350 visible)
-#
-# Note: gpt-5.2 is NOT a reasoning model (reasoning_tokens=0 verified 2026-02-25).
-# Only gpt-5-mini in the gpt-5 family uses reasoning tokens.
-_REASONING_PREFIXES = ("o1", "o3", "o4")
-_REASONING_MODELS = ("gpt-5-mini",)
-
 _OUTPUT_TOKENS_STANDARD = {"tag": 50, "describe": 300, "custom": 250}
-# gpt-5.2 produces more output than gpt-4o (verified: tag=84, describe=318)
-_OUTPUT_TOKENS_GPT5 = {"tag": 100, "describe": 350, "custom": 300}
-_OUTPUT_TOKENS_REASONING = {"tag": 800, "describe": 750, "custom": 700}
+_OUTPUT_TOKENS_REASONING = {"tag": 2048, "describe": 2048, "custom": 2048}
 
 # Keep for backward compatibility — callers that don't pass model info
 DEFAULT_OUTPUT_TOKENS = {"tag": 500, "describe": 700, "custom": 600}
@@ -45,75 +37,32 @@ DEFAULT_OUTPUT_TOKENS = {"tag": 500, "describe": 700, "custom": 600}
 
 def estimate_output_tokens(model: str, mode: str) -> int:
     """Estimate output tokens for a vision operation, accounting for reasoning overhead."""
-    if model in _REASONING_MODELS or any(model.startswith(p) for p in _REASONING_PREFIXES):
-        return _OUTPUT_TOKENS_REASONING.get(mode, 700)
-    if model.startswith("gpt-5"):
-        return _OUTPUT_TOKENS_GPT5.get(mode, 300)
+    lm = get_language_model(model)
+    if lm is not None and lm.reasoning_heavy:
+        return _OUTPUT_TOKENS_REASONING.get(mode, 2048)
     return _OUTPUT_TOKENS_STANDARD.get(mode, 250)
 
 
-def estimate_image_tokens(provider: str, model: str, width: int, height: int) -> int:
-    """Estimate input tokens consumed by an image for a given provider/model."""
-    if provider == "openai":
-        tokens = _openai_image_tokens(model, width, height)
-    elif provider == "anthropic":
-        tokens = _anthropic_image_tokens(width, height)
+def estimate_image_tokens(model: str, width: int, height: int) -> int:
+    """Estimate input tokens consumed by an image for a given OpenRouter model id."""
+    vendor = model.split("/", 1)[0] if "/" in model else ""
+    if vendor == "openai":
+        tokens = _gpt5_standard_image_tokens(width, height)
+    elif vendor == "google":
+        tokens = _gemini_image_tokens(width, height)
+    elif vendor == "qwen":
+        tokens = _qwen3_image_tokens(width, height)
+    elif vendor == "x-ai":
+        tokens = _grok_image_tokens(width, height)
     else:
-        # fal / openrouter — route to model-specific formulas
-        if "gemini" in model:
-            tokens = _gemini_image_tokens(width, height)
-        elif "qwen" in model:
-            tokens = _qwen3_image_tokens(width, height)
-        elif "grok" in model:
-            tokens = _grok_image_tokens(width, height)
-        else:
-            # Unknown model — fall back to Anthropic-style heuristic
-            tokens = _anthropic_image_tokens(width, height)
-    logger.debug(
-        "IMAGE_TOKENS | %s/%s %dx%d → %d tokens",
-        provider, model, width, height, tokens,
-    )
+        # anthropic and models without a published formula
+        tokens = _anthropic_image_tokens(width, height)
+    logger.debug("IMAGE_TOKENS | %s %dx%d → %d tokens", model, width, height, tokens)
     return tokens
 
 
-def _openai_image_tokens(model: str, width: int, height: int) -> int:
-    """OpenAI image token estimation."""
-    # gpt-5-mini — encoding not officially documented.
-    # Uses 2048/768 scaling like gpt-4o. Approximate as pixels/500 (min 800).
-    if model.startswith("gpt-5-mini"):
-        scaled_w, scaled_h = _scale_image(width, height, max_long=2048, max_short=768)
-        pixels = scaled_w * scaled_h
-        return max(800, pixels // 500)
-
-    # gpt-5.2 (and other gpt-5 variants) — not officially documented.
-    # Empirically verified (2026-02-25): ~pixels/850 on raw dimensions,
-    # with longest side capped at 2048 and total area capped at ~1.5M pixels.
-    # Tested across 8 sizes from 100x100 to 4540x5675: <3% error for images
-    # with pixel area > 250K. Small images (<250K px) may underestimate by ~20%.
-    if model.startswith("gpt-5"):
-        return _gpt5_standard_image_tokens(width, height)
-
-    # gpt-4o-mini — uses tile-based tokenization with the standard OpenAI
-    # high-detail scaling (longest→2048, shortest→768, 512x512 tiles).
-    # Empirically verified (2026-02-25): 5,667 tokens/tile + 2,838 base.
-    # Tested across 1/2/4/6/8 tiles with 0.0% error on all.
-    if "mini" in model:
-        scaled_w, scaled_h = _scale_image(width, height, max_long=2048, max_short=768)
-        tiles_w = math.ceil(scaled_w / 512)
-        tiles_h = math.ceil(scaled_h / 512)
-        tiles = tiles_w * tiles_h
-        return tiles * 5667 + 2838
-
-    # gpt-4o — documented tile-based formula
-    scaled_w, scaled_h = _scale_image(width, height, max_long=2048, max_short=768)
-    tiles_w = math.ceil(scaled_w / 512)
-    tiles_h = math.ceil(scaled_h / 512)
-    tiles = tiles_w * tiles_h
-    return tiles * 170 + 85
-
-
 def _gpt5_standard_image_tokens(width: int, height: int) -> int:
-    """GPT-5.2 (non-reasoning) image token estimation.
+    """OpenAI GPT image token estimation (empirically derived on GPT-5.2).
 
     Empirically derived (2026-02-25) from 8 test images (100x100 to 4540x5675):
       1. Cap longest side at 2048 (consistent with OpenAI high-detail behavior)
@@ -173,7 +122,7 @@ def _anthropic_image_tokens(width: int, height: int) -> int:
 
 
 def _gemini_image_tokens(width: int, height: int) -> int:
-    """Gemini 2.5 image token estimation.
+    """Gemini image token estimation.
 
     If both dimensions <= 384px: 258 tokens flat.
     Otherwise: ceil(w/768) * ceil(h/768) tiles, 258 tokens per tile.
@@ -242,17 +191,12 @@ def estimate_prompt_tokens(text: str) -> int:
     return max(1, int(len(text) / 4.3))
 
 
-def estimate_vision_input_tokens(
-    provider: str, model: str, width: int, height: int, prompt_text: str
-) -> int:
+def estimate_vision_input_tokens(model: str, width: int, height: int, prompt_text: str) -> int:
     """Total input tokens: image tokens + prompt tokens."""
-    img = estimate_image_tokens(provider, model, width, height)
+    img = estimate_image_tokens(model, width, height)
     prompt = estimate_prompt_tokens(prompt_text)
     total = img + prompt
-    logger.debug(
-        "VISION_INPUT | %s/%s | img=%d + prompt=%d = %d total",
-        provider, model, img, prompt, total,
-    )
+    logger.debug("VISION_INPUT | %s | img=%d + prompt=%d = %d total", model, img, prompt, total)
     return total
 
 

@@ -1,4 +1,5 @@
 """fal.ai provider for LoRA training and image generation."""
+import copy
 import logging
 import time
 from collections.abc import Callable
@@ -12,6 +13,15 @@ from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers.base import BaseEditor, BaseGenerator, BaseTrainer, EditResult, GenerationResult, TrainingResult
 from app.providers.tracing import provider_span
 from app.services.log_service import write_log
+from app.services.model_catalog import (
+    DEFAULT_EDIT_MODEL,
+    DEFAULT_GENERATION_MODEL,
+    IMAGE_MODELS,
+    LEGACY_TRAINER_ENDPOINTS,
+    ImageModel,
+    get_image_model,
+    image_models,
+)
 
 
 class GenerationCancelledError(Exception):
@@ -21,82 +31,111 @@ class GenerationCancelledError(Exception):
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# Model configuration: maps base_model keys to fal.ai endpoints and parameter differences
-FAL_MODEL_CONFIG = {
-    "flux-2": {
-        "training_endpoint": "fal-ai/flux-2-trainer-v2",
-        "generation_lora_endpoint": "fal-ai/flux-2/lora",
-        "generation_base_endpoint": "fal-ai/flux-2",
-        "zip_param": "image_data_url",
-        "supports_trigger_word": False,
-        "supports_is_style": False,
-        "supports_base64": False,
-        "default_steps": 1000,
-        "default_guidance": 2.5,
-        "default_safety_checker": True,
-    },
-    "qwen-image-2512": {
-        # New user-facing name for the same endpoints as the legacy "qwen-2.5" key.
-        "training_endpoint": "fal-ai/qwen-image-2512-trainer-v2",
-        "generation_lora_endpoint": "fal-ai/qwen-image-2512/lora",
-        "generation_base_endpoint": "fal-ai/qwen-image-2512",
-        "zip_param": "image_data_url",
-        "supports_trigger_word": False,
-        "supports_is_style": False,
-        "supports_base64": False,
-        "default_steps": 2000,
-        "default_guidance": 4.0,
-    },
-    "flux-dev": {
-        "training_endpoint": "fal-ai/flux-lora-fast-training",
-        "generation_lora_endpoint": "fal-ai/flux-lora",
-        "generation_base_endpoint": "fal-ai/flux/dev",
-        "zip_param": "images_data_url",
-        "supports_trigger_word": True,
-        "supports_is_style": True,
-        "supports_base64": True,
-        "default_steps": 1000,
-        "default_guidance": 3.5,
-    },
-    "qwen-2.5": {
-        "training_endpoint": "fal-ai/qwen-image-2512-trainer-v2",
-        "generation_lora_endpoint": "fal-ai/qwen-image-2512/lora",
-        "generation_base_endpoint": "fal-ai/qwen-image-2512",
-        "zip_param": "image_data_url",
-        "supports_trigger_word": False,
-        "supports_is_style": False,
-        "supports_base64": False,
-        "default_steps": 2000,
-        "default_guidance": 4.0,
-    },
-    "nano-banana-pro": {
-        "generation_base_endpoint": "fal-ai/nano-banana-pro",
-        "uses_resolution_aspect": True,
-        "supports_lora": False,
-        "supports_steps_guidance": False,
-        "default_safety_tolerance": "4",
-    },
-    "nano-banana-2": {
-        "generation_base_endpoint": "fal-ai/nano-banana-2",
-        "uses_resolution_aspect": True,
-        "supports_lora": False,
-        "supports_steps_guidance": False,
-        "default_safety_tolerance": "4",
-    },
-    "flux-2-pro": {
-        "generation_base_endpoint": "fal-ai/flux-2-pro",
-        "supports_lora": False,
-        "supports_steps_guidance": False,
-        "uses_image_size_presets": True,
-        "default_safety_tolerance": "2",
-    },
-    "seedream-5-pro": {
-        "generation_base_endpoint": "bytedance/seedream/v5/pro/text-to-image",
-        "supports_lora": False,
-        "supports_steps_guidance": False,
-        "uses_image_size_enum": True,
-    },
+# Per-model request config, derived from the model catalog (the single source of truth).
+FAL_MODEL_CONFIG: dict[str, dict[str, Any]] = {
+    m.key: {
+        "generation_base_endpoint": m.endpoint,
+        "generation_lora_endpoint": m.lora_endpoint,
+        "supports_lora": m.supports_lora,
+        "training_endpoint": m.trainer_endpoint,
+    }
+    for m in image_models("generate")
 }
+
+FAL_EDIT_MODEL_CONFIG: dict[str, dict[str, Any]] = {
+    m.key: {
+        "endpoint": m.endpoint,
+        "max_source_images": m.max_source_images,
+        "max_num_images": m.max_num_images,
+        "uses_single_image_url": m.uses_single_image_url,
+    }
+    for m in image_models("edit")
+}
+
+# Both trainable base models share the same trainer-v2 request shape.
+_TRAINER_FLAGS: dict[str, Any] = {
+    "zip_param": "image_data_url",
+    "supports_trigger_word": False,
+    "supports_is_style": False,
+    "supports_base64": False,
+}
+
+# Trainer config for every base model that can have a LoRA row: the offered
+# trainable models plus the legacy ones (kept so historical rows stay readable).
+FAL_TRAINER_CONFIG: dict[str, dict[str, Any]] = {
+    **{
+        m.key: {"training_endpoint": m.trainer_endpoint, **_TRAINER_FLAGS}
+        for m in IMAGE_MODELS if m.trainable
+    },
+    **LEGACY_TRAINER_ENDPOINTS,
+}
+
+
+def get_trainer_config(base_model: str) -> dict[str, Any]:
+    """Return the trainer config for *base_model*; raises ValueError if unknown."""
+    config = FAL_TRAINER_CONFIG.get(base_model)
+    if config is None:
+        raise ValueError(f"Unknown base model for training: {base_model!r}")
+    return config
+
+
+def build_image_request(
+    model: ImageModel,
+    prompt: str,
+    values: dict[str, Any],
+    loras: list[dict] | None = None,
+    source_urls: list[str] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Build (endpoint, arguments) for a generate/edit request from the catalog.
+
+    Only params the model declares are sent; anything else in *values* is
+    ignored.  Raises ValueError when LoRAs are requested on a model without LoRA
+    support, so they are never silently dropped.
+    """
+    if loras and not model.supports_lora:
+        raise ValueError(f"Model {model.key!r} does not support LoRAs")
+    endpoint = model.lora_endpoint if loras else model.endpoint
+    arguments: dict[str, Any] = {"prompt": prompt}
+    if model.supports_output_format:
+        arguments["output_format"] = "png"
+
+    if model.kind == "edit":
+        urls = source_urls or []
+        if not urls:
+            raise ValueError("At least one source image is required for editing")
+        if len(urls) > model.max_source_images:
+            raise ValueError(f"{model.key!r} accepts at most {model.max_source_images} source images")
+        if model.uses_single_image_url:
+            arguments["image_url"] = urls[0]
+        else:
+            arguments["image_urls"] = urls
+        if model.max_num_images:
+            arguments["num_images"] = values.get("num_images") or 1
+
+    for name, spec in model.params.items():
+        if name == "steps_guidance":
+            arguments["num_inference_steps"] = values.get("num_inference_steps", spec.get("steps", {}).get("default", 28))
+            arguments["guidance_scale"] = values.get("guidance_scale", spec.get("guidance", {}).get("default", 3.5))
+        elif name in ("seed", "enable_web_search"):
+            if values.get(name) is not None:
+                arguments[name] = values[name]
+        elif name == "negative_prompt":
+            if values.get(name):
+                arguments[name] = values[name]
+        else:
+            value = values.get(name)
+            if value is None and name == "image_size" and spec.get("custom_size") and values.get("width"):
+                # No preset chosen: send a custom size object.
+                value = {"width": values["width"], "height": values["height"]}
+            if value is None:
+                value = spec.get("default")
+            if value is not None:
+                arguments[name] = value
+
+    arguments.update(copy.deepcopy(model.fixed_payload))
+    if loras:
+        arguments["loras"] = loras
+    return endpoint, arguments
 
 
 def _ensure_fal_key(api_key: str | None = None):
@@ -110,9 +149,9 @@ def _ensure_fal_key(api_key: str | None = None):
 class FalTrainer(BaseTrainer):
     """fal.ai LoRA training provider supporting multiple base models."""
 
-    def __init__(self, api_key: str | None = None, base_model: str = "flux-dev"):
+    def __init__(self, api_key: str | None = None, base_model: str = "flux-2"):
         _ensure_fal_key(api_key)
-        self.config = FAL_MODEL_CONFIG.get(base_model, FAL_MODEL_CONFIG["flux-dev"])
+        self.config = get_trainer_config(base_model)
         self.base_model = base_model
 
     async def start_training(
@@ -260,10 +299,51 @@ class FalTrainer(BaseTrainer):
 class FalGenerator(BaseGenerator):
     """fal.ai image generation provider supporting multiple base models."""
 
-    def __init__(self, api_key: str | None = None, base_model: str = "flux-dev"):
+    def __init__(self, api_key: str | None = None, base_model: str = DEFAULT_GENERATION_MODEL):
         _ensure_fal_key(api_key)
-        self.config = FAL_MODEL_CONFIG.get(base_model, FAL_MODEL_CONFIG["flux-dev"])
+        model = get_image_model(base_model, "generate")
+        if model is None:
+            raise ValueError(f"Unknown generation model: {base_model!r}")
+        self.model = model
         self.base_model = base_model
+
+    def build_arguments(
+        self,
+        prompt: str,
+        negative_prompt: str | None = None,
+        width: int = 1024,
+        height: int = 1024,
+        num_inference_steps: int = 28,
+        guidance_scale: float = 3.5,
+        seed: int | None = None,
+        loras: list[dict] | None = None,
+        resolution: str | None = None,
+        aspect_ratio: str | None = None,
+        safety_tolerance: str | None = None,
+        enable_web_search: bool | None = None,
+        image_size: str | None = None,
+        quality: str | None = None,
+    ) -> tuple[str, dict[str, Any]]:
+        """Build (endpoint, arguments) for a generation request."""
+        return build_image_request(
+            self.model,
+            prompt,
+            {
+                "negative_prompt": negative_prompt,
+                "width": width,
+                "height": height,
+                "num_inference_steps": num_inference_steps,
+                "guidance_scale": guidance_scale,
+                "seed": seed,
+                "resolution": resolution,
+                "aspect_ratio": aspect_ratio,
+                "safety_tolerance": safety_tolerance,
+                "enable_web_search": enable_web_search,
+                "image_size": image_size,
+                "quality": quality,
+            },
+            loras=loras,
+        )
 
     async def generate(
         self,
@@ -281,6 +361,7 @@ class FalGenerator(BaseGenerator):
         safety_tolerance: str | None = None,
         enable_web_search: bool | None = None,
         image_size: str | None = None,
+        quality: str | None = None,
     ) -> GenerationResult:
         """Generate an image via fal.ai.
 
@@ -291,78 +372,10 @@ class FalGenerator(BaseGenerator):
         task_start = time.monotonic()
         poll_interval = 2.0  # seconds between status polls
 
-        # Choose endpoint and build arguments based on model capabilities
-        if self.config.get("uses_resolution_aspect"):
-            # Resolution/aspect_ratio model (e.g. nano-banana-pro) — no LoRA, no steps/guidance
-            endpoint = self.config["generation_base_endpoint"]
-            arguments: dict[str, Any] = {
-                "prompt": prompt,
-                "output_format": "png",
-            }
-            if resolution:
-                arguments["resolution"] = resolution
-            if aspect_ratio:
-                arguments["aspect_ratio"] = aspect_ratio
-            if safety_tolerance is not None:
-                arguments["safety_tolerance"] = safety_tolerance
-            if enable_web_search is not None:
-                arguments["enable_web_search"] = enable_web_search
-            if seed is not None:
-                arguments["seed"] = seed
-        elif self.config.get("uses_image_size_enum"):
-            # Seedream uses its own named image-size enum and defaults to auto_2K.
-            endpoint = self.config["generation_base_endpoint"]
-            arguments = {
-                "prompt": prompt,
-                "image_size": image_size or "auto_2K",
-                "output_format": "png",
-                "enable_safety_checker": True,
-            }
-        elif self.config.get("uses_image_size_presets"):
-            # Image-size-preset model (e.g. flux-2-pro) — no LoRA, no steps/guidance
-            endpoint = self.config["generation_base_endpoint"]
-            arguments = {
-                "prompt": prompt,
-                "output_format": "png",
-            }
-            if image_size:
-                # Named preset (e.g. "square_hd", "landscape_4_3")
-                arguments["image_size"] = image_size
-            else:
-                # Custom size — send width/height object
-                arguments["image_size"] = {"width": width, "height": height}
-            if safety_tolerance is not None:
-                arguments["safety_tolerance"] = safety_tolerance
-            if seed is not None:
-                arguments["seed"] = seed
-        elif loras:
-            endpoint = self.config["generation_lora_endpoint"]
-            arguments = {
-                "prompt": prompt,
-                "image_size": image_size or {"width": width, "height": height},
-                "num_inference_steps": num_inference_steps,
-                "guidance_scale": guidance_scale,
-                "loras": loras,
-                "output_format": "png",
-                "enable_safety_checker": self.config.get("default_safety_checker", False),
-            }
-            if seed is not None:
-                arguments["seed"] = seed
-        else:
-            endpoint = self.config["generation_base_endpoint"]
-            arguments = {
-                "prompt": prompt,
-                "image_size": image_size or {"width": width, "height": height},
-                "output_format": "png",
-            }
-            if self.config.get("supports_steps_guidance", True):
-                arguments["num_inference_steps"] = num_inference_steps
-                arguments["guidance_scale"] = guidance_scale
-                arguments["enable_safety_checker"] = self.config.get("default_safety_checker", False)
-            if safety_tolerance is not None:
-                arguments["safety_tolerance"] = safety_tolerance
-            if seed is not None:
-                arguments["seed"] = seed
+        endpoint, arguments = self.build_arguments(
+            prompt, negative_prompt, width, height, num_inference_steps, guidance_scale, seed, loras,
+            resolution, aspect_ratio, safety_tolerance, enable_web_search, image_size, quality,
+        )
 
         request_id = None
         try:
@@ -459,7 +472,7 @@ class FalGenerator(BaseGenerator):
                 message=f"fal.ai generation failed: {e}",
                 level=LogLevel.ERROR,
                 provider="fal",
-                model=endpoint if loras else self.config["generation_base_endpoint"],
+                model=endpoint,
                 operation="generate",
                 duration_ms=round(elapsed, 1),
                 success=False,
@@ -471,101 +484,40 @@ class FalGenerator(BaseGenerator):
         return "fal"
 
 
-# --- Edit model configuration ---
-
-FAL_EDIT_MODEL_CONFIG = {
-    "qwen-image-max-edit": {
-        "endpoint": "fal-ai/qwen-image-max/edit",
-        "supports_negative_prompt": True,
-        "supports_prompt_expansion": True,
-        "supports_safety_checker": True,
-        "max_source_images": 3,
-        "max_num_images": 6,
-    },
-    "kling-image": {
-        "endpoint": "fal-ai/kling-image/o3/image-to-image",
-        "supports_negative_prompt": False,
-        "supports_prompt_expansion": False,
-        "supports_safety_checker": False,
-        "max_source_images": 10,
-        "max_num_images": 9,
-        "uses_resolution": True,
-        "uses_aspect_ratio": True,
-    },
-    "wan-25": {
-        "endpoint": "fal-ai/wan-25-preview/image-to-image",
-        "supports_negative_prompt": True,
-        "supports_prompt_expansion": False,
-        "supports_safety_checker": True,
-        "max_source_images": 2,
-        "max_num_images": 4,
-    },
-    "grok-imagine": {
-        "endpoint": "xai/grok-imagine-image/edit",
-        "supports_negative_prompt": False,
-        "supports_prompt_expansion": False,
-        "supports_safety_checker": False,
-        "max_source_images": 1,
-        "max_num_images": 4,
-        "uses_single_image_url": True,
-    },
-    "face-swap": {
-        "endpoint": "half-moon-ai/ai-face-swap/faceswapimage",
-        "supports_negative_prompt": False,
-        "supports_prompt_expansion": False,
-        "supports_safety_checker": False,
-        "max_source_images": 2,
-        "max_num_images": 1,
-        "uses_face_swap": True,
-    },
-    "nano-banana-pro-edit": {
-        "endpoint": "fal-ai/nano-banana-pro/edit",
-        "supports_negative_prompt": False,
-        "supports_prompt_expansion": False,
-        "supports_safety_checker": False,
-        "max_source_images": 14,
-        "max_num_images": 4,
-        "uses_resolution": True,
-        "uses_aspect_ratio": True,
-        "uses_safety_tolerance": True,
-        "uses_web_search": True,
-    },
-    "seedream-5-pro-edit": {
-        "endpoint": "bytedance/seedream/v5/pro/edit",
-        "supports_negative_prompt": False,
-        "supports_prompt_expansion": False,
-        "supports_safety_checker": True,
-        "max_source_images": 10,
-        "max_num_images": 6,
-        "uses_image_size_enum": True,
-    },
-    "qwen-image-2-pro-edit": {
-        "endpoint": "fal-ai/qwen-image-2/pro/edit",
-        "supports_negative_prompt": True,
-        "supports_prompt_expansion": True,
-        "supports_safety_checker": True,
-        "max_source_images": 3,
-        "max_num_images": 6,
-    },
-    "flux-2-lora-edit": {
-        "endpoint": "fal-ai/flux-2/lora/edit",
-        "supports_negative_prompt": False,
-        "supports_prompt_expansion": True,
-        "supports_safety_checker": True,
-        "max_source_images": 4,
-        "max_num_images": 4,
-        "uses_empty_loras": True,
-    },
-}
-
-
 class FalEditor(BaseEditor):
     """fal.ai image editing provider."""
 
-    def __init__(self, api_key: str | None = None, edit_model: str = "qwen-image-max-edit"):
+    def __init__(self, api_key: str | None = None, edit_model: str = DEFAULT_EDIT_MODEL):
         _ensure_fal_key(api_key)
-        self.config = FAL_EDIT_MODEL_CONFIG.get(edit_model, FAL_EDIT_MODEL_CONFIG["qwen-image-max-edit"])
+        model = get_image_model(edit_model, "edit")
+        if model is None:
+            raise ValueError(f"Unknown edit model: {edit_model!r}")
+        self.model = model
         self.edit_model = edit_model
+
+    def build_arguments(
+        self,
+        image_urls: list[str],
+        prompt: str,
+        negative_prompt: str | None = None,
+        image_size: dict | str | None = None,
+        num_images: int = 1,
+        seed: int | None = None,
+        **kwargs: Any,
+    ) -> tuple[str, dict[str, Any]]:
+        """Build (endpoint, arguments) for an edit request.
+
+        *kwargs* carries model-specific params (resolution, aspect_ratio, quality,
+        safety_tolerance, enable_web_search); unsupported ones are ignored.
+        """
+        values = {
+            **kwargs,
+            "negative_prompt": negative_prompt,
+            "image_size": image_size,
+            "num_images": num_images,
+            "seed": seed,
+        }
+        return build_image_request(self.model, prompt, values, source_urls=image_urls)
 
     async def edit(
         self,
@@ -575,68 +527,16 @@ class FalEditor(BaseEditor):
         image_size: dict | str | None = None,
         num_images: int = 1,
         seed: int | None = None,
-        output_format: str = "png",
-        enable_prompt_expansion: bool = True,
-        enable_safety_checker: bool = True,
         cancel_check: Callable[[], bool] | None = None,
         **kwargs: Any,
     ) -> EditResult:
         """Edit images via fal.ai using submit + manual polling."""
         task_start = time.monotonic()
         poll_interval = 2.0
-        endpoint = self.config["endpoint"]
 
-        if self.config.get("uses_face_swap"):
-            # Face swap: source_face_url + target_image_url, no prompt/num_images
-            arguments: dict[str, Any] = {
-                "source_face_url": image_urls[0],
-                "target_image_url": image_urls[1] if len(image_urls) > 1 else image_urls[0],
-            }
-            if kwargs.get("enable_occlusion_prevention"):
-                arguments["enable_occlusion_prevention"] = True
-        else:
-            arguments = {
-                "prompt": prompt,
-                "num_images": num_images,
-                "output_format": output_format,
-            }
-
-            # Grok uses singular image_url, others use image_urls array
-            if self.config.get("uses_single_image_url"):
-                arguments["image_url"] = image_urls[0]
-            else:
-                arguments["image_urls"] = image_urls
-
-            if self.config.get("uses_empty_loras"):
-                # LoRA attachment is intentionally out of scope; the endpoint accepts none.
-                arguments["loras"] = []
-
-            if self.config.get("uses_resolution"):
-                # Kling-style: resolution + aspect_ratio instead of image_size
-                resolution = kwargs.get("resolution", "1K")
-                arguments["resolution"] = resolution
-                aspect_ratio = kwargs.get("aspect_ratio", "auto")
-                arguments["aspect_ratio"] = aspect_ratio
-            elif not self.config.get("uses_single_image_url"):
-                # Qwen/Wan-style: image_size + safety/expansion toggles
-                if self.config["supports_safety_checker"]:
-                    arguments["enable_safety_checker"] = enable_safety_checker
-                if self.config["supports_prompt_expansion"]:
-                    arguments["enable_prompt_expansion"] = enable_prompt_expansion
-                if negative_prompt and self.config["supports_negative_prompt"]:
-                    arguments["negative_prompt"] = negative_prompt
-                if image_size is not None:
-                    arguments["image_size"] = image_size
-                elif self.config.get("uses_image_size_enum"):
-                    arguments["image_size"] = "auto_2K"
-
-            if self.config.get("uses_safety_tolerance") and kwargs.get("safety_tolerance") is not None:
-                arguments["safety_tolerance"] = kwargs["safety_tolerance"]
-            if self.config.get("uses_web_search") and kwargs.get("enable_web_search") is not None:
-                arguments["enable_web_search"] = kwargs["enable_web_search"]
-
-            if seed is not None:
-                arguments["seed"] = seed
+        endpoint, arguments = self.build_arguments(
+            image_urls, prompt, negative_prompt, image_size, num_images, seed, **kwargs,
+        )
 
         request_id = None
         try:
@@ -664,16 +564,9 @@ class FalEditor(BaseEditor):
             logger.info("FAL RESPONSE | endpoint=%s request_id=%s result=%s", endpoint, request_id, result)
             fal_cost = result.get("cost")
 
-            # Face swap returns singular "image", others return "images" array
-            if self.config.get("uses_face_swap"):
-                single_image = result.get("image")
-                if not single_image:
-                    raise RuntimeError("No image returned from fal.ai face swap")
-                images_data = [single_image]
-            else:
-                images_data = result.get("images", [])
-                if not images_data:
-                    raise RuntimeError("No images returned from fal.ai edit")
+            images_data = result.get("images", [])
+            if not images_data:
+                raise RuntimeError("No images returned from fal.ai edit")
 
             downloaded: list[bytes] = []
             widths: list[int] = []

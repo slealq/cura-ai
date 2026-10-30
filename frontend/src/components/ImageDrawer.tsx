@@ -11,21 +11,8 @@ import { cn, formatDate, formatDateCompact, formatFileSize } from '@/lib/utils';
 import ImageCard from './ImageCard';
 import ModelSelector from './ModelSelector';
 import PipelineProgress from './PipelineProgress';
+import { useModelCatalog } from '@/hooks/useModelCatalog';
 import { Slider } from './Slider';
-
-const VISION_MODELS = [
-  { value: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'openai' },
-  { value: 'gpt-4o', label: 'GPT-4o', provider: 'openai' },
-  { value: 'gpt-5-mini', label: 'GPT-5 Mini', provider: 'openai' },
-  { value: 'gpt-5.2', label: 'GPT-5.2', provider: 'openai' },
-  { value: 'claude-3-haiku-20240307', label: 'Claude Haiku 3', provider: 'anthropic' },
-  { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', provider: 'anthropic' },
-  { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'anthropic' },
-  { value: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'anthropic' },
-  { value: 'x-ai/grok-4-fast', label: 'Grok 4 Fast', provider: 'fal' },
-  { value: 'qwen/qwen3-vl-235b-a22b-instruct', label: 'Qwen3 VL 235B', provider: 'fal' },
-  { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'fal' },
-];
 
 interface ImageDrawerProps {
   image: Image;
@@ -33,6 +20,8 @@ interface ImageDrawerProps {
 }
 
 export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
+  const { data: catalog } = useModelCatalog();
+  const VISION_MODELS = (catalog?.language ?? []).map((m) => ({ value: m.id, label: m.label, provider: 'fal' }));
   const queryClient = useQueryClient();
   const hasInitModel = useRef(false);
   const [showDescribeDialog, setShowDescribeDialog] = useState(false);
@@ -134,21 +123,12 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
 
   // Initialize selectedModel from provider config
   useEffect(() => {
-    if (providerConfig && !hasInitModel.current) {
+    if (providerConfig && catalog && !hasInitModel.current) {
       hasInitModel.current = true;
-      const provider = providerConfig.vision_provider;
-      const modelId = provider === 'openai'
-        ? providerConfig.openai_vision_model
-        : provider === 'anthropic'
-          ? providerConfig.anthropic_vision_model
-          : providerConfig.fal_vision_model;
-      if (VISION_MODELS.some((m) => m.value === modelId)) {
-        setSelectedModel(modelId);
-      } else {
-        setSelectedModel(VISION_MODELS[0].value);
-      }
+      const modelId = providerConfig.fal_vision_model;
+      setSelectedModel(catalog?.language.some((m) => m.id === modelId) ? modelId : (catalog?.defaults.vision_model ?? ''));
     }
-  }, [providerConfig]);
+  }, [providerConfig, catalog]);
 
   const reprocessMutation = useMutation({
     mutationFn: (options: {
@@ -178,24 +158,15 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
     }
     // Reset model to configured default
     if (providerConfig) {
-      const provider = providerConfig.vision_provider;
-      const modelId = provider === 'openai'
-        ? providerConfig.openai_vision_model
-        : provider === 'anthropic'
-          ? providerConfig.anthropic_vision_model
-          : providerConfig.fal_vision_model;
-      if (VISION_MODELS.some((m) => m.value === modelId)) {
-        setSelectedModel(modelId);
-      } else {
-        setSelectedModel(VISION_MODELS[0].value);
-      }
+      const modelId = providerConfig.fal_vision_model;
+      setSelectedModel(catalog?.language.some((m) => m.id === modelId) ? modelId : (catalog?.defaults.vision_model ?? ''));
       // Init advanced params from settings
       setTemperature(providerConfig.vision_temperature ?? 1.0);
       setMaxTokensTag(providerConfig.max_tokens_tagging ?? 1000);
       setMaxTokensDescribe(providerConfig.max_tokens_description ?? 3000);
     }
     setShowAdvanced(false);
-  }, [defaultPrompts, providerConfig]);
+  }, [defaultPrompts, providerConfig, catalog]);
 
   useEffect(() => {
     if (showDescribeDialog) {
@@ -651,7 +622,7 @@ export default function ImageDrawer({ image, onClose }: ImageDrawerProps) {
                 </button>
                 <button
                   onClick={handleDescribeSubmit}
-                  disabled={reprocessMutation.isPending}
+                  disabled={reprocessMutation.isPending || !catalog || !selectedModel}
                   className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
                 >
                   {reprocessMutation.isPending ? 'Starting...' : 'Describe'}

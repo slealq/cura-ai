@@ -27,16 +27,7 @@ import { cn, formatDate } from '@/lib/utils';
 import type { LoraModel } from '@/types';
 import { imagesApi } from '@/lib/api';
 import TrainLoraModal from './components/TrainLoraModal';
-
-const BASE_MODELS = [
-  { value: 'flux-dev', label: 'Flux' },
-  { value: 'qwen-2.5', label: 'Qwen 2.5' },
-];
-
-const baseModelBadge: Record<string, string> = {
-  'flux-dev': 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300',
-  'qwen-2.5': 'bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300',
-};
+import { useModelCatalog } from '@/hooks/useModelCatalog';
 
 const statusConfig: Record<string, { icon: typeof Clock; color: string; label: string }> = {
   pending: { icon: Clock, color: 'text-gray-500 bg-gray-100 dark:bg-gray-900/50 dark:text-gray-400', label: 'Pending' },
@@ -60,9 +51,11 @@ function isModelReady(model: LoraModel): boolean {
 
 function UploadLoraModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const queryClient = useQueryClient();
+  const { data: catalog } = useModelCatalog();
+  const BASE_MODELS = (catalog?.training_base_models ?? []).map(m => ({ value: m.key, label: m.label }));
   const [name, setName] = useState('');
   const [triggerWord, setTriggerWord] = useState('');
-  const [baseModel, setBaseModel] = useState('flux-dev');
+  const [baseModel, setBaseModel] = useState('flux-2');
   const [description, setDescription] = useState('');
   const [samplePromptsText, setSamplePromptsText] = useState('');
   const [file, setFile] = useState<File | null>(null);
@@ -75,7 +68,7 @@ function UploadLoraModal({ open, onClose }: { open: boolean; onClose: () => void
       onClose();
       setName('');
       setTriggerWord('');
-      setBaseModel('flux-dev');
+      setBaseModel('flux-2');
       setDescription('');
       setSamplePromptsText('');
       setFile(null);
@@ -232,6 +225,7 @@ function LoraModelCard({
   onDelete: () => void;
   onClick: () => void;
 }) {
+  const { data: catalog } = useModelCatalog();
   const config = statusConfig[model.status] || statusConfig.pending;
   const StatusIcon = config.icon;
   const sourceInfo = getSourceInfo(model);
@@ -280,8 +274,8 @@ function LoraModelCard({
 
         <div className="mt-3 flex flex-wrap gap-3 text-xs text-muted-foreground items-center">
           <span>{model.training_images_count} images</span>
-          <span className={cn('px-1.5 py-0.5 rounded-full text-[10px] font-semibold', baseModelBadge[model.base_model] || 'bg-gray-100 text-gray-700 dark:bg-gray-900/50 dark:text-gray-300')}>
-            {BASE_MODELS.find((m) => m.value === model.base_model)?.label || model.base_model}
+          <span className={cn('px-1.5 py-0.5 rounded-full text-[10px] font-semibold', 'bg-gray-100 text-gray-700 dark:bg-gray-900/50 dark:text-gray-300')}>
+            {catalog?.training_base_models.find((m) => m.key === model.base_model)?.label || model.base_model}
           </span>
           {model.has_local_weights && model.file_size && (
             <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">

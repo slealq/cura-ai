@@ -1,7 +1,7 @@
 """Unified model registry — single source of truth for all AI model metadata.
 
-Every model the billing system needs to know about is registered here.
-Adding a new model requires only adding a ``register()`` call below.
+Registrations are derived from :mod:`app.services.model_catalog`; to add an
+image model, add it to the catalog.
 
 Public API:
     resolve()                  — map short name + operation → (provider, model, operation)
@@ -23,13 +23,13 @@ class ModelEntry:
     """Metadata for a single (model, operation) registration."""
 
     short_name: str
-    """UI / API short name, e.g. "flux-dev", "qwen-image-max-edit"."""
+    """UI / API short name, e.g. "flux-2", "kling-image"."""
 
     provider: str
     """Provider key for catalog lookup, e.g. "fal", "openai"."""
 
     catalog_model: str
-    """Full model identifier in CostCatalog, e.g. "fal-ai/flux/dev"."""
+    """Full model identifier in CostCatalog, e.g. "fal-ai/flux-2"."""
 
     operation: str
     """Billing operation, e.g. "generate", "edit", "train"."""
@@ -202,194 +202,52 @@ def validate_against_catalog(db) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Model registrations — THE single source of truth
+# Model registrations — derived from the model catalog
 # ---------------------------------------------------------------------------
 
-# --- Generation models ---
+def _register_catalog() -> None:
+    from app.services.model_catalog import (
+        IMAGE_MODELS,
+        LEGACY_TRAINER_ENDPOINTS,
+    )
+    from app.services.pricing_engine import TABLE_STRATEGY_KEY
 
-register(ModelEntry(
-    short_name="flux-2",
-    provider="fal",
-    catalog_model="fal-ai/flux-2",
-    operation="generate",
-))
+    for m in IMAGE_MODELS:
+        strategy = m.pricing_strategy_key or (TABLE_STRATEGY_KEY if m.price_table else None)
+        register(ModelEntry(
+            short_name=m.key,
+            provider="fal",
+            catalog_model=m.endpoint,
+            operation=m.kind,
+            pricing_strategy_key=strategy,
+            display_label=m.label,
+        ))
+        if m.lora_endpoint:
+            register(ModelEntry(
+                short_name=m.key,
+                provider="fal",
+                catalog_model=m.lora_endpoint,
+                operation=m.kind,
+                lora_variant_of=m.key,
+                display_label=m.label,
+            ))
+        if m.trainer_endpoint:
+            register(ModelEntry(
+                short_name=m.key,
+                provider="fal",
+                catalog_model=m.trainer_endpoint,
+                operation="train",
+                display_label=m.label,
+            ))
 
-register(ModelEntry(
-    short_name="flux-2",
-    provider="fal",
-    catalog_model="fal-ai/flux-2/lora",
-    operation="generate",
-    lora_variant_of="flux-2",
-))
+    # Legacy base models keep their trainer rows active for historical LoRAs.
+    for key, cfg in LEGACY_TRAINER_ENDPOINTS.items():
+        register(ModelEntry(
+            short_name=key,
+            provider="fal",
+            catalog_model=cfg["training_endpoint"],
+            operation="train",
+        ))
 
-register(ModelEntry(
-    short_name="qwen-image-2512",
-    provider="fal",
-    catalog_model="fal-ai/qwen-image-2512",
-    operation="generate",
-))
 
-register(ModelEntry(
-    short_name="qwen-image-2512",
-    provider="fal",
-    catalog_model="fal-ai/qwen-image-2512/lora",
-    operation="generate",
-    lora_variant_of="qwen-image-2512",
-))
-
-register(ModelEntry(
-    short_name="flux-dev",
-    provider="fal",
-    catalog_model="fal-ai/flux/dev",
-    operation="generate",
-))
-
-register(ModelEntry(
-    short_name="flux-dev",
-    provider="fal",
-    catalog_model="fal-ai/flux-lora",
-    operation="generate",
-    lora_variant_of="flux-dev",
-))
-
-register(ModelEntry(
-    short_name="qwen-2.5",
-    provider="fal",
-    catalog_model="fal-ai/qwen-image-2512",
-    operation="generate",
-))
-
-register(ModelEntry(
-    short_name="qwen-2.5",
-    provider="fal",
-    catalog_model="fal-ai/qwen-image-2512/lora",
-    operation="generate",
-    lora_variant_of="qwen-2.5",
-))
-
-register(ModelEntry(
-    short_name="nano-banana-pro",
-    provider="fal",
-    catalog_model="fal-ai/nano-banana-pro",
-    operation="generate",
-    pricing_strategy_key="nano_banana_pro",
-))
-
-register(ModelEntry(
-    short_name="nano-banana-2",
-    provider="fal",
-    catalog_model="fal-ai/nano-banana-2",
-    operation="generate",
-    pricing_strategy_key="nano_banana_2",
-))
-
-register(ModelEntry(
-    short_name="flux-2-pro",
-    provider="fal",
-    catalog_model="fal-ai/flux-2-pro",
-    operation="generate",
-    pricing_strategy_key="flux_2_pro_mp",
-))
-
-register(ModelEntry(
-    short_name="seedream-5-pro",
-    provider="fal",
-    catalog_model="bytedance/seedream/v5/pro/text-to-image",
-    operation="generate",
-))
-
-# --- Edit models ---
-
-register(ModelEntry(
-    short_name="qwen-image-max-edit",
-    provider="fal",
-    catalog_model="fal-ai/qwen-image-max/edit",
-    operation="edit",
-))
-
-register(ModelEntry(
-    short_name="kling-image",
-    provider="fal",
-    catalog_model="fal-ai/kling-image/o3/image-to-image",
-    operation="edit",
-))
-
-register(ModelEntry(
-    short_name="wan-25",
-    provider="fal",
-    catalog_model="fal-ai/wan-25-preview/image-to-image",
-    operation="edit",
-))
-
-register(ModelEntry(
-    short_name="grok-imagine",
-    provider="fal",
-    catalog_model="xai/grok-imagine-image/edit",
-    operation="edit",
-))
-
-register(ModelEntry(
-    short_name="face-swap",
-    provider="fal",
-    catalog_model="half-moon-ai/ai-face-swap/faceswapimage",
-    operation="edit",
-))
-
-register(ModelEntry(
-    short_name="nano-banana-pro-edit",
-    provider="fal",
-    catalog_model="fal-ai/nano-banana-pro/edit",
-    operation="edit",
-    pricing_strategy_key="nano_banana_pro_edit",
-))
-
-register(ModelEntry(
-    short_name="seedream-5-pro-edit",
-    provider="fal",
-    catalog_model="bytedance/seedream/v5/pro/edit",
-    operation="edit",
-))
-
-register(ModelEntry(
-    short_name="qwen-image-2-pro-edit",
-    provider="fal",
-    catalog_model="fal-ai/qwen-image-2/pro/edit",
-    operation="edit",
-))
-
-register(ModelEntry(
-    short_name="flux-2-lora-edit",
-    provider="fal",
-    catalog_model="fal-ai/flux-2/lora/edit",
-    operation="edit",
-))
-
-# --- Training models ---
-
-register(ModelEntry(
-    short_name="flux-2",
-    provider="fal",
-    catalog_model="fal-ai/flux-2-trainer-v2",
-    operation="train",
-))
-
-register(ModelEntry(
-    short_name="qwen-image-2512",
-    provider="fal",
-    catalog_model="fal-ai/qwen-image-2512-trainer-v2",
-    operation="train",
-))
-
-register(ModelEntry(
-    short_name="flux-dev",
-    provider="fal",
-    catalog_model="fal-ai/flux-lora-fast-training",
-    operation="train",
-))
-
-register(ModelEntry(
-    short_name="qwen-2.5",
-    provider="fal",
-    catalog_model="fal-ai/qwen-image-2512-trainer-v2",
-    operation="train",
-))
+_register_catalog()

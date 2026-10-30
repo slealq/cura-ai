@@ -262,38 +262,7 @@ stateDiagram-v2
 
 ### A.3 — Operations Catalog
 
-Complete matrix of billable operations.
-
-> **Note:** "Model (catalog key)" is the string stored in `CostCatalog.model` — this may differ from the provider's API model ID. For example, fal.ai endpoints are identified by their fal endpoint path (`fal-ai/flux/dev`), not a model version string.
-
-| Operation | Provider | Model (catalog key) | Billing Model | Cost Driver | Entry Point |
-|-----------|----------|-------------------|---------------|-------------|-------------|
-| `tag` | openai | gpt-4o / gpt-4o-mini / gpt-5-mini / gpt-5.2 | per_token | Image tokens + prompt | `tasks.py:tag_image()` |
-| `tag` | anthropic | claude-sonnet-4-20250514 | per_token | Image tokens + prompt | `tasks.py:tag_image()` |
-| `tag` | fal (openrouter) | xai/grok-4-fast | per_token | Image tokens + prompt | `tasks.py:tag_image()` |
-| `describe` | openai | gpt-4o / gpt-5-mini / gpt-5.2 | per_token | Image tokens + prompt | `tasks.py:describe_image()` |
-| `describe` | anthropic | claude-sonnet-4-20250514 | per_token | Image tokens + prompt | `tasks.py:describe_image()` |
-| `describe` | fal (openrouter) | xai/grok-4-fast | per_token | Image tokens + prompt | `tasks.py:describe_image()` |
-| `embed` | openai | text-embedding-3-small | per_token | Tags + description text | `tasks.py:embed_image()` |
-| `summarize` | openai | gpt-4o-mini | per_token | Cluster member text | `tasks.py:summarize_cluster()` |
-| `summarize` | anthropic | claude-sonnet-4-20250514 | per_token | Cluster member text | `tasks.py:summarize_cluster()` |
-| `expand_prompt` | openai | gpt-4o-mini (configurable) | per_token | Prompt text | `api/generation.py:expand_prompt()` |
-| `generate` | fal | fal-ai/flux/dev | per_call | Flat rate | `generation_tasks.py:generate_image()` |
-| `generate` | fal | fal-ai/flux-lora | per_call | Flat rate (with LoRA) | `generation_tasks.py:generate_image()` |
-| `generate` | fal | fal-ai/qwen-image-2512 | per_call | Flat rate | `generation_tasks.py:generate_image()` |
-| `generate` | fal | fal-ai/qwen-image-2512/lora | per_call | Flat rate (with LoRA) | `generation_tasks.py:generate_image()` |
-| `generate` | fal | fal-ai/nano-banana-pro | variable | Resolution × base rate | `generation_tasks.py:generate_image()` |
-| `generate` | fal | fal-ai/nano-banana-2 | variable | Resolution × base rate | `generation_tasks.py:generate_image()` |
-| `generate` | fal | fal-ai/flux-2-pro | variable | Megapixels ($0.03 + $0.015/extra MP) | `generation_tasks.py:generate_image()` |
-| `edit` | fal | fal-ai/qwen-image-max/edit | per_call | Flat rate | `generation_tasks.py:edit_image()` |
-| `edit` | fal | fal-ai/kling-image/o3/image-to-image | per_call | Flat rate | `generation_tasks.py:edit_image()` |
-| `edit` | fal | fal-ai/wan-25-preview/image-to-image | per_call | Flat rate | `generation_tasks.py:edit_image()` |
-| `edit` | fal | xai/grok-imagine-image/edit | per_call | Flat rate | `generation_tasks.py:edit_image()` |
-| `edit` | fal | half-moon-ai/ai-face-swap/faceswapimage | per_call | Flat rate | `generation_tasks.py:edit_image()` |
-| `edit` | fal | fal-ai/nano-banana-pro/edit | variable | Resolution × base rate | `generation_tasks.py:edit_image()` |
-| `train` | fal | fal-ai/flux-lora-fast-training | per_call | Flat rate | `generation_tasks.py:train_lora()` |
-| `train` | fal | fal-ai/qwen-image-2512-trainer-v2 | per_call | Flat rate | `generation_tasks.py:train_lora()` |
-| `evaluate` | openai/anthropic/fal | (per provider config) | per_token | Vision + embedding | `generation_tasks.py:evaluate_lora()` |
+The authoritative current model and endpoint matrix, rates, and sources are in [model-catalog.md](model-catalog.md). Migration 055 seeds fal catalog rows for every offered language model across `tag`, `describe`, `custom`, `evaluate`, `evaluate_creative`, `summarize_eval`, `generate_prompts`, `summarize`, `expand_prompt`, and `suggest_prompt`, and for each offered generation and edit endpoint (including LoRA variants). Language calls use token estimates and prefer provider-reported cost. Image calls use endpoint pricing rules or flat estimates. OpenAI embedding billing remains separate; training retains the existing supported bases. Historical rows are retained.
 
 ---
 

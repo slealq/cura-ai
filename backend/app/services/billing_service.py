@@ -484,7 +484,7 @@ class BillingService:
 
         Returns a dict mapping base_model → variant → sparks (fractional).
         For models with variable pricing, the returned value uses
-        default parameters (1K resolution, 1024×1024).
+        default parameters (each model's default option).
         """
         from app.services.model_registry import generation_model_variants
 
@@ -494,7 +494,7 @@ class BillingService:
             for variant_key, (provider, model, operation) in variants.items():
                 sparks, _ = _estimate_sparks(
                     db, provider, model, operation,
-                    generation_params={"resolution": "1K"},
+                    generation_params={},
                 )
                 costs[variant_key] = float(sparks)
             result[base_model] = costs
@@ -761,10 +761,9 @@ class BillingService:
     def get_evaluation_costs(
         db: Session,
         user_id: int,
-        base_model: str = "flux-dev",
+        base_model: str = "flux-2",
         sample_count: int = 5,
         creative_count: int = 0,
-        vision_eval_provider: str | None = None,
     ) -> dict:
         """Estimate evaluation costs broken down by sub-operation."""
         from app.services.settings_service import SettingsService
@@ -777,34 +776,18 @@ class BillingService:
         try:
             gen_provider, gen_model, gen_op = resolve(base_model, "generate", with_lora=True)
         except KeyError:
-            gen_provider, gen_model, gen_op = "fal", "fal-ai/flux-lora", "generate"
+            # Legacy base models (e.g. flux-dev) are no longer offered; price as the default LoRA base.
+            gen_provider, gen_model, gen_op = resolve("flux-2", "generate", with_lora=True)
 
         generate_sparks, _ = _estimate_sparks(db, gen_provider, gen_model, gen_op)
 
-        # Vision/describe provider
-        vision_provider_key = provider_config.get("vision_provider", "openai")
-        if vision_provider_key == "openai":
-            vision_model = provider_config.get("openai_vision_model", "gpt-4o-mini")
-            vision_prov = "openai"
-        elif vision_provider_key == "anthropic":
-            vision_model = provider_config.get("anthropic_vision_model", "claude-sonnet-4-20250514")
-            vision_prov = "anthropic"
-        else:
-            vision_model = provider_config.get("fal_vision_model", "x-ai/grok-2-vision-1212")
-            vision_prov = "fal"
+        # Vision/describe model (all vision runs through fal's OpenRouter router)
+        vision_prov = "fal"
+        vision_model = provider_config["fal_vision_model"]
 
-        # Eval provider (override or same as vision)
-        if vision_eval_provider:
-            eval_prov = vision_eval_provider
-            if eval_prov == "openai":
-                eval_model = provider_config.get("openai_vision_model", "gpt-4o-mini")
-            elif eval_prov == "anthropic":
-                eval_model = provider_config.get("anthropic_vision_model", "claude-sonnet-4-20250514")
-            else:
-                eval_model = provider_config.get("fal_vision_model", "x-ai/grok-2-vision-1212")
-        else:
-            eval_prov = vision_prov
-            eval_model = vision_model
+        # Eval uses the same model (a legacy ``vision_eval_provider`` override is ignored)
+        eval_prov = vision_prov
+        eval_model = vision_model
 
         describe_sparks, _ = _estimate_sparks(
             db, vision_prov, vision_model, "describe",
@@ -880,13 +863,8 @@ class BillingService:
         settings = SettingsService(db, user_id)
         provider_config = settings.get_provider_config()
 
-        lang_provider = provider_config.get("language_provider", "openai")
-        if lang_provider == "openai":
-            lang_model = provider_config.get("openai_language_model", "gpt-4o-mini")
-        elif lang_provider == "anthropic":
-            lang_model = provider_config.get("anthropic_language_model", "claude-sonnet-4-20250514")
-        else:
-            lang_model = provider_config.get("fal_language_model", "x-ai/grok-2-vision-1212")
+        lang_provider = "fal"
+        lang_model = provider_config["fal_language_model"]
 
         # Try DB averages for tokens
         avg_in, avg_out = BillingService.get_average_tokens(

@@ -30,7 +30,7 @@ class GenerationService:
         training_provider: str,
         folder_id: int | None = None,
         cluster_id: int | None = None,
-        base_model: str = "flux-dev",
+        base_model: str = "flux-2",
         description: str | None = None,
         training_config: dict | None = None,
         training_images_count: int = 0,

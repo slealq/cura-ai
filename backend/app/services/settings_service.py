@@ -5,6 +5,16 @@ from sqlalchemy.orm import Session
 
 from app.models.prompt_preset import PromptPreset
 from app.models.settings import AppSettings
+from app.services.model_catalog import DEFAULT_EDIT_MODEL as DEFAULT_EDIT_MODEL_KEY
+from app.services.model_catalog import (
+    DEFAULT_GENERATION_MODEL,
+    DEFAULT_LANGUAGE_MODEL,
+    DEFAULT_VISION_MODEL,
+    ImageModel,
+    get_image_model,
+    get_language_model,
+    image_models,
+)
 
 DEFAULT_GENERATION_CONFIG = {
     "width": 1024,
@@ -24,87 +34,52 @@ DEFAULT_TRAINING_CONFIG = {
 DEFAULT_TRAINING_CONFIGS = {
     "flux-2": {"steps": 1000, "learning_rate": 0.00005},
     "qwen-image-2512": {"steps": 2000, "learning_rate": 0.0005},
-    "flux-dev": {"steps": 1000, "is_style": False},
-    "qwen-2.5": {"steps": 2000, "learning_rate": 0.0005},
 }
 
+# Guidance defaults for the LoRA-capable models (everything else uses 3.5).
+_GUIDANCE_DEFAULTS = {"flux-2": 2.5, "qwen-image-2512": 4.0}
+
+
+def _param_defaults(model: ImageModel) -> dict:
+    """Non-null declared param defaults, e.g. {"resolution": "1K", "aspect_ratio": "1:1"}."""
+    return {
+        name: spec["default"]
+        for name, spec in model.params.items()
+        if spec.get("default") is not None
+    }
+
+
+# Derived from the model catalog so a new model needs no settings changes.
 DEFAULT_GENERATION_CONFIGS = {
-    "flux-2": {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 2.5, "default_lora_scale": 1.0},
-    "qwen-image-2512": {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 4.0, "default_lora_scale": 1.0},
-    "seedream-5-pro": {"image_size": "auto_2K", "num_images": 1, "output_format": "png", "enable_safety_checker": True},
-    "nano-banana-pro": {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 3.5, "default_lora_scale": 1.0},
-    "flux-dev": {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 3.5, "default_lora_scale": 1.0},
-    "qwen-2.5": {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 4.0, "default_lora_scale": 1.0},
+    m.key: {
+        **DEFAULT_GENERATION_CONFIG,
+        "guidance_scale": _GUIDANCE_DEFAULTS.get(m.key, DEFAULT_GENERATION_CONFIG["guidance_scale"]),
+        **_param_defaults(m),
+    }
+    for m in image_models("generate")
 }
 
 DEFAULT_EDIT_CONFIGS = {
-    "seedream-5-pro-edit": {
-        "image_size": "auto_2K",
+    m.key: {
         "num_images": 1,
         "output_format": "png",
-        "enable_safety_checker": True,
-    },
-    "qwen-image-2-pro-edit": {
-        "image_size": "square_hd",
-        "num_images": 1,
-        "output_format": "png",
-        "enable_prompt_expansion": True,
-        "enable_safety_checker": True,
-    },
-    "flux-2-lora-edit": {
-        "image_size": "landscape_4_3",
-        "num_images": 1,
-        "output_format": "png",
-        "enable_prompt_expansion": False,
-        "enable_safety_checker": True,
-    },
-    "qwen-image-max-edit": {
-        "image_size": "square_hd",
-        "num_images": 1,
-        "output_format": "png",
-        "enable_prompt_expansion": True,
-        "enable_safety_checker": True,
-    },
-    "kling-image": {
-        "resolution": "1K",
-        "aspect_ratio": "auto",
-        "num_images": 1,
-        "output_format": "png",
-    },
-    "wan-25": {
-        "image_size": "square",
-        "num_images": 1,
-        "output_format": "png",
-        "enable_safety_checker": True,
-    },
-    "grok-imagine": {
-        "num_images": 1,
-        "output_format": "jpeg",
-    },
-    "face-swap": {
-        "num_images": 1,
-        "enable_occlusion_prevention": False,
-    },
+        **_param_defaults(m),
+    }
+    for m in image_models("edit")
 }
 
-DEFAULT_BASE_MODEL = "nano-banana-pro"
-DEFAULT_EDIT_MODEL = "nano-banana-pro-edit"
+DEFAULT_BASE_MODEL = DEFAULT_GENERATION_MODEL
+DEFAULT_EDIT_MODEL = DEFAULT_EDIT_MODEL_KEY
 
 DEFAULT_PROVIDER_CONFIG = {
-    "vision_provider": "openai",
     "embedding_provider": "openai",
-    "openai_vision_model": "gpt-4o-mini",
     "openai_embedding_model": "text-embedding-3-small",
-    "anthropic_vision_model": "claude-3-haiku-20240307",
-    "fal_vision_model": "x-ai/grok-4-fast",
+    "fal_vision_model": DEFAULT_VISION_MODEL,
     "max_tokens_tagging": 1000,
     "max_tokens_description": 3000,
     "max_tokens_summarization": 500,
     # Language model settings (text-only tasks: summarization, expansion, suggestions)
-    "language_provider": "openai",
-    "openai_language_model": "gpt-4o-mini",
-    "anthropic_language_model": "claude-3-haiku-20240307",
-    "fal_language_model": "x-ai/grok-4-fast",
+    "fal_language_model": DEFAULT_LANGUAGE_MODEL,
     "max_tokens_expansion": 500,
     "max_tokens_suggestion": 2000,
     "vision_temperature": 1.0,
@@ -342,8 +317,9 @@ class SettingsService:
     # --- Base model ---
 
     def get_base_model(self) -> str:
-        """Get the active base model."""
-        return self.get_setting("base_model", DEFAULT_BASE_MODEL) or DEFAULT_BASE_MODEL
+        """Get the active base model; a stored model that is no longer offered resolves to the default."""
+        stored = self.get_setting("base_model")
+        return stored if get_image_model(stored, "generate") else DEFAULT_BASE_MODEL
 
     def set_base_model(self, base_model: str) -> str:
         """Set the active base model."""
@@ -353,8 +329,9 @@ class SettingsService:
     # --- Edit model ---
 
     def get_edit_model(self) -> str:
-        """Get the default edit model."""
-        return self.get_setting("edit_model", DEFAULT_EDIT_MODEL) or DEFAULT_EDIT_MODEL
+        """Get the default edit model; a stored model that is no longer offered resolves to the default."""
+        stored = self.get_setting("edit_model")
+        return stored if get_image_model(stored, "edit") else DEFAULT_EDIT_MODEL
 
     def set_edit_model(self, edit_model: str) -> str:
         """Set the default edit model."""
@@ -452,15 +429,23 @@ class SettingsService:
     # --- Provider config ---
 
     def get_provider_config(self) -> dict:
-        """Get provider configuration from DB, or return defaults."""
+        """Get provider configuration from DB, or return defaults.
+
+        Stale keys (removed providers) are ignored, and a stored model that is no
+        longer in the catalog resolves to the default at read time.
+        """
+        config = dict(DEFAULT_PROVIDER_CONFIG)
         raw = self.get_setting("provider_config")
         if raw:
             try:
-                config = json.loads(raw)
-                return {**DEFAULT_PROVIDER_CONFIG, **config}
-            except (json.JSONDecodeError, TypeError):
+                stored = json.loads(raw)
+                config.update({k: v for k, v in stored.items() if k in DEFAULT_PROVIDER_CONFIG})
+            except (json.JSONDecodeError, TypeError, AttributeError):
                 pass
-        return dict(DEFAULT_PROVIDER_CONFIG)
+        for key in ("fal_vision_model", "fal_language_model"):
+            if get_language_model(config[key]) is None:
+                config[key] = DEFAULT_PROVIDER_CONFIG[key]
+        return config
 
     def set_provider_config(self, config: dict) -> dict:
         """Validate and store provider config. Accepts partial dict, merges with defaults."""
@@ -473,7 +458,7 @@ class SettingsService:
 
     # --- Edit config ---
 
-    def get_edit_config(self, edit_model: str = "qwen-image-max-edit") -> dict:
+    def get_edit_config(self, edit_model: str = DEFAULT_EDIT_MODEL) -> dict:
         """Get edit configuration scoped to an edit model."""
         raw = self.get_setting(f"edit_config:{edit_model}")
         defaults = DEFAULT_EDIT_CONFIGS.get(edit_model, {})
@@ -485,7 +470,7 @@ class SettingsService:
                 pass
         return dict(defaults)
 
-    def set_edit_config(self, config: dict, edit_model: str = "qwen-image-max-edit") -> dict:
+    def set_edit_config(self, config: dict, edit_model: str = DEFAULT_EDIT_MODEL) -> dict:
         """Validate and store edit config scoped to an edit model."""
         current = self.get_edit_config(edit_model)
         defaults = DEFAULT_EDIT_CONFIGS.get(edit_model, {})

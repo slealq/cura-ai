@@ -3,6 +3,7 @@
 import { Loader2, AlertCircle, X, Zap, Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { GeneratedImage } from '@/types';
+import { useModelCatalog } from '@/hooks/useModelCatalog';
 import { generationApi } from '@/lib/api';
 
 function formatDuration(createdAt: string, completedAt: string): string {
@@ -21,16 +22,6 @@ const statusStyles: Record<string, string> = {
   failed: 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300',
 };
 
-const modelBadgeStyles: Record<string, string> = {
-  'flux-dev': 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300',
-  'qwen-2.5': 'bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300',
-};
-
-const modelLabels: Record<string, string> = {
-  'flux-dev': 'Flux',
-  'qwen-2.5': 'Qwen',
-};
-
 export default function GeneratedImageCard({
   image,
   onClick,
@@ -40,6 +31,8 @@ export default function GeneratedImageCard({
   onClick?: () => void;
   onDelete?: (id: number) => void;
 }) {
+  const { data: catalog } = useModelCatalog();
+  const models = [...(catalog?.generation ?? []), ...(catalog?.edit ?? [])];
   const thumbnailSrc = image.thumbnail_uri_medium
     ? generationApi.getThumbnailUrl(image.thumbnail_uri_medium.split('/').pop() || '')
     : null;
@@ -122,9 +115,9 @@ export default function GeneratedImageCard({
         {image.base_model ? (
           <span className={cn(
             'px-1.5 py-0.5 rounded-full text-[10px] font-semibold',
-            modelBadgeStyles[image.base_model] || 'bg-gray-100 text-gray-700 dark:bg-gray-900/50 dark:text-gray-300'
+            'bg-gray-100 text-gray-700 dark:bg-gray-900/50 dark:text-gray-300'
           )}>
-            {modelLabels[image.base_model] || image.base_model}
+            {models.find(m => m.key === image.base_model || m.endpoint === image.base_model)?.label || image.base_model}
           </span>
         ) : <span />}
         {image.status === 'completed' && (image.cost_sparks != null || image.completed_at) && (

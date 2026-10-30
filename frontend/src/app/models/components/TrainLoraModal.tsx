@@ -1,18 +1,14 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { generationApi, foldersApi, clustersApi, settingsApi, billingApi } from '@/lib/api';
 import { X, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { trackFunnelStep } from '@/lib/observability';
 import ModelSelector from '@/components/ModelSelector';
+import { useModelCatalog } from '@/hooks/useModelCatalog';
 import QwenTrainForm, { type QwenTrainData } from './QwenTrainForm';
-
-const BASE_MODELS = [
-  { value: 'flux-2', label: 'FLUX.2' },
-  { value: 'qwen-image-2512', label: 'Qwen Image 2512' },
-];
 
 type BaseModel = 'flux-2' | 'qwen-image-2512';
 
@@ -23,6 +19,8 @@ interface TrainLoraModalProps {
 
 export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
   const queryClient = useQueryClient();
+  const { data: catalog } = useModelCatalog();
+  const BASE_MODELS = useMemo(() => (catalog?.training_base_models ?? []).map(m => ({ value: m.key, label: m.label })), [catalog]);
   const hasInitialized = useRef(false);
   const [baseModel, setBaseModel] = useState<BaseModel>('flux-2');
 
@@ -61,13 +59,13 @@ export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
 
   // Initialize base model from settings
   useEffect(() => {
-    if (baseModelData && !hasInitialized.current) {
+    if (catalog && baseModelData && !hasInitialized.current) {
       hasInitialized.current = true;
       if (BASE_MODELS.some((m) => m.value === baseModelData.base_model)) {
         setBaseModel(baseModelData.base_model as BaseModel);
       }
     }
-  }, [baseModelData]);
+  }, [baseModelData, catalog, BASE_MODELS]);
 
   // Reset init flag when modal closes
   useEffect(() => {
@@ -142,6 +140,7 @@ export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
           </div>
 
           <QwenTrainForm
+            key={baseModel}
             baseModel={baseModel}
             defaultSteps={baseModel === 'qwen-image-2512' ? Math.max(defaultSteps, 2000) : defaultSteps}
             defaultLearningRate={defaultLearningRate}

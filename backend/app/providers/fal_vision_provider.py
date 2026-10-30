@@ -1,32 +1,50 @@
-"""fal.ai OpenRouter vision provider for tagging, description, and evaluation."""
+"""fal.ai OpenRouter provider for vision and language operations.
+
+Every call goes through :func:`build_router_request`, which picks the router
+endpoint (vision when images are attached, text-only otherwise) and drops
+``temperature`` for models that reject it.
+"""
+import asyncio
 import base64
 import json
 import logging
 import re
 import time
+from dataclasses import dataclass
 
 import fal_client
 
 from app.models.pipeline_log import LogCategory, LogLevel
 from app.providers.base import (
     AIContentError,
+    BaseClusterSummarizer,
     BaseDescriber,
     BaseEvaluator,
     BaseTagger,
+    ClusterSummaryResult,
     DescriptionResult,
     TaggingResult,
     VisionEvalResult,
 )
 from app.providers.fal_provider import _ensure_fal_key
+from app.providers.prompts import (
+    ASSESSMENT_SUMMARY_PROMPT,
+    CLUSTER_SUMMARY_PROMPT,
+    CREATIVE_EVAL_PROMPT,
+    CREATIVE_PROMPT_GENERATION,
+    EVAL_PROMPT,
+)
 from app.providers.tracing import provider_span
 from app.services.log_service import write_log
+from app.services.model_catalog import DEFAULT_VISION_MODEL, get_language_model
 
 logger = logging.getLogger(__name__)
 
 TAGGING_PROMPT_VERSION = "v3.0.0"
 
-FAL_OPENROUTER_ENDPOINT = "openrouter/router/vision"
-DEFAULT_FAL_VISION_MODEL = "x-ai/grok-4-fast"
+FAL_ROUTER_ENDPOINT = "openrouter/router"
+FAL_VISION_ENDPOINT = "openrouter/router/vision"
+DEFAULT_FAL_VISION_MODEL = DEFAULT_VISION_MODEL
 
 # Default polling interval for vision requests (seconds).
 # fal_client.subscribe() defaults to ~200ms which floods the API.
@@ -47,6 +65,33 @@ def _sanitize_for_log(arguments: dict) -> dict:
         else:
             sanitized[k] = v
     return sanitized
+
+
+def build_router_request(
+    model: str,
+    prompt: str,
+    max_tokens: int,
+    image_urls: list[str] | None = None,
+    temperature: float | None = None,
+    system_prompt: str | None = None,
+) -> tuple[str, dict]:
+    """Build (endpoint, arguments) for a fal OpenRouter call — the one place router args are made.
+
+    Uses the vision router when images are attached and the text router otherwise.
+    ``temperature`` is omitted unless the catalog says the model accepts it.
+    """
+    arguments: dict = {"prompt": prompt, "model": model, "max_tokens": max_tokens}
+    if system_prompt:
+        arguments["system_prompt"] = system_prompt
+    if image_urls:
+        arguments["image_urls"] = image_urls
+    lm = get_language_model(model)
+    if lm is not None and lm.requires_reasoning:
+        arguments["reasoning"] = True
+        arguments["max_tokens"] = max(max_tokens, 4096)
+    if temperature is not None and lm is not None and lm.supports_temperature:
+        arguments["temperature"] = temperature
+    return (FAL_VISION_ENDPOINT if image_urls else FAL_ROUTER_ENDPOINT), arguments
 
 
 def _fal_submit_and_poll(endpoint: str, arguments: dict, poll_interval: float = _VISION_POLL_INTERVAL) -> dict:
@@ -102,22 +147,15 @@ class FalVisionTagger(BaseTagger):
 
         data_uri = _to_data_uri(image_data, mime_type)
 
-        args = {
-            "image_urls": [data_uri],
-            "prompt": tag_prompt,
-            "model": self.model,
-            "max_tokens": self.token_limit,
-        }
-        if self.temperature is not None:
-            args["temperature"] = self.temperature
+        endpoint, args = build_router_request(
+            self.model, tag_prompt, self.token_limit,
+            image_urls=[data_uri], temperature=self.temperature,
+        )
 
         start = time.monotonic()
         try:
             with provider_span("fal_vision", "tag", self.model) as span:
-                result = _fal_submit_and_poll(
-                    FAL_OPENROUTER_ENDPOINT,
-                    arguments=args,
-                )
+                result = _fal_submit_and_poll(endpoint, arguments=args)
                 usage = result.get("usage", {})
                 if span and usage:
                     input_tok = usage.get("prompt_tokens") or usage.get("input_tokens")
@@ -210,22 +248,15 @@ class FalVisionDescriber(BaseDescriber):
 
         data_uri = _to_data_uri(image_data, mime_type)
 
-        args = {
-            "image_urls": [data_uri],
-            "prompt": description_prompt,
-            "model": self.model,
-            "max_tokens": self.token_limit,
-        }
-        if self.temperature is not None:
-            args["temperature"] = self.temperature
+        endpoint, args = build_router_request(
+            self.model, description_prompt, self.token_limit,
+            image_urls=[data_uri], temperature=self.temperature,
+        )
 
         start = time.monotonic()
         try:
             with provider_span("fal_vision", "describe", self.model) as span:
-                result = _fal_submit_and_poll(
-                    FAL_OPENROUTER_ENDPOINT,
-                    arguments=args,
-                )
+                result = _fal_submit_and_poll(endpoint, arguments=args)
                 usage = result.get("usage", {})
                 if span and usage:
                     input_tok = usage.get("prompt_tokens") or usage.get("input_tokens")
@@ -289,21 +320,13 @@ class FalVisionDescriber(BaseDescriber):
         return self.model
 
 
-# Import eval prompt constants from anthropic_provider
-from app.providers.anthropic_provider import (  # noqa: E402
-    ASSESSMENT_SUMMARY_PROMPT,
-    CREATIVE_EVAL_PROMPT,
-    CREATIVE_PROMPT_GENERATION,
-    EVAL_PROMPT,
-)
-
-
 class FalVisionEvaluator(BaseEvaluator):
     """fal.ai OpenRouter vision-based image pair evaluator."""
 
-    def __init__(self, api_key: str | None = None, model: str | None = None):
+    def __init__(self, api_key: str | None = None, model: str | None = None, temperature: float | None = None):
         _ensure_fal_key(api_key)
         self.model = model or DEFAULT_FAL_VISION_MODEL
+        self.temperature = temperature
 
     async def evaluate_pair(
         self,
@@ -321,15 +344,11 @@ class FalVisionEvaluator(BaseEvaluator):
         start = time.monotonic()
         try:
             with provider_span("fal_vision", "evaluate_pair", self.model) as span:
-                result = _fal_submit_and_poll(
-                    FAL_OPENROUTER_ENDPOINT,
-                    arguments={
-                        "image_urls": [orig_uri, gen_uri],
-                        "prompt": prompt,
-                        "model": self.model,
-                        "max_tokens": 1000,
-                    },
+                endpoint, args = build_router_request(
+                    self.model, prompt, 1000,
+                    image_urls=[orig_uri, gen_uri], temperature=self.temperature,
                 )
+                result = _fal_submit_and_poll(endpoint, arguments=args)
                 usage = result.get("usage", {})
                 if span and usage:
                     input_tok = usage.get("prompt_tokens") or usage.get("input_tokens")
@@ -386,15 +405,11 @@ class FalVisionEvaluator(BaseEvaluator):
         start = time.monotonic()
         try:
             with provider_span("fal_vision", "evaluate_single", self.model) as span:
-                result = _fal_submit_and_poll(
-                    FAL_OPENROUTER_ENDPOINT,
-                    arguments={
-                        "image_urls": [data_uri],
-                        "prompt": prompt,
-                        "model": self.model,
-                        "max_tokens": 1000,
-                    },
+                endpoint, args = build_router_request(
+                    self.model, prompt, 1000,
+                    image_urls=[data_uri], temperature=self.temperature,
                 )
+                result = _fal_submit_and_poll(endpoint, arguments=args)
                 usage = result.get("usage", {})
                 if span and usage:
                     input_tok = usage.get("prompt_tokens") or usage.get("input_tokens")
@@ -466,14 +481,10 @@ class FalVisionEvaluator(BaseEvaluator):
         start = time.monotonic()
         try:
             with provider_span("fal_vision", "summarize_assessments", self.model) as span:
-                result = _fal_submit_and_poll(
-                    FAL_OPENROUTER_ENDPOINT,
-                    arguments={
-                        "prompt": prompt,
-                        "model": self.model,
-                        "max_tokens": 1000,
-                    },
+                endpoint, args = build_router_request(
+                    self.model, prompt, 1000, temperature=self.temperature,
                 )
+                result = _fal_submit_and_poll(endpoint, arguments=args)
                 usage = result.get("usage", {})
                 if span and usage:
                     input_tok = usage.get("prompt_tokens") or usage.get("input_tokens")
@@ -527,14 +538,10 @@ class FalVisionEvaluator(BaseEvaluator):
         start = time.monotonic()
         try:
             with provider_span("fal_vision", "generate_creative_prompts", self.model) as span:
-                result = _fal_submit_and_poll(
-                    FAL_OPENROUTER_ENDPOINT,
-                    arguments={
-                        "prompt": prompt,
-                        "model": self.model,
-                        "max_tokens": 2000,
-                    },
+                endpoint, args = build_router_request(
+                    self.model, prompt, 2000, temperature=self.temperature,
                 )
+                result = _fal_submit_and_poll(endpoint, arguments=args)
                 usage = result.get("usage", {})
                 if span and usage:
                     input_tok = usage.get("prompt_tokens") or usage.get("input_tokens")
@@ -571,3 +578,115 @@ class FalVisionEvaluator(BaseEvaluator):
 
     def get_model_name(self) -> str:
         return self.model
+
+
+class FalClusterSummarizer(BaseClusterSummarizer):
+    """fal.ai OpenRouter text-only cluster summarizer."""
+
+    def __init__(self, api_key: str | None = None, model: str | None = None, max_tokens: dict | None = None):
+        _ensure_fal_key(api_key)
+        self.model = model or DEFAULT_FAL_VISION_MODEL
+        self.token_limit = (max_tokens or {}).get("summarize", 500)
+
+    async def summarize_cluster(
+        self,
+        common_tags: list[str],
+        sample_descriptions: list[str],
+        cluster_size: int,
+    ) -> ClusterSummaryResult:
+        """Generate summary for a cluster of images."""
+        tags_str = ", ".join(common_tags) if common_tags else "No common tags"
+        descriptions_str = "\n\n".join(
+            f"Image {i+1}:\n{desc}"
+            for i, desc in enumerate(sample_descriptions[:5])
+        )
+        prompt = CLUSTER_SUMMARY_PROMPT.format(
+            size=cluster_size,
+            tags=tags_str,
+            descriptions=descriptions_str,
+        )
+
+        start = time.monotonic()
+        try:
+            with provider_span("fal_vision", "summarize_cluster", self.model) as span:
+                endpoint, args = build_router_request(self.model, prompt, self.token_limit)
+                result = _fal_submit_and_poll(endpoint, arguments=args)
+                usage = result.get("usage", {})
+                if span and usage:
+                    input_tok = usage.get("prompt_tokens") or usage.get("input_tokens")
+                    output_tok = usage.get("completion_tokens") or usage.get("output_tokens")
+                    if input_tok is not None:
+                        span.set_attribute("ai.tokens.input", input_tok)
+                    if output_tok is not None:
+                        span.set_attribute("ai.tokens.output", output_tok)
+            elapsed = (time.monotonic() - start) * 1000
+            content = result.get("output", "")
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"fal.ai OpenRouter summarize completed ({self.model})",
+                provider="fal", model=self.model, operation="summarize",
+                duration_ms=round(elapsed, 1),
+                input_tokens=usage.get("prompt_tokens") or usage.get("input_tokens"),
+                output_tokens=usage.get("completion_tokens") or usage.get("output_tokens"),
+                provider_cost=usage.get("cost"),
+                success=True,
+            )
+        except Exception as e:
+            elapsed = (time.monotonic() - start) * 1000
+            write_log(
+                category=LogCategory.API_CALL,
+                message=f"fal.ai OpenRouter summarize failed: {e}",
+                level=LogLevel.ERROR, provider="fal", model=self.model,
+                operation="summarize", duration_ms=round(elapsed, 1), success=False,
+                extra={"error": str(e)},
+            )
+            raise
+
+        parsed = _extract_json(content)
+        return ClusterSummaryResult(
+            summary_title=parsed.get("summary_title", "Untitled Cluster"),
+            summary_description=parsed.get("summary_description", ""),
+            model=self.model,
+        )
+
+    def get_model_name(self) -> str:
+        return self.model
+
+
+@dataclass
+class TextCompletion:
+    """Result of a text-only fal OpenRouter call."""
+
+    text: str
+    input_tokens: int | None
+    output_tokens: int | None
+    provider_cost: float | None
+    usage: dict
+
+
+async def fal_text_completion(
+    prompt: str,
+    model: str,
+    max_tokens: int,
+    api_key: str | None = None,
+    system_prompt: str | None = None,
+    temperature: float | None = None,
+    image_urls: list[str] | None = None,
+) -> TextCompletion:
+    """Run a router call without blocking the event loop (for API routes).
+
+    Text-only unless *image_urls* is given, in which case the vision router is used.
+    """
+    _ensure_fal_key(api_key)
+    endpoint, args = build_router_request(
+        model, prompt, max_tokens, image_urls=image_urls, temperature=temperature, system_prompt=system_prompt,
+    )
+    result = await asyncio.to_thread(_fal_submit_and_poll, endpoint, args)
+    usage = result.get("usage") or {}
+    return TextCompletion(
+        text=(result.get("output") or "").strip(),
+        input_tokens=usage.get("prompt_tokens") or usage.get("input_tokens"),
+        output_tokens=usage.get("completion_tokens") or usage.get("output_tokens"),
+        provider_cost=usage.get("cost"),
+        usage=usage,
+    )

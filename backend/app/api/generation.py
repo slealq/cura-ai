@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
+from app.api.model_validation import require_image_model, validate_model_params, validate_steps_guidance
 from app.core.config import get_settings
 from app.core.security import get_current_user, get_current_user_from_token_param
 from app.db.base import get_db
@@ -15,6 +16,7 @@ from app.models.lora_model import LoraModelStatus
 from app.models.user import User
 from app.services.evaluation_service import get_evaluation_service
 from app.services.generation_service import get_generation_service
+from app.services.model_catalog import DEFAULT_GENERATION_MODEL, DEFAULT_LANGUAGE_MODEL, trainable_keys
 from app.services.settings_service import get_settings_service
 from app.workers.dispatch import dispatch, dispatch_or_fail
 
@@ -22,6 +24,9 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 router = APIRouter(prefix="/generation", tags=["generation"])
+
+# Base models a LoRA can be trained on or uploaded for (catalog `trainable`).
+SUPPORTED_BASE_MODELS = set(trainable_keys())
 
 
 # --- Schemas ---
@@ -65,12 +70,6 @@ class TrainLoraRequest(BaseModel):
             )
         return self
 
-    @model_validator(mode="after")
-    def validate_trigger_word_for_flux(self) -> "TrainLoraRequest":
-        if self.base_model == "flux-dev" and not self.trigger_word:
-            raise ValueError("trigger_word is required for flux-dev base model")
-        return self
-
 
 class LoraInput(BaseModel):
     """A single LoRA selection for generation."""
@@ -107,6 +106,7 @@ class GenerateRequest(BaseModel):
     safety_tolerance: str | None = None
     enable_web_search: bool | None = None
     image_size: str | None = None
+    quality: str | None = None
 
     @model_validator(mode="after")
     def normalize_loras(self) -> "GenerateRequest":
@@ -380,9 +380,8 @@ async def expand_prompt(
     current_user: User = Depends(get_current_user),
 ):
     """Expand a terse prompt into a detailed image generation prompt using AI."""
-    from openai import AsyncOpenAI
-
     from app.providers import _resolve_config
+    from app.providers.fal_vision_provider import fal_text_completion
     from app.services.billing_context import (
         init_trace,
         set_billing_user,
@@ -396,18 +395,14 @@ async def expand_prompt(
     except InsufficientBalanceError:
         raise HTTPException(status_code=402, detail="Insufficient credits")
 
-    keys, _ = _resolve_config(db, current_user.id)
-    openai_key = keys.get("openai")
-    if not openai_key:
-        raise HTTPException(status_code=400, detail="OpenAI API key not configured on the platform.")
+    keys, provider_config = _resolve_config(db, current_user.id)
+    fal_key = keys.get("fal")
+    if not fal_key:
+        raise HTTPException(status_code=400, detail="fal.ai API key not configured on the platform.")
 
     # Use language model settings from provider config
-    settings_svc = get_settings_service(db, current_user.id)
-    provider_config = settings_svc.get_provider_config()
-    expansion_model = provider_config.get("openai_language_model", "gpt-4o-mini")
+    expansion_model = provider_config.get("fal_language_model") or DEFAULT_LANGUAGE_MODEL
     expansion_max_tokens = provider_config.get("max_tokens_expansion", 500)
-
-    client = AsyncOpenAI(api_key=openai_key)
 
     set_billing_user(current_user.id)
     init_trace()
@@ -415,48 +410,40 @@ async def expand_prompt(
     try:
         with billable(
             db, current_user.id, operation="expand_prompt",
-            provider="openai", model=expansion_model,
+            provider="fal", model=expansion_model,
             prompt_text=request.prompt,
             request_snapshot={"prompt": request.prompt[:500], "model": expansion_model},
             defer_debit=False,
         ) as b_expand:
             # No idempotency skip for expand_prompt — each call is intentionally unique
 
-            response = await client.chat.completions.create(
-                model=expansion_model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a prompt engineer for AI image generation. "
-                            "The user will give you a short, terse image idea. "
-                            "Expand it into a single vivid paragraph suitable for an image generation model. "
-                            "Add details about composition, lighting, style, mood, colors, and textures "
-                            "while preserving the user's original intent. "
-                            "Return ONLY the expanded prompt text with no commentary or explanation."
-                        ),
-                    },
-                    {"role": "user", "content": request.prompt},
-                ],
-                max_tokens=expansion_max_tokens,
+            completion = await fal_text_completion(
+                request.prompt,
+                expansion_model,
+                expansion_max_tokens,
+                api_key=fal_key,
+                system_prompt=(
+                    "You are a prompt engineer for AI image generation. "
+                    "The user will give you a short, terse image idea. "
+                    "Expand it into a single vivid paragraph suitable for an image generation model. "
+                    "Add details about composition, lighting, style, mood, colors, and textures "
+                    "while preserving the user's original intent. "
+                    "Return ONLY the expanded prompt text with no commentary or explanation."
+                ),
             )
 
-            expanded = response.choices[0].message.content or ""
-            usage = response.usage
+            b_expand.set_actual(
+                input_tokens=completion.input_tokens,
+                output_tokens=completion.output_tokens,
+                provider_cost=completion.provider_cost,
+                response_snapshot={
+                    "model": expansion_model,
+                    "usage": completion.usage,
+                    "expanded_length": len(completion.text),
+                },
+            )
 
-            # Record billing via set_actual (direct OpenAI response, not ContextVar)
-            if usage:
-                b_expand.set_actual(
-                    input_tokens=usage.prompt_tokens,
-                    output_tokens=usage.completion_tokens,
-                    response_snapshot={
-                        "model": response.model,
-                        "usage": {"prompt_tokens": usage.prompt_tokens, "completion_tokens": usage.completion_tokens, "total_tokens": usage.total_tokens},
-                        "expanded_length": len(expanded),
-                    },
-                )
-
-            return ExpandPromptResponse(expanded_prompt=expanded.strip())
+            return ExpandPromptResponse(expanded_prompt=completion.text)
 
     except (InsufficientBalanceError, ZeroCostEstimateError) as e:
         if isinstance(e, InsufficientBalanceError):
@@ -518,10 +505,8 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db), c
     settings_service = get_settings_service(db, current_user.id)
     training_defaults = settings_service.get_training_config(request.base_model)
 
-    # Use model-aware default steps
-    from app.providers.fal_provider import FAL_MODEL_CONFIG
-    model_config = FAL_MODEL_CONFIG.get(request.base_model, FAL_MODEL_CONFIG["flux-dev"])
-    steps = request.steps or training_defaults.get("steps", model_config["default_steps"])
+    # Model-aware default steps come from the per-model training config
+    steps = request.steps or training_defaults.get("steps", 1000)
     is_style = request.is_style if request.is_style is not None else training_defaults.get("is_style", False)
 
     # Create job
@@ -583,9 +568,6 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db), c
         "lora_model_id": lora.id,
         "job_id": job.id,
     }
-
-
-SUPPORTED_BASE_MODELS = {"flux-2", "qwen-image-2512"}
 
 
 @router.post("/lora/upload", status_code=201)
@@ -993,7 +975,7 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
     gen_service = get_generation_service(db, current_user.id)
 
     # Determine effective base_model
-    effective_base_model = request.base_model or "nano-banana-pro"
+    effective_base_model = request.base_model or DEFAULT_GENERATION_MODEL
 
     # Validate LoRAs if specified
     loras_for_params: list[dict] = []
@@ -1034,47 +1016,34 @@ async def generate_images(request: GenerateRequest, db: Session = Depends(get_db
         first_lora_id = request.loras[0].lora_model_id
         first_lora_scale = request.loras[0].lora_scale
 
-    # Get generation defaults from settings
-    settings_service = get_settings_service(db, current_user.id)
-    settings_service.get_generation_config()
+    # The model must still be offered (this also rejects LoRAs trained on a removed base model)
+    model = require_image_model(effective_base_model, "generate")
+    if loras_for_params and not model.supports_lora:
+        raise HTTPException(status_code=400, detail=f"{model.label} does not support LoRAs")
+
     provider = settings.default_generation_provider
 
     # Build generation_params — only include params the model actually supports
-    from app.providers.fal_provider import FAL_MODEL_CONFIG
-    model_config = FAL_MODEL_CONFIG.get(effective_base_model, {})
+    gen_params: dict = validate_model_params(model, {
+        "resolution": request.resolution,
+        "aspect_ratio": request.aspect_ratio,
+        "safety_tolerance": request.safety_tolerance,
+        "image_size": request.image_size,
+        "quality": request.quality,
+        "enable_web_search": request.enable_web_search,
+        "seed": request.seed,
+    })
 
-    gen_params: dict = {}
-
-    # Width/height: included for models that use image_size dict (not resolution/aspect or preset models)
-    # For image_size_preset models: store width/height only when custom (no preset selected)
-    if model_config.get("uses_image_size_enum"):
-        pass
-    elif model_config.get("uses_image_size_presets"):
-        if not request.image_size:
-            # Custom size mode — send width/height instead of preset
-            gen_params["width"] = request.width
-            gen_params["height"] = request.height
-    elif not model_config.get("uses_resolution_aspect"):
+    # No preset chosen on a custom-size model: send width/height instead
+    size_spec = model.params.get("image_size")
+    if size_spec and size_spec.get("custom_size") and not request.image_size:
         gen_params["width"] = request.width
         gen_params["height"] = request.height
 
-    # Steps/guidance: only for models that support them
-    if model_config.get("supports_steps_guidance", True):
+    if "steps_guidance" in model.params:
+        validate_steps_guidance(model, request.num_inference_steps, request.guidance_scale)
         gen_params["num_inference_steps"] = request.num_inference_steps
         gen_params["guidance_scale"] = request.guidance_scale
-
-    if request.seed is not None:
-        gen_params["seed"] = request.seed
-    if request.resolution:
-        gen_params["resolution"] = request.resolution
-    if request.aspect_ratio:
-        gen_params["aspect_ratio"] = request.aspect_ratio
-    if request.safety_tolerance:
-        gen_params["safety_tolerance"] = request.safety_tolerance
-    if request.enable_web_search is not None:
-        gen_params["enable_web_search"] = request.enable_web_search
-    if request.image_size:
-        gen_params["image_size"] = request.image_size
     if loras_for_params:
         gen_params["loras"] = loras_for_params
 
@@ -1246,7 +1215,6 @@ class StartEvaluationRequest(BaseModel):
     creative_count: int = Field(0, ge=0, le=20)
     metrics_enabled: list[str] = Field(default=["embedding_similarity"])
     generation_params: dict | None = None
-    vision_eval_provider: str | None = None
 
 
 class EvaluationPairResponse(BaseModel):
@@ -1415,6 +1383,7 @@ async def start_evaluation(lora_id: int, request: StartEvaluationRequest, db: Se
         raise HTTPException(status_code=400, detail="LoRA model is not completed")
     if not lora.lora_url:
         raise HTTPException(status_code=400, detail="LoRA model has no trained weights URL")
+    require_image_model(lora.base_model, "generate")
 
     # Create job
     try:
@@ -1445,7 +1414,6 @@ async def start_evaluation(lora_id: int, request: StartEvaluationRequest, db: Se
         config={
             "metrics_enabled": request.metrics_enabled,
             "generation_params": request.generation_params or {},
-            "vision_eval_provider": request.vision_eval_provider,
             "creative_count": request.creative_count,
         },
         job_id=job.id,

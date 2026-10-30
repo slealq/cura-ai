@@ -10,23 +10,7 @@ import ModelSelector from '@/components/ModelSelector';
 import { cn, formatDateCompact } from '@/lib/utils';
 import { Slider } from '@/components/Slider';
 import type { PromptPreset } from '@/types';
-
-const VISION_MODEL_OPTIONS = [
-  // OpenAI
-  { id: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'openai' },
-  { id: 'gpt-4o', label: 'GPT-4o', provider: 'openai' },
-  { id: 'gpt-5-mini', label: 'GPT-5 Mini', provider: 'openai' },
-  { id: 'gpt-5.2', label: 'GPT-5.2', provider: 'openai' },
-  // Anthropic
-  { id: 'claude-3-haiku-20240307', label: 'Claude Haiku 3', provider: 'anthropic' },
-  { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', provider: 'anthropic' },
-  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'anthropic' },
-  { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'anthropic' },
-  // fal.ai (OpenRouter)
-  { id: 'x-ai/grok-4-fast', label: 'Grok 4 Fast', provider: 'fal' },
-  { id: 'qwen/qwen3-vl-235b-a22b-instruct', label: 'Qwen3 VL 235B', provider: 'fal' },
-  { id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'fal' },
-];
+import { useModelCatalog } from '@/hooks/useModelCatalog';
 
 const MODES = [
   { value: 'tag' as const, label: 'Tag' },
@@ -52,6 +36,8 @@ function formatDuration(ms: number | undefined | null): string {
 
 export default function VisionPage() {
   const queryClient = useQueryClient();
+  const { data: catalog, isError: catalogError } = useModelCatalog();
+  const VISION_MODEL_OPTIONS = catalog?.language ?? [];
 
   // Source image
   const [source, setSource] = useState<SourceImage | null>(null);
@@ -59,9 +45,9 @@ export default function VisionPage() {
   const [uploading, setUploading] = useState(false);
 
   // Analysis params — single model dropdown derives provider
-  const [selectedModel, setSelectedModel] = useState('gpt-4o-mini');
+  const [selectedModel, setSelectedModel] = useState('');
   const [mode, setMode] = useState<'tag' | 'describe' | 'custom'>('describe');
-  const provider = VISION_MODEL_OPTIONS.find((m) => m.id === selectedModel)?.provider ?? 'openai';
+  const provider = 'fal';
   const [customPrompt, setCustomPrompt] = useState('');
 
   // Prompt editing
@@ -114,23 +100,16 @@ export default function VisionPage() {
   // Initialize from provider config
   const hasInitConfig = useRef(false);
   useEffect(() => {
-    if (providerConfig && !hasInitConfig.current) {
+    if (providerConfig && catalog && !hasInitConfig.current) {
       hasInitConfig.current = true;
       setTemperature(providerConfig.vision_temperature ?? 1.0);
       // Set max_tokens based on mode default (tag=tagging, describe=description)
       setMaxTokens(mode === 'tag' ? (providerConfig.max_tokens_tagging ?? 1000) : (providerConfig.max_tokens_description ?? 3000));
       // Set model from provider config
-      const prov = providerConfig.vision_provider;
-      const modelId = prov === 'openai'
-        ? providerConfig.openai_vision_model
-        : prov === 'anthropic'
-          ? providerConfig.anthropic_vision_model
-          : providerConfig.fal_vision_model;
-      if (VISION_MODEL_OPTIONS.some((m) => m.id === modelId)) {
-        setSelectedModel(modelId);
-      }
+      const modelId = providerConfig.fal_vision_model;
+      setSelectedModel(catalog.language.some((m) => m.id === modelId) ? modelId : catalog.defaults.vision_model);
     }
-  }, [providerConfig, mode]);
+  }, [providerConfig, mode, catalog]);
 
   // Load active preset prompts on mount
   useEffect(() => {
@@ -389,7 +368,7 @@ export default function VisionPage() {
         <div className="flex flex-wrap gap-4 items-end">
           <ModelSelector
             label="Model"
-            models={VISION_MODEL_OPTIONS.map((m) => ({ value: m.id, label: m.label, provider: m.provider }))}
+            models={VISION_MODEL_OPTIONS.map((m) => ({ value: m.id, label: m.label, provider: m.vendor }))}
             value={selectedModel}
             onChange={(v) => setSelectedModel(v)}
             size="sm"
@@ -418,7 +397,7 @@ export default function VisionPage() {
           <div className="flex items-center gap-2">
             <button
               onClick={handleAnalyze}
-              disabled={analyzeMutation.isPending || !source || (mode === 'custom' && !customPrompt.trim())}
+              disabled={!catalog || !selectedModel || catalogError || analyzeMutation.isPending || !source || (mode === 'custom' && !customPrompt.trim())}
               className="flex items-center gap-2 px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 font-medium"
             >
               {analyzeMutation.isPending ? (

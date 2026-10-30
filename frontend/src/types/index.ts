@@ -940,3 +940,19 @@ export interface TrendResponse {
   items: TrendBucket[];
   hours: number;
 }
+
+export interface CatalogLanguageModel {
+  id: string; label: string; vendor: string; capabilities: string[];
+  supports_temperature: boolean; input_rate: number; output_rate: number; is_default: boolean;
+}
+export interface CatalogImageParam { options?: string[]; default?: string | null; custom_size?: boolean; steps?: { minimum: number; maximum: number; default: number }; guidance?: { minimum: number; maximum: number; default: number } }
+export interface CatalogImageModel {
+  key: string; label: string; vendor: string; kind: 'generate' | 'edit'; endpoint: string;
+  supports_lora: boolean; trainable: boolean; params: Record<string, CatalogImageParam>;
+  max_source_images: number; max_num_images: number; base_price: number; is_default: boolean;
+}
+export interface ModelCatalog {
+  language: CatalogLanguageModel[]; generation: CatalogImageModel[]; edit: CatalogImageModel[];
+  training_base_models: { key: string; label: string }[];
+  defaults: { vision_model: string; language_model: string; generation_model: string; edit_model: string };
+}

@@ -42,7 +42,7 @@ class LoraModel(Base):
     )
 
     # Training config
-    base_model: Mapped[str] = mapped_column(String(128), default="flux-dev", nullable=False)
+    base_model: Mapped[str] = mapped_column(String(128), default="flux-2", nullable=False)
     training_provider: Mapped[str] = mapped_column(String(64), nullable=False)
     training_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 

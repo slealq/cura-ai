@@ -11,7 +11,7 @@ def provider_span(provider: str, operation: str, model: str = ""):
     """Create an OTel span for an AI provider call.
 
     Usage:
-        with provider_span("openai", "tag", "gpt-4o") as span:
+        with provider_span("fal_vision", "tag", "anthropic/claude-haiku-5.5") as span:
             result = await client.chat(...)
             if span:
                 span.set_attribute("ai.tokens.input", result.input_tokens)

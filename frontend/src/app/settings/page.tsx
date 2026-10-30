@@ -10,6 +10,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import ModelSelector from '@/components/ModelSelector';
 import type { GenerationConfig, ProviderConfig, ProviderModel, TrainingConfig, PromptPreset } from '@/types';
 import { Slider } from '@/components/Slider';
+import { useModelCatalog } from '@/hooks/useModelCatalog';
 
 function PromptSuggest({
   promptType,
@@ -539,30 +540,18 @@ function Hint({ text }: { text: string }) {
   );
 }
 
-const BASE_MODELS = [
-  { value: 'nano-banana-pro', label: 'Nano Banana Pro', hasTraining: false },
-  { value: 'flux-dev', label: 'Flux', hasTraining: true },
-  { value: 'qwen-2.5', label: 'Qwen 2.5', hasTraining: true },
-];
-
-const EDIT_MODELS = [
-  { value: 'qwen-image-max-edit', label: 'Qwen Image Max Edit' },
-  { value: 'kling-image', label: 'Kling Image' },
-  { value: 'wan-25', label: 'Wan 2.5' },
-  { value: 'grok-imagine', label: 'Grok Imagine' },
-  { value: 'nano-banana-pro-edit', label: 'Nano Banana Pro Edit' },
-  { value: 'face-swap', label: 'Face Swap' },
-];
-
 function GenerationSettings() {
   const queryClient = useQueryClient();
+  const { data: catalog, isError: catalogError } = useModelCatalog();
+  const BASE_MODELS = (catalog?.generation ?? []).map((m) => ({ value: m.key, label: m.label, hasTraining: m.trainable }));
+  const EDIT_MODELS = (catalog?.edit ?? []).map((m) => ({ value: m.key, label: m.label }));
 
   // Base model state
   const { data: baseModelData, isLoading: baseModelLoading } = useQuery({
     queryKey: ['base-model'],
     queryFn: settingsApi.getBaseModel,
   });
-  const baseModel = baseModelData?.base_model ?? 'flux-dev';
+  const baseModel = BASE_MODELS.some((m) => m.value === baseModelData?.base_model) ? baseModelData!.base_model : (catalog?.defaults.generation_model ?? '');
 
   const setBaseModelMutation = useMutation({
     mutationFn: (model: string) => settingsApi.updateBaseModel(model),
@@ -579,7 +568,7 @@ function GenerationSettings() {
     queryKey: ['edit-model'],
     queryFn: settingsApi.getEditModel,
   });
-  const editModel = editModelData?.edit_model ?? 'qwen-image-max-edit';
+  const editModel = EDIT_MODELS.some((m) => m.value === editModelData?.edit_model) ? editModelData!.edit_model : (catalog?.defaults.edit_model ?? '');
 
   const setEditModelMutation = useMutation({
     mutationFn: (model: string) => settingsApi.updateEditModel(model),
@@ -593,7 +582,7 @@ function GenerationSettings() {
   const { data: genConfig, isLoading: genLoading } = useQuery({
     queryKey: ['generation-config', baseModel],
     queryFn: () => settingsApi.getGenerationConfig(baseModel),
-    enabled: !baseModelLoading,
+    enabled: !!baseModel && !baseModelLoading,
   });
 
   const modelHasTraining = BASE_MODELS.find((m) => m.value === baseModel)?.hasTraining ?? false;
@@ -601,7 +590,7 @@ function GenerationSettings() {
   const { data: trainConfig, isLoading: trainLoading } = useQuery({
     queryKey: ['training-config', baseModel],
     queryFn: () => settingsApi.getTrainingConfig(baseModel),
-    enabled: !baseModelLoading && modelHasTraining,
+    enabled: !!baseModel && !baseModelLoading && modelHasTraining,
   });
 
   const [genDraft, setGenDraft] = useState<GenerationConfig | null>(null);
@@ -653,17 +642,21 @@ function GenerationSettings() {
     },
   });
 
-  if (baseModelLoading || genLoading || !genDraft || (modelHasTraining && (trainLoading || !trainDraft))) {
+  if (!catalog || baseModelLoading || genLoading || !genDraft || (modelHasTraining && (trainLoading || !trainDraft))) {
     return (
       <section className="bg-card rounded-xl border border-border p-6">
         <h2 className="font-semibold mb-4">Generation &amp; Training</h2>
-        <p className="text-muted-foreground text-sm">Loading...</p>
+        <p className="text-muted-foreground text-sm">{catalogError ? "Failed to load model catalog." : "Loading..."}</p>
       </section>
     );
   }
 
-  const isFlux = baseModel === 'flux-dev';
-  const isQwen = baseModel === 'qwen-2.5';
+  const generationModel = catalog.generation.find(m => m.key === baseModel);
+  const canCustomSize = !!generationModel?.params.image_size?.custom_size;
+  const canSteps = !!generationModel?.params.steps_guidance;
+  const canLora = !!generationModel?.supports_lora;
+  const isFlux = baseModel === 'flux-2';
+  const isQwen = baseModel === 'qwen-image-2512';
   const trainStepsMax = isQwen ? 30000 : 4000;
 
   return (
@@ -765,10 +758,10 @@ function GenerationSettings() {
         )}
 
         {/* Generation defaults (shown second) */}
-        <div className="border border-border rounded-lg p-4">
+        {(canCustomSize || canSteps || canLora) && <div className="border border-border rounded-lg p-4">
           <h3 className="text-sm font-medium mb-3">Generation Defaults</h3>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
+            {canCustomSize && <div>
               <label className="text-xs text-muted-foreground mb-1 block">Width: {genDraft.width}</label>
               <Slider
                 min={256}
@@ -778,8 +771,8 @@ function GenerationSettings() {
                 onChange={(v) => setGenDraft({ ...genDraft, width: v })}
                 className="w-full"
               />
-            </div>
-            <div>
+            </div>}
+            {canCustomSize && <div>
               <label className="text-xs text-muted-foreground mb-1 block">Height: {genDraft.height}</label>
               <Slider
                 min={256}
@@ -789,28 +782,28 @@ function GenerationSettings() {
                 onChange={(v) => setGenDraft({ ...genDraft, height: v })}
                 className="w-full"
               />
-            </div>
-            <div>
+            </div>}
+            {canSteps && <div>
               <label className="text-xs text-muted-foreground mb-1 block">Steps: {genDraft.num_inference_steps}</label>
               <Slider
-                min={1}
-                max={50}
+                min={generationModel?.params.steps_guidance?.steps?.minimum ?? 1}
+                max={generationModel?.params.steps_guidance?.steps?.maximum ?? 50}
                 value={genDraft.num_inference_steps}
                 onChange={(v) => setGenDraft({ ...genDraft, num_inference_steps: v })}
                 className="w-full"
               />
-            </div>
-            <div>
+            </div>}
+            {canSteps && <div>
               <label className="text-xs text-muted-foreground mb-1 block">Guidance: {genDraft.guidance_scale.toFixed(1)}</label>
               <Slider
-                min={0}
-                max={200}
+                min={(generationModel?.params.steps_guidance?.guidance?.minimum ?? 0) * 10}
+                max={(generationModel?.params.steps_guidance?.guidance?.maximum ?? 20) * 10}
                 value={Math.round(genDraft.guidance_scale * 10)}
                 onChange={(v) => setGenDraft({ ...genDraft, guidance_scale: v / 10 })}
                 className="w-full"
               />
-            </div>
-            <div>
+            </div>}
+            {canLora && <div>
               <label className="text-xs text-muted-foreground mb-1 block">Default LoRA Scale: {genDraft.default_lora_scale.toFixed(1)}</label>
               <Slider
                 min={0}
@@ -819,7 +812,7 @@ function GenerationSettings() {
                 onChange={(v) => setGenDraft({ ...genDraft, default_lora_scale: v / 10 })}
                 className="w-full"
               />
-            </div>
+            </div>}
           </div>
           <div className="flex items-center gap-2 mt-4">
             <button
@@ -838,7 +831,7 @@ function GenerationSettings() {
               Reset
             </button>
           </div>
-        </div>
+        </div>}
 
         {/* Edit model selector */}
         <div className="border border-border rounded-lg p-4 mt-6">
@@ -902,42 +895,10 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-const VISION_MODELS = [
-  // OpenAI
-  { id: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'openai' as const, field: 'openai_vision_model' as const },
-  { id: 'gpt-4o', label: 'GPT-4o', provider: 'openai' as const, field: 'openai_vision_model' as const },
-  { id: 'gpt-5-mini', label: 'GPT-5 Mini', provider: 'openai' as const, field: 'openai_vision_model' as const },
-  { id: 'gpt-5.2', label: 'GPT-5.2', provider: 'openai' as const, field: 'openai_vision_model' as const },
-  // Anthropic
-  { id: 'claude-3-haiku-20240307', label: 'Claude Haiku 3', provider: 'anthropic' as const, field: 'anthropic_vision_model' as const },
-  { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', provider: 'anthropic' as const, field: 'anthropic_vision_model' as const },
-  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'anthropic' as const, field: 'anthropic_vision_model' as const },
-  { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'anthropic' as const, field: 'anthropic_vision_model' as const },
-  // fal.ai (OpenRouter)
-  { id: 'x-ai/grok-4-fast', label: 'Grok 4 Fast', provider: 'fal' as const, field: 'fal_vision_model' as const },
-  { id: 'qwen/qwen3-vl-235b-a22b-instruct', label: 'Qwen3 VL 235B', provider: 'fal' as const, field: 'fal_vision_model' as const },
-  { id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'fal' as const, field: 'fal_vision_model' as const },
-];
-
-const LANGUAGE_MODELS = [
-  // OpenAI
-  { id: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'openai' as const, field: 'openai_language_model' as const },
-  { id: 'gpt-4o', label: 'GPT-4o', provider: 'openai' as const, field: 'openai_language_model' as const },
-  { id: 'gpt-5-mini', label: 'GPT-5 Mini', provider: 'openai' as const, field: 'openai_language_model' as const },
-  { id: 'gpt-5.2', label: 'GPT-5.2', provider: 'openai' as const, field: 'openai_language_model' as const },
-  // Anthropic
-  { id: 'claude-3-haiku-20240307', label: 'Claude Haiku 3', provider: 'anthropic' as const, field: 'anthropic_language_model' as const },
-  { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', provider: 'anthropic' as const, field: 'anthropic_language_model' as const },
-  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'anthropic' as const, field: 'anthropic_language_model' as const },
-  { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'anthropic' as const, field: 'anthropic_language_model' as const },
-  // fal.ai (OpenRouter)
-  { id: 'x-ai/grok-4-fast', label: 'Grok 4 Fast', provider: 'fal' as const, field: 'fal_language_model' as const },
-  { id: 'qwen/qwen3-vl-235b-a22b-instruct', label: 'Qwen3 VL 235B', provider: 'fal' as const, field: 'fal_language_model' as const },
-  { id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'fal' as const, field: 'fal_language_model' as const },
-];
-
 function VisionModelSettings() {
   const queryClient = useQueryClient();
+  const { data: catalog, isError: catalogError } = useModelCatalog();
+  const VISION_MODELS = catalog?.language ?? [];
 
   const { data: config, isLoading } = useQuery({
     queryKey: ['provider-config'],
@@ -971,11 +932,9 @@ function VisionModelSettings() {
 
   const resetMutation = useMutation({
     mutationFn: () => settingsApi.updateProviderConfig({
-      vision_provider: 'openai',
-      openai_vision_model: 'gpt-4o-mini',
+      vision_provider: 'fal',
       openai_embedding_model: 'text-embedding-3-small',
-      anthropic_vision_model: 'claude-3-haiku-20240307',
-      fal_vision_model: 'x-ai/grok-4-fast',
+      fal_vision_model: catalog!.defaults.vision_model,
       max_tokens_tagging: 1000,
       max_tokens_description: 3000,
       vision_temperature: 1.0,
@@ -987,11 +946,11 @@ function VisionModelSettings() {
     },
   });
 
-  if (isLoading || !draft) {
+  if (isLoading || !draft || !catalog) {
     return (
       <section className="bg-card rounded-xl border border-border p-6">
         <h2 className="font-semibold mb-4">Vision Models</h2>
-        <p className="text-muted-foreground text-sm">Loading...</p>
+        <p className="text-muted-foreground text-sm">{catalogError ? "Failed to load model catalog." : "Loading..."}</p>
       </section>
     );
   }
@@ -1000,23 +959,8 @@ function VisionModelSettings() {
     m.capabilities.includes('embedding')
   );
 
-  // Derive current vision model from provider + per-provider field
-  const visionProvider = draft.vision_provider || 'openai';
-  const currentVisionModelId = visionProvider === 'openai'
-    ? draft.openai_vision_model
-    : visionProvider === 'fal'
-      ? draft.fal_vision_model
-      : draft.anthropic_vision_model;
-
-  const handleVisionModelChange = (modelId: string) => {
-    const model = VISION_MODELS.find((m) => m.id === modelId);
-    if (!model) return;
-    setDraft({
-      ...draft,
-      vision_provider: model.provider,
-      [model.field]: modelId,
-    });
-  };
+  const currentVisionModelId = draft.fal_vision_model;
+  const handleVisionModelChange = (modelId: string) => setDraft({ ...draft, vision_provider: 'fal', fal_vision_model: modelId });
 
   return (
     <section className="bg-card rounded-xl border border-border p-6">
@@ -1031,7 +975,7 @@ function VisionModelSettings() {
         {/* Vision Model */}
         <ModelSelector
           label="Vision Model"
-          models={VISION_MODELS.map((m) => ({ value: m.id, label: m.label, provider: m.provider }))}
+          models={VISION_MODELS.map((m) => ({ value: m.id, label: m.label, provider: m.vendor }))}
           value={currentVisionModelId}
           onChange={(v) => handleVisionModelChange(v)}
         />
@@ -1066,7 +1010,7 @@ function VisionModelSettings() {
             <div>
               <label className="flex items-center text-xs text-muted-foreground mb-1">
                 Temperature: {(draft.vision_temperature ?? 1.0).toFixed(1)}
-                <Hint text="Controls randomness. Lower values (0.0) produce more deterministic outputs. Higher values (1.5-2.0) increase creativity. Anthropic models are clamped to 0-1. Default: 1.0." />
+                <Hint text="Controls randomness. Lower values (0.0) produce more deterministic outputs. Higher values (1.5-2.0) increase creativity. Default: 1.0." />
               </label>
               <Slider
                 min={0}
@@ -1143,6 +1087,8 @@ function VisionModelSettings() {
 
 function LanguageModelSettings() {
   const queryClient = useQueryClient();
+  const { data: catalog, isError: catalogError } = useModelCatalog();
+  const LANGUAGE_MODELS = catalog?.language ?? [];
 
   const { data: config, isLoading } = useQuery({
     queryKey: ['provider-config'],
@@ -1167,10 +1113,8 @@ function LanguageModelSettings() {
 
   const resetMutation = useMutation({
     mutationFn: () => settingsApi.updateProviderConfig({
-      language_provider: 'openai',
-      openai_language_model: 'gpt-4o-mini',
-      anthropic_language_model: 'claude-3-haiku-20240307',
-      fal_language_model: 'x-ai/grok-4-fast',
+      language_provider: 'fal',
+      fal_language_model: catalog!.defaults.language_model,
       max_tokens_summarization: 500,
       max_tokens_expansion: 500,
       max_tokens_suggestion: 2000,
@@ -1182,32 +1126,17 @@ function LanguageModelSettings() {
     },
   });
 
-  if (isLoading || !draft) {
+  if (isLoading || !draft || !catalog) {
     return (
       <section className="bg-card rounded-xl border border-border p-6">
         <h2 className="font-semibold mb-4">Language Models</h2>
-        <p className="text-muted-foreground text-sm">Loading...</p>
+        <p className="text-muted-foreground text-sm">{catalogError ? "Failed to load model catalog." : "Loading..."}</p>
       </section>
     );
   }
 
-  // Derive current language model from provider + per-provider field
-  const languageProvider = draft.language_provider || 'openai';
-  const currentLanguageModelId = languageProvider === 'openai'
-    ? draft.openai_language_model
-    : languageProvider === 'fal'
-      ? draft.fal_language_model
-      : draft.anthropic_language_model;
-
-  const handleLanguageModelChange = (modelId: string) => {
-    const model = LANGUAGE_MODELS.find((m) => m.id === modelId);
-    if (!model) return;
-    setDraft({
-      ...draft,
-      language_provider: model.provider,
-      [model.field]: modelId,
-    });
-  };
+  const currentLanguageModelId = draft.fal_language_model;
+  const handleLanguageModelChange = (modelId: string) => setDraft({ ...draft, language_provider: 'fal', fal_language_model: modelId });
 
   return (
     <section className="bg-card rounded-xl border border-border p-6">
@@ -1221,7 +1150,7 @@ function LanguageModelSettings() {
       <div className="space-y-4">
         <ModelSelector
           label="Language Model"
-          models={LANGUAGE_MODELS.map((m) => ({ value: m.id, label: m.label, provider: m.provider }))}
+          models={LANGUAGE_MODELS.map((m) => ({ value: m.id, label: m.label, provider: m.vendor }))}
           value={currentLanguageModelId}
           onChange={(v) => handleLanguageModelChange(v)}
         />

@@ -439,8 +439,8 @@ export default function AdminPage() {
           <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {(apiKeys || []).map((info: APIKeyInfo) => {
-              const providerLabels: Record<string, string> = { openai: 'OpenAI', anthropic: 'Anthropic', fal: 'fal.ai', sentry: 'Sentry' };
+            {(apiKeys || []).filter((info: APIKeyInfo) => info.provider !== 'anthropic').map((info: APIKeyInfo) => {
+              const providerLabels: Record<string, string> = { openai: 'OpenAI', fal: 'fal.ai', sentry: 'Sentry' };
               const label = providerLabels[info.provider] || info.provider;
               const isSentry = info.provider === 'sentry';
               const isEditing = editingProvider === info.provider;

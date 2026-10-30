@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { editApi, settingsApi, billingApi } from '@/lib/api';
 import { Check, CheckSquare, Loader2, Pencil, ChevronDown, ChevronUp, Trash2, X, Upload, ImageIcon, Zap } from 'lucide-react';
@@ -9,6 +9,7 @@ import Link from 'next/link';
 import GeneratedImageCard from '@/components/GeneratedImageCard';
 import ImagePickerModal from '@/components/ImagePickerModal';
 import ModelSelector from '@/components/ModelSelector';
+import { useModelCatalog } from '@/hooks/useModelCatalog';
 import { cn } from '@/lib/utils';
 
 const SIZE_PRESETS = [
@@ -18,56 +19,6 @@ const SIZE_PRESETS = [
   { label: 'Portrait 16:9', value: 'portrait_16_9' },
   { label: 'Landscape 4:3', value: 'landscape_4_3' },
   { label: 'Landscape 16:9', value: 'landscape_16_9' },
-];
-
-const EDIT_MODELS = [
-  { value: 'nano-banana-pro-edit', label: 'Nano Banana Pro Edit' },
-  { value: 'kling-image', label: 'Kling Image' },
-  { value: 'grok-imagine', label: 'Grok Imagine' },
-  { value: 'seedream-5-pro-edit', label: 'Seedream 5 Pro Edit' },
-  { value: 'qwen-image-2-pro-edit', label: 'Qwen Image 2 Pro Edit' },
-  { value: 'flux-2-lora-edit', label: 'FLUX.2 LoRA Edit' },
-];
-
-const KLING_RESOLUTIONS = [
-  { value: '1K', label: '1K' },
-  { value: '2K', label: '2K' },
-  { value: '4K', label: '4K' },
-];
-
-const KLING_ASPECT_RATIOS = [
-  { value: 'auto', label: 'Auto' },
-  { value: '1:1', label: '1:1' },
-  { value: '16:9', label: '16:9' },
-  { value: '9:16', label: '9:16' },
-  { value: '4:3', label: '4:3' },
-  { value: '3:4', label: '3:4' },
-  { value: '3:2', label: '3:2' },
-  { value: '2:3', label: '2:3' },
-  { value: '21:9', label: '21:9' },
-];
-
-const NANO_ASPECT_RATIOS = [
-  { value: '1:1', label: '1:1' },
-  { value: '16:9', label: '16:9' },
-  { value: '9:16', label: '9:16' },
-  { value: '4:3', label: '4:3' },
-  { value: '3:4', label: '3:4' },
-  { value: '3:2', label: '3:2' },
-  { value: '2:3', label: '2:3' },
-  { value: '21:9', label: '21:9' },
-  { value: '7:4', label: '7:4' },
-  { value: '4:7', label: '4:7' },
-  { value: '5:4', label: '5:4' },
-];
-
-const SAFETY_LEVELS = [
-  { value: '1', label: '1 (Strictest)' },
-  { value: '2', label: '2' },
-  { value: '3', label: '3' },
-  { value: '4', label: '4 (Default)' },
-  { value: '5', label: '5' },
-  { value: '6', label: '6 (Most Permissive)' },
 ];
 
 interface SourceImage {
@@ -97,14 +48,21 @@ export default function EditPage() {
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [editModel, setEditModel] = useState('nano-banana-pro-edit');
+  const [editModel, setEditModel] = useState('');
+  const [quality, setQuality] = useState('');
+  const { data: catalog } = useModelCatalog();
+  const EDIT_MODELS = useMemo(() => (catalog?.edit ?? []).map(m => ({ value: m.key, label: m.label })), [catalog]);
+  const model = catalog?.edit.find(m => m.key === editModel);
+  const spec = model?.params ?? {};
+  const KLING_RESOLUTIONS = (spec.resolution?.options ?? []).map(value => ({ value, label: value }));
+  const KLING_ASPECT_RATIOS = (spec.aspect_ratio?.options ?? []).map(value => ({ value, label: value }));
+  const SAFETY_LEVELS = (spec.safety_tolerance?.options ?? []).map(value => ({ value, label: value }));
   const [imageSize, setImageSize] = useState<string>('square_hd');
   const [customWidth, setCustomWidth] = useState(1024);
   const [customHeight, setCustomHeight] = useState(1024);
   const [useCustomSize, setUseCustomSize] = useState(false);
   const [numImages, setNumImages] = useState(1);
   const [seed, setSeed] = useState<string>('');
-  const [outputFormat, setOutputFormat] = useState('png');
   const [enablePromptExpansion, setEnablePromptExpansion] = useState(true);
   const [enableSafetyChecker, setEnableSafetyChecker] = useState(true);
   // Kling-specific state
@@ -127,27 +85,25 @@ export default function EditPage() {
 
   // Initialize edit model from settings
   useEffect(() => {
-    if (editModelData && !hasInitEditModel.current) {
+    if (catalog && editModelData && !hasInitEditModel.current) {
       hasInitEditModel.current = true;
       if (EDIT_MODELS.some((m) => m.value === editModelData.edit_model)) {
         setEditModel(editModelData.edit_model);
-      }
+      } else { setEditModel(catalog.defaults.edit_model); }
     }
-  }, [editModelData]);
+  }, [editModelData, catalog, EDIT_MODELS]);
 
   const isKling = editModel === 'kling-image';
-  const isSeedream = editModel === 'seedream-5-pro-edit';
-
-  // Model capability flags
-  const MODEL_CAPS: Record<string, { maxSources: number; maxImages: number; hasNegativePrompt: boolean; hasPromptExpansion: boolean; hasSafetyChecker: boolean; usesResolution: boolean; hasImageSize: boolean; hasSeed: boolean; maxPromptLen: number; hasSafetyTolerance: boolean; hasWebSearch: boolean }> = {
-    'kling-image': { maxSources: 10, maxImages: 9, hasNegativePrompt: false, hasPromptExpansion: false, hasSafetyChecker: false, usesResolution: true, hasImageSize: false, hasSeed: true, maxPromptLen: 2500, hasSafetyTolerance: false, hasWebSearch: false },
-    'grok-imagine': { maxSources: 1, maxImages: 4, hasNegativePrompt: false, hasPromptExpansion: false, hasSafetyChecker: false, usesResolution: false, hasImageSize: false, hasSeed: false, maxPromptLen: 8000, hasSafetyTolerance: false, hasWebSearch: false },
-    'nano-banana-pro-edit': { maxSources: 14, maxImages: 4, hasNegativePrompt: false, hasPromptExpansion: false, hasSafetyChecker: false, usesResolution: true, hasImageSize: false, hasSeed: true, maxPromptLen: 50000, hasSafetyTolerance: true, hasWebSearch: true },
-    'seedream-5-pro-edit': { maxSources: 10, maxImages: 6, hasNegativePrompt: false, hasPromptExpansion: false, hasSafetyChecker: true, usesResolution: false, hasImageSize: true, hasSeed: false, maxPromptLen: 5000, hasSafetyTolerance: false, hasWebSearch: false },
-    'qwen-image-2-pro-edit': { maxSources: 3, maxImages: 6, hasNegativePrompt: true, hasPromptExpansion: true, hasSafetyChecker: true, usesResolution: false, hasImageSize: true, hasSeed: true, maxPromptLen: 2000, hasSafetyTolerance: false, hasWebSearch: false },
-    'flux-2-lora-edit': { maxSources: 4, maxImages: 4, hasNegativePrompt: false, hasPromptExpansion: true, hasSafetyChecker: true, usesResolution: false, hasImageSize: true, hasSeed: true, maxPromptLen: 2000, hasSafetyTolerance: false, hasWebSearch: false },
-  };
-  const caps = MODEL_CAPS[editModel] || MODEL_CAPS['nano-banana-pro-edit'];
+  const caps = { maxSources: model?.max_source_images ?? 1, maxImages: model?.max_num_images || 1,
+    hasNegativePrompt: !!spec.negative_prompt, hasPromptExpansion: false, hasSafetyChecker: false,
+    usesResolution: !!(spec.resolution || spec.aspect_ratio), hasImageSize: !!spec.image_size,
+    hasSeed: !!spec.seed, maxPromptLen: 50000, hasSafetyTolerance: !!spec.safety_tolerance, hasWebSearch: !!spec.enable_web_search };
+  useEffect(() => {
+    if (!model) return;
+    setResolution(spec.resolution?.default ?? ''); setAspectRatio(spec.aspect_ratio?.default ?? '');
+    setImageSize(spec.image_size?.default ?? ''); setSafetyTolerance(spec.safety_tolerance?.default ?? '');
+    setQuality(spec.quality?.default ?? ''); setUseCustomSize(false);
+  }, [model, spec.resolution?.default, spec.aspect_ratio?.default, spec.image_size?.default, spec.safety_tolerance?.default, spec.quality?.default]);
 
   // Source images state
   const [sources, setSources] = useState<SourceImage[]>([]);
@@ -230,18 +186,16 @@ export default function EditPage() {
       edit_model: editModel,
       num_images: numImages,
       prompt: prompt.trim(),
-      output_format: outputFormat,
     };
 
     if (caps.usesResolution) {
-      params.resolution = resolution;
-      params.aspect_ratio = aspectRatio;
-    } else if (caps.hasImageSize) {
-      if (isSeedream) {
-        params.image_size = 'auto_2K';
-      } else if (useCustomSize) {
+      if (spec.resolution && resolution) params.resolution = resolution;
+      if (spec.aspect_ratio && aspectRatio) params.aspect_ratio = aspectRatio;
+    }
+    if (caps.hasImageSize) {
+      if (useCustomSize) {
         params.image_size = { width: customWidth, height: customHeight };
-      } else {
+      } else if (imageSize) {
         params.image_size = imageSize;
       }
     }
@@ -261,6 +215,7 @@ export default function EditPage() {
       params.enable_web_search = enableWebSearch;
     }
     if (caps.hasSeed && seed) params.seed = parseInt(seed);
+    if (spec.quality && quality) params.quality = quality;
 
     // Collect source IDs by type
     const galleryIds = sources.filter((s) => s.type === 'gallery').map((s) => s.id!);
@@ -472,7 +427,8 @@ export default function EditPage() {
             value={editModel}
             onChange={(v) => {
               setEditModel(v);
-              setNumImages((current) => Math.min(current, MODEL_CAPS[v]?.maxImages ?? 1));
+              setSources([]);
+              setNumImages((current) => Math.min(current, catalog?.edit.find(m => m.key === v)?.max_num_images || 1));
             }}
             size="sm"
           />
@@ -541,7 +497,7 @@ export default function EditPage() {
             {/* Resolution + Aspect Ratio (Kling) */}
             {caps.usesResolution && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
+                {spec.resolution && <div>
                   <label className="block text-xs text-muted-foreground mb-1">Resolution</label>
                   <div className="flex gap-2">
                     {KLING_RESOLUTIONS.map((r) => (
@@ -559,28 +515,29 @@ export default function EditPage() {
                       </button>
                     ))}
                   </div>
-                </div>
-                <div>
+                </div>}
+                {spec.aspect_ratio && <div>
                   <label className="block text-xs text-muted-foreground mb-1">Aspect Ratio</label>
                   <select
                     value={aspectRatio}
                     onChange={(e) => setAspectRatio(e.target.value)}
                     className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
                   >
-                    {(editModel === 'nano-banana-pro-edit' ? NANO_ASPECT_RATIOS : KLING_ASPECT_RATIOS).map((ar) => (
+                    {KLING_ASPECT_RATIOS.map((ar) => (
                       <option key={ar.value} value={ar.value}>{ar.label}</option>
                     ))}
                   </select>
-                </div>
+                </div>}
               </div>
             )}
 
+            {spec.quality && <label className="block text-sm">Quality <select value={quality} onChange={e => setQuality(e.target.value)} className="ml-2 border rounded p-1">{spec.quality.options?.map(v => <option key={v} value={v}>{v}</option>)}</select></label>}
             {/* Size presets (Qwen/FLUX). Seedream requires its own named enum. */}
-            {caps.hasImageSize && !isSeedream && (
+            {caps.hasImageSize && (
               <div>
                 <label className="block text-xs text-muted-foreground mb-1">Image Size</label>
                 <div className="flex flex-wrap gap-2">
-                  {SIZE_PRESETS.map((preset) => (
+                  {(spec.image_size?.options ?? []).map(value => ({ value, label: value.replaceAll("_", " ") })).map((preset) => (
                     <button
                       key={preset.value}
                       onClick={() => {
@@ -597,7 +554,7 @@ export default function EditPage() {
                       {preset.label}
                     </button>
                   ))}
-                  <button
+                  {spec.image_size?.custom_size && <button
                     onClick={() => setUseCustomSize(true)}
                     className={cn(
                       'px-3 py-1.5 text-xs border rounded-lg transition-colors',
@@ -607,7 +564,7 @@ export default function EditPage() {
                     )}
                   >
                     Custom
-                  </button>
+                  </button>}
                 </div>
                 {useCustomSize && (
                   <div className="flex gap-2 mt-2">
@@ -653,19 +610,6 @@ export default function EditPage() {
                 </div>
               )}
 
-              {/* Output format */}
-              <div>
-                <label className="block text-xs text-muted-foreground mb-1">Format</label>
-                <select
-                  value={outputFormat}
-                  onChange={(e) => setOutputFormat(e.target.value)}
-                  className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
-                >
-                  <option value="png">PNG</option>
-                  <option value="jpeg">JPEG</option>
-                  <option value="webp">WebP</option>
-                </select>
-              </div>
             </div>
 
             {/* Toggles */}

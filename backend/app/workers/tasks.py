@@ -502,7 +502,8 @@ def process_ingest_batch(
 @celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
 def tag_image(
     self, image_id: int, user_id: int, tag_prompt: str | None = None,
-    job_id: int | None = None, provider: str | None = None, model: str | None = None,
+    job_id: int | None = None, provider: str | None = None,  # ignored: vision is fal-only; kept so tasks queued before that change still run
+    model: str | None = None,
     temperature: float | None = None, max_tokens_override: int | None = None,
     trace_id: str | None = None, session_id: str | None = None,
 ) -> dict:
@@ -539,7 +540,7 @@ def tag_image(
             tag_prompt = compose_tag_prompt(tag_prompt)
 
         # Tag image
-        tagger = get_tagger(provider=provider, model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_override)
+        tagger = get_tagger(model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_override)
         tag_start = time.monotonic()
         result = run_async(tagger.tag_image(image_data, image.mime_type, tag_prompt))
         tagging_duration_ms = round((time.monotonic() - tag_start) * 1000)
@@ -595,7 +596,8 @@ def tag_image(
 @celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
 def describe_image(
     self, image_id: int, user_id: int, description_prompt: str | None = None,
-    job_id: int | None = None, provider: str | None = None, model: str | None = None,
+    job_id: int | None = None, provider: str | None = None,  # ignored: vision is fal-only; kept so tasks queued before that change still run
+    model: str | None = None,
     temperature: float | None = None, max_tokens_override: int | None = None,
     trace_id: str | None = None, session_id: str | None = None,
 ) -> dict:
@@ -631,7 +633,7 @@ def describe_image(
             description_prompt = compose_description_prompt(description_prompt)
 
         # Generate description
-        describer = get_describer(provider=provider, model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_override)
+        describer = get_describer(model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_override)
         desc_start = time.monotonic()
         result = run_async(describer.describe_image(image_data, image.mime_type, description_prompt))
         caption_duration_ms = round((time.monotonic() - desc_start) * 1000)
@@ -1000,20 +1002,11 @@ def summarize_cluster(self, cluster_id: int, user_id: int, job_id: int | None = 
         # Generate summary
         summarizer = get_cluster_summarizer(db=db, user_id=user_id)
 
-        # Resolve provider from settings (mirrors get_cluster_summarizer logic)
-        _settings_svc = get_settings_service(db, user_id)
-        _provider_config = _settings_svc.get_provider_config()
-        _summ_provider = (
-            _provider_config.get("language_provider")
-            or _provider_config.get("vision_provider")
-            or "openai"
-        )
-
         _sample_desc = "\n".join(descriptions[:5]) if descriptions else ""
 
         with billable(
             db, user_id, operation="summarize",
-            provider=_summ_provider, model=summarizer.get_model_name(),
+            provider="fal", model=summarizer.get_model_name(),
             resource_id=cluster_id, job_id=job_id,
             prompt_text=_sample_desc,
         ) as b_summ:
@@ -1114,7 +1107,8 @@ def summarize_clusters(self, cluster_ids: list[int], user_id: int, job_id: int |
 def process_image_pipeline(
     self, image_id: int, user_id: int, tag_prompt: str | None = None,
     description_prompt: str | None = None, job_id: int | None = None,
-    provider: str | None = None, model: str | None = None,
+    provider: str | None = None,  # ignored: vision is fal-only; kept so tasks queued before that change still run
+    model: str | None = None,
     temperature: float | None = None, max_tokens_tag: int | None = None,
     max_tokens_describe: int | None = None,
     trace_id: str | None = None, session_id: str | None = None,
@@ -1162,13 +1156,13 @@ def process_image_pipeline(
             description_prompt = compose_description_prompt(description_prompt)
 
         # Tag
-        tagger = get_tagger(provider=provider, model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_tag)
+        tagger = get_tagger(model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_tag)
         trace_id = get_trace_id()
 
         # --- Pipeline-level reservation ---
         # Compute total estimated sparks (tag + describe + embed) and reserve
         # once upfront, so the user sees a single combined deduction.
-        describer = get_describer(provider=provider, model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_describe)
+        describer = get_describer(model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_describe)
         embedder = get_embedder(db=db, user_id=user_id)
 
         from app.services.cost_calculator import (
@@ -1182,10 +1176,10 @@ def process_image_pipeline(
         pipeline_reserved = 0
         try:
             _tag_prov, _tag_model, _tag_op = resolve_catalog_model(
-                provider or "openai", tagger.get_model_name(), "tag",
+                "fal", tagger.get_model_name(), "tag",
             )
             _desc_prov, _desc_model, _desc_op = resolve_catalog_model(
-                provider or "openai", describer.get_model_name(), "describe",
+                "fal", describer.get_model_name(), "describe",
             )
             _emb_prov, _emb_model, _emb_op = resolve_catalog_model(
                 "openai", embedder.get_model_name(), "embed",
@@ -1237,7 +1231,7 @@ def process_image_pipeline(
 
         with billable(
             db, user_id, operation="tag",
-            provider=provider or "openai", model=tagger.get_model_name(),
+            provider="fal", model=tagger.get_model_name(),
             trace_id=trace_id, resource_id=image_id,
             image_id=image_id, job_id=job_id,
             image_width=image.width, image_height=image.height,
@@ -1256,7 +1250,7 @@ def process_image_pipeline(
         # Describe
         with billable(
             db, user_id, operation="describe",
-            provider=provider or "openai", model=describer.get_model_name(),
+            provider="fal", model=describer.get_model_name(),
             trace_id=trace_id, resource_id=image_id,
             image_id=image_id, job_id=job_id,
             image_width=image.width, image_height=image.height,
@@ -1602,7 +1596,8 @@ def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int], t
 def run_batch_describe(
     self, job_id: int, user_id: int, image_ids: list[int],
     tag_prompt: str | None = None, description_prompt: str | None = None,
-    provider: str | None = None, model: str | None = None,
+    provider: str | None = None,  # ignored: vision is fal-only; kept so tasks queued before that change still run
+    model: str | None = None,
     temperature: float | None = None, max_tokens_tag: int | None = None,
     max_tokens_describe: int | None = None,
     trace_id: str | None = None, session_id: str | None = None,
@@ -1647,7 +1642,7 @@ def run_batch_describe(
                     dispatch(
                         process_image_pipeline,
                         image_id, user_id, tag_prompt, description_prompt,
-                        provider=provider, model=model,
+                        model=model,
                         temperature=temperature, max_tokens_tag=max_tokens_tag,
                         max_tokens_describe=max_tokens_describe,
                     )

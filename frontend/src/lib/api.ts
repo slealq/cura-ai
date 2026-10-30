@@ -1,5 +1,6 @@
 import axios from 'axios';
 import type {
+  ModelCatalog,
   AdminUserBalance,
   AnomalyListResponse,
   AnomalySummaryResponse,
@@ -709,6 +710,7 @@ export const jobsApi = {
 
 // Settings API
 export const settingsApi = {
+  getModelCatalog: async (): Promise<ModelCatalog> => (await api.get('/settings/model-catalog')).data,
   getPrompts: async (): Promise<{
     description_prompt: string;
     tag_prompt: string;
@@ -973,7 +975,7 @@ export const generationApi = {
     const formData = new FormData();
     formData.append('name', params.name);
     if (params.trigger_word) formData.append('trigger_word', params.trigger_word);
-    formData.append('base_model', params.base_model || 'flux-dev');
+    if (params.base_model) formData.append('base_model', params.base_model);
     if (params.description) formData.append('description', params.description);
     if (params.example_prompts?.length) formData.append('example_prompts', JSON.stringify(params.example_prompts));
     formData.append('file', params.file);
@@ -1048,6 +1050,7 @@ export const generationApi = {
     safety_tolerance?: string;
     enable_web_search?: boolean;
     image_size?: string;
+    quality?: string;
   }): Promise<{ status: string; job_id: number; generated_image_ids: number[] }> => {
     const { data } = await api.post('/generation/generate', params);
     return data;
@@ -1143,6 +1146,7 @@ export const editApi = {
     enable_safety_checker?: boolean;
     resolution?: string;
     aspect_ratio?: string;
+    quality?: string;
     enable_occlusion_prevention?: boolean;
     safety_tolerance?: string;
     enable_web_search?: boolean;
@@ -1337,6 +1341,7 @@ export const billingApi = {
     width?: number;
     height?: number;
     image_size?: string;
+    quality?: string;
     with_lora?: boolean;
   }): Promise<GenerationEstimateResponse> => {
     const { data } = await api.post('/billing/generation-estimate', params);

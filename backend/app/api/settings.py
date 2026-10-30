@@ -7,11 +7,21 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.api.model_validation import require_image_model, require_language_model
 from app.core.config import get_settings
 from app.core.security import get_current_user, require_admin
 from app.db.base import get_db
 from app.models.api_key import APIProvider
 from app.models.user import User
+from app.services.model_catalog import (
+    DEFAULT_EDIT_MODEL,
+    DEFAULT_GENERATION_MODEL,
+    DEFAULT_LANGUAGE_MODEL,
+    DEFAULT_VISION_MODEL,
+    IMAGE_MODELS,
+    LANGUAGE_MODELS,
+    image_models,
+)
 from app.services.settings_service import (
     DEFAULT_CLUSTERING_CONFIG,
     DEFAULT_DESCRIPTION_PROMPT,
@@ -112,41 +122,31 @@ class APIKeySaveRequest(BaseModel):
 class ProviderConfigResponse(BaseModel):
     """Current provider configuration."""
 
-    vision_provider: str
     embedding_provider: str
-    openai_vision_model: str
     openai_embedding_model: str
-    anthropic_vision_model: str
     fal_vision_model: str
     max_tokens_tagging: int
     max_tokens_description: int
     max_tokens_summarization: int
-    language_provider: str
-    openai_language_model: str
-    anthropic_language_model: str
     fal_language_model: str
     max_tokens_expansion: int
     max_tokens_suggestion: int
+    vision_temperature: float
 
 
 class ProviderConfigUpdateRequest(BaseModel):
     """Partial update for provider configuration."""
 
-    vision_provider: str | None = None
     embedding_provider: str | None = None
-    openai_vision_model: str | None = None
     openai_embedding_model: str | None = None
-    anthropic_vision_model: str | None = None
     fal_vision_model: str | None = None
     max_tokens_tagging: int | None = None
     max_tokens_description: int | None = None
     max_tokens_summarization: int | None = None
-    language_provider: str | None = None
-    openai_language_model: str | None = None
-    anthropic_language_model: str | None = None
     fal_language_model: str | None = None
     max_tokens_expansion: int | None = None
     max_tokens_suggestion: int | None = None
+    vision_temperature: float | None = None
 
 
 class ProviderModelInfo(BaseModel):
@@ -331,55 +331,75 @@ async def reset_prompt_settings(
 @router.post("/prompts/suggest", response_model=PromptSuggestResponse)
 async def suggest_prompt(request: PromptSuggestRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Use AI to suggest edits to a prompt based on a change request."""
+    from app.providers import _resolve_config
+    from app.providers.fal_vision_provider import fal_text_completion
+    from app.services.billing_context import init_trace, set_billing_user, set_trace_id
+    from app.services.billing_decorator import billable
+    from app.services.billing_service import BillingService, InsufficientBalanceError, ZeroCostEstimateError
+
     try:
-        from app.core.config import get_settings
-        from app.services.billing_service import BillingService, InsufficientBalanceError
+        BillingService(db, current_user.id).check_balance_or_raise()
+    except InsufficientBalanceError:
+        raise HTTPException(status_code=402, detail="Insufficient credits")
 
-        try:
-            BillingService(db, current_user.id).check_balance_or_raise()
-        except InsufficientBalanceError:
-            raise HTTPException(status_code=402, detail="Insufficient credits")
+    keys, provider_config = _resolve_config(db, current_user.id)
+    fal_key = keys.get("fal")
+    if not fal_key:
+        raise HTTPException(status_code=400, detail="fal.ai API key not configured on the platform.")
 
-        app_settings = get_settings()
-        openai_key = app_settings.openai_api_key
-        if not openai_key:
-            raise HTTPException(status_code=400, detail="OpenAI API key not configured on the platform.")
-        client = AsyncOpenAI(api_key=openai_key)
+    # Use language model settings from provider config
+    suggestion_model = provider_config.get("fal_language_model") or DEFAULT_LANGUAGE_MODEL
+    suggestion_max_tokens = provider_config.get("max_tokens_suggestion", 2000)
 
-        # Use language model settings from provider config
-        settings_service = get_settings_service(db, current_user.id)
-        provider_config = settings_service.get_provider_config()
-        suggestion_model = provider_config.get("openai_language_model", "gpt-4o-mini")
-        suggestion_max_tokens = provider_config.get("max_tokens_suggestion", 2000)
+    system_prompt = (
+        f"You are helping edit an AI prompt for image {request.prompt_type} generation. "
+        "The user will provide the current prompt and a requested change. "
+        "Return ONLY the new complete prompt incorporating the requested changes. "
+        "Do not include any explanation or commentary, just the updated prompt text."
+    )
+    user_prompt = (
+        f"Current prompt:\n{request.current_prompt}\n\n"
+        f"Requested change:\n{request.change_request}"
+    )
 
-        system_prompt = (
-            f"You are helping edit an AI prompt for image {request.prompt_type} generation. "
-            "The user will provide the current prompt and a requested change. "
-            "Return ONLY the new complete prompt incorporating the requested changes. "
-            "Do not include any explanation or commentary, just the updated prompt text."
-        )
+    set_billing_user(current_user.id)
+    init_trace()
 
-        response = await client.chat.completions.create(
-            model=suggestion_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": (
-                        f"Current prompt:\n{request.current_prompt}\n\n"
-                        f"Requested change:\n{request.change_request}"
-                    ),
-                },
-            ],
-            max_tokens=suggestion_max_tokens,
-        )
+    try:
+        with billable(
+            db, current_user.id, operation="suggest_prompt",
+            provider="fal", model=suggestion_model,
+            prompt_text=f"{system_prompt}\n{user_prompt}",
+            request_snapshot={"prompt_type": request.prompt_type, "model": suggestion_model},
+            defer_debit=False,
+        ) as b_suggest:
+            completion = await fal_text_completion(
+                user_prompt,
+                suggestion_model,
+                suggestion_max_tokens,
+                api_key=fal_key,
+                system_prompt=system_prompt,
+            )
+            b_suggest.set_actual(
+                input_tokens=completion.input_tokens,
+                output_tokens=completion.output_tokens,
+                provider_cost=completion.provider_cost,
+                response_snapshot={"model": suggestion_model, "usage": completion.usage},
+            )
+            return PromptSuggestResponse(suggested_prompt=completion.text)
 
-        suggested = response.choices[0].message.content or ""
-        return PromptSuggestResponse(suggested_prompt=suggested.strip())
-
+    except InsufficientBalanceError:
+        raise HTTPException(status_code=402, detail="Insufficient credits")
+    except ZeroCostEstimateError:
+        raise HTTPException(status_code=422, detail="Billing configuration error — cannot price this operation")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to suggest prompt: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate suggestion: {str(e)}")
+    finally:
+        set_billing_user(None)
+        set_trace_id(None)
 
 
 # --- API Key endpoints ---
@@ -395,11 +415,12 @@ def _api_key_to_response(key) -> APIKeyResponse:
     )
 
 
+ANTHROPIC_KEY_UNSUPPORTED = "Anthropic keys are no longer used: vision and language models run through fal.ai"
+
 ENV_VAR_MAP = {
     APIProvider.OPENAI: app_settings.openai_api_key,
-    APIProvider.ANTHROPIC: app_settings.anthropic_api_key,
     APIProvider.FAL: app_settings.fal_api_key,
-    # Sentry has no env var fallback — always stored in DB
+    # Anthropic is no longer used (vision/language run through fal); Sentry has no env var fallback
 }
 
 
@@ -453,6 +474,9 @@ async def save_api_key(
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
+    if api_provider == APIProvider.ANTHROPIC:
+        raise HTTPException(status_code=400, detail=ANTHROPIC_KEY_UNSUPPORTED)
+
     service = get_api_key_service(db, current_user.id)
     key, _result = await service.validate_and_save_key(api_provider, request.key)
     return _api_key_to_response(key)
@@ -471,6 +495,9 @@ async def validate_api_key(
         api_provider = APIProvider(provider)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+
+    if api_provider == APIProvider.ANTHROPIC:
+        raise HTTPException(status_code=400, detail=ANTHROPIC_KEY_UNSUPPORTED)
 
     service = get_api_key_service(db, current_user.id)
     existing = service.get_key(api_provider)
@@ -534,6 +561,8 @@ async def update_provider_config(
     request: ProviderConfigUpdateRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
 ):
     """Update provider configuration (partial update, merges with defaults)."""
+    require_language_model(request.fal_vision_model)
+    require_language_model(request.fal_language_model)
     service = get_settings_service(db, current_user.id)
     update = {k: v for k, v in request.model_dump().items() if v is not None}
     return service.set_provider_config(update)
@@ -547,28 +576,35 @@ async def reset_provider_config(db: Session = Depends(get_db), current_user: Use
     return DEFAULT_PROVIDER_CONFIG
 
 
-# --- Model discovery endpoint ---
+# --- Model discovery endpoints ---
+
+
+@router.get("/model-catalog")
+async def get_model_catalog(current_user: User = Depends(get_current_user)):
+    """The model catalog: offered language/image models, their request params and defaults."""
+    return {
+        "language": [m.to_dict() for m in LANGUAGE_MODELS],
+        "generation": [m.to_dict() for m in image_models("generate")],
+        "edit": [m.to_dict() for m in image_models("edit")],
+        "defaults": {
+            "vision_model": DEFAULT_VISION_MODEL,
+            "language_model": DEFAULT_LANGUAGE_MODEL,
+            "generation_model": DEFAULT_GENERATION_MODEL,
+            "edit_model": DEFAULT_EDIT_MODEL,
+        },
+        "training_base_models": [
+            {"key": m.key, "label": m.label} for m in IMAGE_MODELS if m.trainable
+        ],
+    }
 
 
 @router.get("/models/{provider}", response_model=list[ProviderModelInfo])
 async def get_provider_models(provider: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Get available models for a provider."""
+    """Get available embedding models (OpenAI is the only provider with discoverable models)."""
     if provider == "openai":
         return await _get_openai_models(db, current_user.id)
-    elif provider == "anthropic":
-        return _get_anthropic_models()
-    elif provider == "fal":
-        return _get_fal_models()
-    else:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+    raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
-
-CURATED_OPENAI_VISION_MODELS = [
-    ProviderModelInfo(id="gpt-4o-mini", name="GPT-4o Mini", capabilities=["vision", "chat"]),
-    ProviderModelInfo(id="gpt-4o", name="GPT-4o", capabilities=["vision", "chat"]),
-    ProviderModelInfo(id="gpt-5-mini", name="GPT-5 Mini", capabilities=["vision", "chat"]),
-    ProviderModelInfo(id="gpt-5.2", name="GPT-5.2", capabilities=["vision", "chat"]),
-]
 
 FALLBACK_EMBEDDING_MODELS = [
     ProviderModelInfo(id="text-embedding-3-small", name="Text Embedding 3 Small", capabilities=["embedding"]),
@@ -577,7 +613,7 @@ FALLBACK_EMBEDDING_MODELS = [
 
 
 async def _get_openai_models(db: Session, user_id: int) -> list[ProviderModelInfo]:
-    """Return curated vision models + dynamically discovered embedding models."""
+    """Return dynamically discovered OpenAI embedding models."""
     from app.services.api_key_service import get_api_key_service as get_aks
 
     key_service = get_aks(db, user_id)
@@ -585,9 +621,8 @@ async def _get_openai_models(db: Session, user_id: int) -> list[ProviderModelInf
     if not api_key:
         api_key = app_settings.openai_api_key or None
     if not api_key:
-        return CURATED_OPENAI_VISION_MODELS + FALLBACK_EMBEDDING_MODELS
+        return list(FALLBACK_EMBEDDING_MODELS)
 
-    # Dynamically discover embedding models
     embedding_models: list[ProviderModelInfo] = []
     try:
         client = AsyncOpenAI(api_key=api_key)
@@ -604,48 +639,7 @@ async def _get_openai_models(db: Session, user_id: int) -> list[ProviderModelInf
         logger.warning(f"Failed to fetch OpenAI embedding models: {e}")
         embedding_models = list(FALLBACK_EMBEDDING_MODELS)
 
-    if not embedding_models:
-        embedding_models = list(FALLBACK_EMBEDDING_MODELS)
-
-    return CURATED_OPENAI_VISION_MODELS + embedding_models
-
-
-def _get_anthropic_models() -> list[ProviderModelInfo]:
-    """Return curated list of Anthropic Claude models with vision support."""
-    return [
-        ProviderModelInfo(id="claude-3-haiku-20240307", name="Claude Haiku 3", capabilities=["vision", "chat"]),
-        ProviderModelInfo(id="claude-haiku-4-5-20251001", name="Claude Haiku 4.5", capabilities=["vision", "chat"]),
-        ProviderModelInfo(id="claude-sonnet-4-6", name="Claude Sonnet 4.6", capabilities=["vision", "chat"]),
-        ProviderModelInfo(id="claude-opus-4-6", name="Claude Opus 4.6", capabilities=["vision", "chat"]),
-    ]
-
-
-def _get_fal_models() -> list[ProviderModelInfo]:
-    """Return supported fal.ai endpoints and OpenRouter vision models."""
-    return [
-        # OpenRouter vision models
-        ProviderModelInfo(id="x-ai/grok-4-fast", name="Grok 4 Fast", capabilities=["vision", "chat"]),
-        ProviderModelInfo(id="qwen/qwen3-vl-235b-a22b-instruct", name="Qwen3 VL 235B", capabilities=["vision", "chat"]),
-        ProviderModelInfo(id="google/gemini-2.5-flash", name="Gemini 2.5 Flash", capabilities=["vision", "chat"]),
-        # Frontier generation/training endpoints
-        ProviderModelInfo(id="fal-ai/flux-2", name="FLUX.2", capabilities=["generation"]),
-        ProviderModelInfo(id="fal-ai/flux-2/lora", name="FLUX.2 LoRA", capabilities=["generation", "lora"]),
-        ProviderModelInfo(id="fal-ai/flux-2-trainer-v2", name="FLUX.2 LoRA Training", capabilities=["training"]),
-        ProviderModelInfo(id="fal-ai/qwen-image-2512", name="Qwen Image 2512", capabilities=["generation"]),
-        ProviderModelInfo(id="fal-ai/qwen-image-2512/lora", name="Qwen Image 2512 LoRA", capabilities=["generation", "lora"]),
-        ProviderModelInfo(id="fal-ai/qwen-image-2512-trainer-v2", name="Qwen Image 2512 Training", capabilities=["training"]),
-        ProviderModelInfo(id="fal-ai/nano-banana-pro", name="Nano Banana Pro", capabilities=["generation"]),
-        ProviderModelInfo(id="fal-ai/nano-banana-2", name="Nano Banana 2", capabilities=["generation"]),
-        ProviderModelInfo(id="fal-ai/flux-2-pro", name="FLUX.2 Pro", capabilities=["generation"]),
-        ProviderModelInfo(id="bytedance/seedream/v5/pro/text-to-image", name="Seedream 5 Pro", capabilities=["generation"]),
-        # Edit endpoints
-        ProviderModelInfo(id="fal-ai/nano-banana-pro/edit", name="Nano Banana Pro Edit", capabilities=["edit"]),
-        ProviderModelInfo(id="fal-ai/kling-image/o3/image-to-image", name="Kling Image", capabilities=["edit"]),
-        ProviderModelInfo(id="xai/grok-imagine-image/edit", name="Grok Imagine", capabilities=["edit"]),
-        ProviderModelInfo(id="bytedance/seedream/v5/pro/edit", name="Seedream 5 Pro Edit", capabilities=["edit"]),
-        ProviderModelInfo(id="fal-ai/qwen-image-2/pro/edit", name="Qwen Image 2 Pro Edit", capabilities=["edit"]),
-        ProviderModelInfo(id="fal-ai/flux-2/lora/edit", name="FLUX.2 LoRA Edit", capabilities=["edit"]),
-    ]
+    return embedding_models or list(FALLBACK_EMBEDDING_MODELS)
 
 
 # --- Clustering config endpoints ---
@@ -722,6 +716,7 @@ async def get_base_model(db: Session = Depends(get_db), current_user: User = Dep
 @router.put("/base-model", response_model=BaseModelResponse)
 async def update_base_model(request: BaseModelRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Set the active base model."""
+    require_image_model(request.base_model, "generate")
     service = get_settings_service(db, current_user.id)
     return {"base_model": service.set_base_model(request.base_model)}
 
@@ -748,6 +743,7 @@ async def get_edit_model(db: Session = Depends(get_db), current_user: User = Dep
 @router.put("/edit-model", response_model=EditModelResponse)
 async def update_edit_model(request: EditModelRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Set the default edit model."""
+    require_image_model(request.edit_model, "edit")
     service = get_settings_service(db, current_user.id)
     return {"edit_model": service.set_edit_model(request.edit_model)}
 
@@ -851,7 +847,7 @@ class EditConfigUpdateRequest(BaseModel):
 
 
 @router.get("/edit", response_model=EditConfigResponse)
-async def get_edit_config(edit_model: str = "nano-banana-pro-edit", db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+async def get_edit_config(edit_model: str = DEFAULT_EDIT_MODEL, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get current edit configuration for a specific edit model."""
     service = get_settings_service(db, current_user.id)
     return service.get_edit_config(edit_model)
@@ -859,7 +855,7 @@ async def get_edit_config(edit_model: str = "nano-banana-pro-edit", db: Session 
 
 @router.put("/edit", response_model=EditConfigResponse)
 async def update_edit_config(
-    request: EditConfigUpdateRequest, edit_model: str = "nano-banana-pro-edit", db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
+    request: EditConfigUpdateRequest, edit_model: str = DEFAULT_EDIT_MODEL, db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
 ):
     """Update edit configuration for a specific edit model."""
     service = get_settings_service(db, current_user.id)
@@ -868,7 +864,7 @@ async def update_edit_config(
 
 
 @router.post("/edit/reset", response_model=EditConfigResponse)
-async def reset_edit_config(edit_model: str = "nano-banana-pro-edit", db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+async def reset_edit_config(edit_model: str = DEFAULT_EDIT_MODEL, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Reset edit configuration to defaults."""
     service = get_settings_service(db, current_user.id)
     service.delete_setting(f"edit_config:{edit_model}")
