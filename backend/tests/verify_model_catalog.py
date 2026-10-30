@@ -50,7 +50,7 @@ def run(endpoint, arguments, timeout):
 
 
 def image_uri():
-    image = Image.new('RGB', (128, 128), 'red')
+    image = Image.new('RGB', (512, 512), 'red')
     buf = io.BytesIO()
     image.save(buf, format='PNG')
     return 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode()
@@ -100,7 +100,7 @@ def main():
         # Allow only fixed diagnostic phrases; never serialize provider response bodies.
         message = str(exc).lower()
         record['error_type'] = type(exc).__name__
-        for phrase in ('reasoning is mandatory', 'invalid api key', 'unauthorized', 'insufficient balance', 'validation error', 'model not found', 'deprecated', 'timeout'):
+        for phrase in ('content_policy_violation', 'guardrail restrictions', 'zdr violation', 'zdr', 'image_too_small', 'minimum image size', 'semantic response check failed', 'reasoning is mandatory', 'invalid api key', 'unauthorized', 'insufficient balance', 'validation error', 'model not found', 'deprecated', 'timeout'):
             if phrase in message:
                 record['error_category'] = phrase
                 break

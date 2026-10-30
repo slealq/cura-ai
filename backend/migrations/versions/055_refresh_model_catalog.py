@@ -32,8 +32,8 @@ LANGUAGE_OPERATIONS = (
 )
 
 # {model_id: (input USD per token, output USD per token)} via fal's OpenRouter routers.
-# Long-prompt tiers and time-of-day discounts are not representable here: the base
-# (higher) rate is stored and fal's reported cost is used when available.
+# Base rates are stored here; catalog metadata applies long-prompt tiers in fallback
+# calculations. The higher time-dependent rate is used as an estimate.
 LANGUAGE_RATES = {
     "anthropic/claude-haiku-5.5": ("0.0000001", "0.0000005"),
     "anthropic/claude-sonnet-5.5": ("0.000002", "0.00001"),
@@ -46,10 +46,6 @@ LANGUAGE_RATES = {
     "google/gemini-3.8-flash": ("0.000000825", "0.000004125"),
     "google/gemini-4-argon": ("0.000002", "0.00001"),
     "x-ai/grok-4.3": ("0.00000125", "0.0000025"),
-    "x-ai/grok-4.7": ("0.000002", "0.000006"),
-    "qwen/qwen3.8-flash": ("0.00000015", "0.00000047"),
-    "qwen/qwen3.8-max-0902": ("0.000002", "0.000006"),
-    "qwen/qwen3.8-max-prime": ("0.000004", "0.000012"),
     "deepseek/deepseek-v4.1-flash": ("0.000000045", "0.0000005"),
     "moonshotai/kimi-k3.1-pro": ("0.000002", "0.00001"),
     "z-ai/glm-5.3-flash": ("0.000000018", "0.0000001402"),
@@ -70,7 +66,6 @@ FLUX_2_LORA_RULES = json.dumps({
 # (catalog_model, operation, cost_per_call, pricing_rules). pricing_rules=None keeps any
 # existing rules on the row.  Variable pricing itself lives in app.services.pricing_engine.
 IMAGE_ROWS = [
-    ("google/nano-banana-2.1", "generate", 0.04, None),
     ("fal-ai/nano-banana-pro", "generate", 0.15, None),
     ("google/nano-banana-lite", "generate", 0.042, None),
     ("openai/gpt-image-2.5/flare/text-to-image", "generate", 0.05268, None),
@@ -91,7 +86,6 @@ IMAGE_ROWS = [
     ("xai/grok-imagine-image/v2.0/text-to-image", "generate", 0.06, None),
     ("ideogram/v4.5", "generate", 0.06, None),
     ("google/nano-banana-2.1/edit", "edit", 0.044, None),
-    ("fal-ai/nano-banana-pro/edit", "edit", 0.15, None),
     ("google/nano-banana-lite/edit", "edit", 0.042, None),
     ("openai/gpt-image-2.5/flare/edit", "edit", 0.05268, None),
     ("openai/gpt-image-2.5/sunburst/edit", "edit", 0.05268, None),
@@ -135,6 +129,10 @@ PRE_EXISTING_IMAGE_ROWS = {
 
 # fal language models removed from the catalog (all operations).
 REMOVED_FAL_LANGUAGE_MODELS = (
+    "x-ai/grok-4.7",
+    "qwen/qwen3.8-flash",
+    "qwen/qwen3.8-max-0902",
+    "qwen/qwen3.8-max-prime",
     "x-ai/grok-4-fast",
     "x-ai/grok-2-vision-1212",
     "qwen/qwen3-vl-235b-a22b-instruct",
@@ -143,6 +141,8 @@ REMOVED_FAL_LANGUAGE_MODELS = (
 
 # fal image rows for removed models: (model, operation).
 REMOVED_FAL_IMAGE_ROWS = (
+    ("google/nano-banana-2.1", "generate"),
+    ("fal-ai/nano-banana-pro/edit", "edit"),
     ("fal-ai/flux/dev", "generate"),
     ("fal-ai/flux-lora", "generate"),
     ("fal-ai/nano-banana-2", "generate"),
@@ -160,7 +160,7 @@ STALE_PROVIDER_CONFIG_KEYS = (
     "anthropic_vision_model", "anthropic_language_model",
 )
 DEFAULT_LANGUAGE_MODEL = "anthropic/claude-haiku-5.5"
-DEFAULT_GENERATION_MODEL = "nano-banana-2.1"
+DEFAULT_GENERATION_MODEL = "nano-banana-pro"
 DEFAULT_EDIT_MODEL = "nano-banana-2.1-edit"
 
 

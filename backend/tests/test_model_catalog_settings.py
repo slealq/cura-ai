@@ -81,7 +81,7 @@ def test_set_provider_config_drops_stale_keys():
 
 def test_stored_default_generation_and_edit_models_self_heal():
     service = StoredSettings({"base_model": "flux-dev", "edit_model": "face-swap"})
-    assert service.get_base_model() == DEFAULT_GENERATION_MODEL == "nano-banana-2.1"
+    assert service.get_base_model() == DEFAULT_GENERATION_MODEL == "nano-banana-pro"
     assert service.get_edit_model() == DEFAULT_EDIT_MODEL == "nano-banana-2.1-edit"
     service = StoredSettings({"base_model": "flux-3", "edit_model": "kling-image"})
     assert (service.get_base_model(), service.get_edit_model()) == ("flux-3", "kling-image")
@@ -125,7 +125,7 @@ def test_model_catalog_endpoint_shape():
     assert catalog["defaults"] == {
         "vision_model": "anthropic/claude-haiku-5.5",
         "language_model": "anthropic/claude-haiku-5.5",
-        "generation_model": "nano-banana-2.1",
+        "generation_model": "nano-banana-pro",
         "edit_model": "nano-banana-2.1-edit",
     }
     assert {m["kind"] for m in catalog["generation"]} == {"generate"}
@@ -183,7 +183,7 @@ def test_decision_snapshot_carries_generation_params_for_the_pricing_fallback(mo
 
     # An explicit snapshot with its own generation_params is left alone.
     decision, _ = orch.create_decision(
-        operation="generate", provider="fal", model="nano-banana-2.1",
+        operation="generate", provider="fal", model="nano-banana-pro",
         generation_params={"resolution": "4K"}, request_snapshot={"generation_params": {"resolution": "2K"}, "x": 1},
     )
     assert decision.request_snapshot == {"generation_params": {"resolution": "2K"}, "x": 1}

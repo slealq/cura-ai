@@ -252,7 +252,7 @@ def test_mandatory_reasoning_is_enabled_for_text_and_vision(image_urls):
     from app.services.model_catalog import LANGUAGE_MODELS
 
     mandatory = [model for model in LANGUAGE_MODELS if model.requires_reasoning]
-    assert len(mandatory) == 13
+    assert len(mandatory) == 10
     for model in LANGUAGE_MODELS:
         endpoint, payload = build_router_request(model.id, "Return JSON", 128, image_urls=image_urls, temperature=0.2)
         assert endpoint.endswith("/vision") == bool(image_urls)

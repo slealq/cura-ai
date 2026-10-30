@@ -1,6 +1,6 @@
 # Model catalog
 
-Catalog snapshot: 2026-10-30. Prices below are estimates in USD. Provider-reported cost takes precedence for billing and catalog markup applies. Availability and prices require live revalidation before release.
+Catalog snapshot: 2026-10-30. Prices below are estimates in USD. Provider-reported cost takes precedence for billing and catalog markup applies. The paid smoke matrix is recorded in [live verification](model-catalog-live-verification.json). Billing applies a 2× platform markup to provider costs or catalog estimates.
 
 ## Language and vision
 
@@ -19,10 +19,6 @@ All entries support text and vision through fal OpenRouter. Rates are per millio
 | `google/gemini-3.8-flash` | google | $0.825 / $4.125 | yes |
 | `google/gemini-4-argon` | google | $2 / $10 | yes |
 | `x-ai/grok-4.3` | x-ai | $1.25 / $2.5 | yes |
-| `x-ai/grok-4.7` | x-ai | $2 / $6 | yes |
-| `qwen/qwen3.8-flash` | qwen | $0.15 / $0.47 | yes |
-| `qwen/qwen3.8-max-0902` | qwen | $2 / $6 | yes |
-| `qwen/qwen3.8-max-prime` | qwen | $4 / $12 | yes |
 | `deepseek/deepseek-v4.1-flash` | deepseek | $0.045 / $0.5 | yes |
 | `moonshotai/kimi-k3.1-pro` | moonshotai | $2 / $10 | no |
 | `z-ai/glm-5.3-flash` | z-ai | $0.018 / $0.1402 | yes |
@@ -38,7 +34,6 @@ Prices are default-option estimates per call. Variable price tables and LoRA rat
 
 | Kind | Key | Vendor | Endpoint | Default price |
 |---|---|---|---|---:|
-| generate | `nano-banana-2.1` | google | [google/nano-banana-2.1](https://fal.ai/models/google/nano-banana-2.1) | $0.04 |
 | generate | `nano-banana-pro` | google | [fal-ai/nano-banana-pro](https://fal.ai/models/fal-ai/nano-banana-pro) | $0.15 |
 | generate | `nano-banana-lite` | google | [google/nano-banana-lite](https://fal.ai/models/google/nano-banana-lite) | $0.042 |
 | generate | `gpt-image-2.5-flare` | openai | [openai/gpt-image-2.5/flare/text-to-image](https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image) | $0.05268 |
@@ -57,7 +52,6 @@ Prices are default-option estimates per call. Variable price tables and LoRA rat
 | generate | `grok-imagine-v2` | xai | [xai/grok-imagine-image/v2.0/text-to-image](https://fal.ai/models/xai/grok-imagine-image/v2.0/text-to-image) | $0.06 |
 | generate | `ideogram-v4.5` | ideogram | [ideogram/v4.5](https://fal.ai/models/ideogram/v4.5) | $0.06 |
 | edit | `nano-banana-2.1-edit` | google | [google/nano-banana-2.1/edit](https://fal.ai/models/google/nano-banana-2.1/edit) | $0.044 |
-| edit | `nano-banana-pro-edit` | google | [fal-ai/nano-banana-pro/edit](https://fal.ai/models/fal-ai/nano-banana-pro/edit) | $0.15 |
 | edit | `nano-banana-lite-edit` | google | [google/nano-banana-lite/edit](https://fal.ai/models/google/nano-banana-lite/edit) | $0.042 |
 | edit | `gpt-image-2.5-flare-edit` | openai | [openai/gpt-image-2.5/flare/edit](https://fal.ai/models/openai/gpt-image-2.5/flare/edit) | $0.05268 |
 | edit | `gpt-image-2.5-sunburst-edit` | openai | [openai/gpt-image-2.5/sunburst/edit](https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit) | $0.05268 |
@@ -79,15 +73,21 @@ LoRA generation endpoints: `fal-ai/flux-2/lora` ($0.021) and `fal-ai/qwen-image-
 
 ## Defaults and removals
 
-Defaults are `anthropic/claude-haiku-5.5` for language and vision, `nano-banana-2.1` for generation and `nano-banana-2.1-edit` for editing. Paid smoke verification is in progress; reasoning-required models must be rerun after the router fix before results are accepted.
+Defaults are `anthropic/claude-haiku-5.5` for language and vision, `nano-banana-pro` for generation and `nano-banana-2.1-edit` for editing. All 17 language models passed both text and vision; all 17 generation and 17 edit models passed.
 
 Retired selections include direct OpenAI and Anthropic language providers, legacy FLUX Dev and Qwen 2.5 generation, Nano Banana 2, Qwen Image Max Edit and Qwen Image 2 Pro Edit (deprecated), Wan 2.5, face swap, and the older Grok edit endpoint. Historical keys display as raw keys. OpenAI embeddings remain supported.
+
+The three Qwen 3.8 language models were removed because both routes hit the account ZDR guardrail; account policy was not changed. Grok 4.7 was removed because its text route produced no final answer within 4096 tokens on two attempts, although vision passed. Nano Banana 2.1 generation and Nano Banana Pro editing were removed after two benign requests each were rejected by content policy. Nano Banana 2.1 editing and Nano Banana Pro generation passed and remain offered.
+
+The retained fal status research dated 2026-10-30 marks `fal-ai/flux-2-trainer-v2` active and `fal-ai/qwen-image-2512-trainer-v2` deprecated. Both existing training bases are preserved; no training redesign is included.
+
+OpenRouter metadata matched listed vision support, temperature and base rates for offered language models. MiniMax M3.1 Flash metadata reported its $0.075/$0.30 off-peak rates; the catalog deliberately uses the higher $0.15/$0.60 rate for estimates.
 
 ## Refresh and release verification
 
 Fetch `https://openrouter.ai/api/v1/models`, check each model’s image input, pricing, and `supported_parameters`, and retrieve `https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=<endpoint>` plus fal pricing and status for each image and trainer endpoint. Compare schemas to catalog parameters and billing seeds. Run one text and one vision request for each language model and one image per generation/edit endpoint, recording sanitized outcomes and reported costs. Remove failures and update this document, migration seed drift tests, and defaults as needed.
 
-**Evidence status:** retained research files were collected on 2026-10-30. A paid smoke run is in progress; its pre-fix language failures require a targeted rerun with mandatory reasoning enabled. Results are not yet a complete release validation.
+**Evidence:** [sanitized paid smoke matrix](model-catalog-live-verification.json), 2026-10-30. The final offered matrix passes; reported image costs were null where fal did not return a cost. FLUX.3 and Kling edits passed a 512px retest after the initial 128px fixture was too small. A fresh PostgreSQL upgrade to 055, downgrade to 054, and re-upgrade to 055 passed against the curated migration on a separate temporary database on the DEV server; Docker was unavailable.
 
 ## Operator verification commands
 

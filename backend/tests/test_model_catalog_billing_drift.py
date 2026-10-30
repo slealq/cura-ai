@@ -24,10 +24,11 @@ migration = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(migration)
 
 REMOVED_IMAGE_KEYS = {
-    "flux-dev", "qwen-2.5", "nano-banana-2",
+    "flux-dev", "qwen-2.5", "nano-banana-2", "nano-banana-2.1", "nano-banana-pro-edit",
     "qwen-image-max-edit", "qwen-image-2-pro-edit", "wan-25", "grok-imagine", "face-swap",
 }
 REMOVED_LANGUAGE_IDS = {
+    "x-ai/grok-4.7", "qwen/qwen3.8-flash", "qwen/qwen3.8-max-0902", "qwen/qwen3.8-max-prime",
     "x-ai/grok-4-fast", "x-ai/grok-2-vision-1212", "qwen/qwen3-vl-235b-a22b-instruct", "google/gemini-2.5-flash",
 }
 
@@ -136,3 +137,16 @@ def test_registry_strategy_keys_have_functions():
     for entry in model_registry.all_entries():
         if entry.pricing_strategy_key:
             assert entry.pricing_strategy_key in strategies
+
+
+def test_curated_live_evidence_covers_every_offered_model():
+    import json
+
+    evidence = json.loads((Path(__file__).parents[2] / "docs" / "model-catalog-live-verification.json").read_text())
+    rows = {(row["kind"], row["model"]): row for row in evidence["smoke"]}
+    assert evidence["final_offered_counts"] == {"language": 17, "generate": 17, "edit": 17}
+    for model in LANGUAGE_MODELS:
+        for kind in ("text", "vision"):
+            assert rows[kind, model.id]["ok"] and rows[kind, model.id]["offered"]
+    for model in IMAGE_MODELS:
+        assert rows[model.kind, model.key]["ok"] and rows[model.kind, model.key]["offered"]

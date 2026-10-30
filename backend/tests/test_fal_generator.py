@@ -102,7 +102,7 @@ async def test_generate_without_loras_uses_base_endpoint_and_omits_seed(fal_subm
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("base_model", "seed", "expected_seed"),
-    [("nano-banana-pro", 123, {"seed": 123}), ("nano-banana-2.1", None, {})],
+    [("nano-banana-pro", 123, {"seed": 123}), ("nano-banana-pro", None, {})],
 )
 async def test_generate_nano_banana_models_use_resolution_aspect_arguments(
     fal_submit, base_model, seed, expected_seed

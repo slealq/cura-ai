@@ -43,6 +43,7 @@ def conn(monkeypatch):
             ("anthropic", "claude-3-haiku-20240307", "describe"), ("fal", "x-ai/grok-4-fast", "tag"),
             ("fal", "fal-ai/flux/dev", "generate"), ("fal", "fal-ai/flux-lora-fast-training", "train"),
             ("fal", "fal-ai/flux-2", "generate"), ("fal", "fal-ai/qwen-image-max/edit", "edit"),
+            ("fal", "fal-ai/nano-banana-pro/edit", "edit"), ("fal", "qwen/qwen3.8-flash", "tag"),
         ]
         for provider, model, operation in old_rows:
             connection.execute(
@@ -92,12 +93,14 @@ def test_upgrade_seeds_rows_deactivates_old_ones_and_resets_settings(conn):
     assert _active(conn, "fal", "x-ai/grok-4-fast", "tag") == 0
     assert _active(conn, "fal", "fal-ai/flux/dev", "generate") == 0
     assert _active(conn, "fal", "fal-ai/qwen-image-max/edit", "edit") == 0
+    assert _active(conn, "fal", "fal-ai/nano-banana-pro/edit", "edit") == 0
+    assert _active(conn, "fal", "qwen/qwen3.8-flash", "tag") == 0
     assert _active(conn, "fal", "fal-ai/flux-lora-fast-training", "train") == 1
 
     stored = json.loads(conn.execute(sa.text("SELECT value FROM app_settings WHERE key='provider_config'")).scalar())
     assert stored == {"fal_vision_model": "anthropic/claude-haiku-5.5", "fal_language_model": "anthropic/claude-haiku-5.5",
                       "max_tokens_tagging": 777}
-    assert conn.execute(sa.text("SELECT value FROM app_settings WHERE key='base_model'")).scalar() == "nano-banana-2.1"
+    assert conn.execute(sa.text("SELECT value FROM app_settings WHERE key='base_model'")).scalar() == "nano-banana-pro"
     assert conn.execute(sa.text("SELECT value FROM app_settings WHERE key='edit_model'")).scalar() == "nano-banana-2.1-edit"
 
 
@@ -115,9 +118,11 @@ def test_downgrade_removes_new_rows_and_reactivates_old_ones_then_upgrade_reruns
     assert conn.execute(sa.text("SELECT COUNT(*) FROM cost_catalog WHERE model='fal-ai/flux-2'")).scalar() == 1
     assert _active(conn, "openai", "gpt-4o", "tag") == 1
     assert _active(conn, "fal", "x-ai/grok-4-fast", "tag") == 1
+    assert _active(conn, "fal", "fal-ai/nano-banana-pro/edit", "edit") == 1
+    assert _active(conn, "fal", "qwen/qwen3.8-flash", "tag") == 1
     assert _active(conn, "fal", "fal-ai/qwen-image-max/edit", "edit") == 0
     assert conn.execute(sa.text("SELECT COUNT(*) FROM cost_catalog WHERE model='anthropic/claude-haiku-5.5'")).scalar() == 0
 
     migration.upgrade()
     assert _active(conn, "openai", "gpt-4o", "tag") == 0
-    assert _active(conn, "fal", "google/nano-banana-2.1", "generate") == 1
+    assert _active(conn, "fal", "fal-ai/nano-banana-pro", "generate") == 1

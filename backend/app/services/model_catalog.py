@@ -70,8 +70,7 @@ class LanguageModel:
 _MANDATORY_REASONING = frozenset({
     "anthropic/claude-sonnet-5.5", "anthropic/claude-opus-5.5",
     "openai/gpt-6.1-sol", "openai/gpt-6-astra", "google/gemini-3.5-flash-lite",
-    "google/gemini-3.8-flash", "google/gemini-4-argon", "x-ai/grok-4.7",
-    "qwen/qwen3.8-max-0902", "qwen/qwen3.8-max-prime", "z-ai/glm-5.3-flash",
+    "google/gemini-3.8-flash", "google/gemini-4-argon", "z-ai/glm-5.3-flash",
     "z-ai/glm-5.3-flashx", "minimax/minimax-m3.1-flash",
 })
 
@@ -108,10 +107,6 @@ LANGUAGE_MODELS: tuple[LanguageModel, ...] = (
     _lm("google/gemini-3.8-flash", "Gemini 3.8 Flash", 0.825, 4.125, True),
     _lm("google/gemini-4-argon", "Gemini 4 Argon", 2, 10, True),
     _lm("x-ai/grok-4.3", "Grok 4.3", 1.25, 2.50, True, _tier(200000, 2.5, 5)),
-    _lm("x-ai/grok-4.7", "Grok 4.7", 2, 6, True, _tier(200000, 4, 12)),
-    _lm("qwen/qwen3.8-flash", "Qwen3.8 Flash", 0.15, 0.47, True),
-    _lm("qwen/qwen3.8-max-0902", "Qwen3.8 Max 0902", 2, 6, True),
-    _lm("qwen/qwen3.8-max-prime", "Qwen3.8 Max Prime", 4, 12, True),
     _lm("deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash", 0.045, 0.50, True),
     _lm("moonshotai/kimi-k3.1-pro", "Kimi K3.1 Pro", 2, 10, False),
     _lm("z-ai/glm-5.3-flash", "GLM 5.3 Flash", 0.018, 0.1402, True),
@@ -272,11 +267,8 @@ def _steps_params(min_steps: int, guidance: float) -> dict:
 
 IMAGE_MODELS: tuple[ImageModel, ...] = (
     # --- Generation ---
-    _gen("nano-banana-2.1", "Nano Banana 2.1", "google", "google/nano-banana-2.1",
-         _nano_params(True, True, "1:1"), 0.040, price_param="resolution", price_table=_NB21_TABLE,
-         is_default=True),
     _gen("nano-banana-pro", "Nano Banana Pro", "google", "fal-ai/nano-banana-pro",
-         _nano_params(True, True, "1:1"), 0.15, pricing_strategy_key="nano_banana_pro"),
+         _nano_params(True, True, "1:1"), 0.15, pricing_strategy_key="nano_banana_pro", is_default=True),
     _gen("nano-banana-lite", "Nano Banana Lite", "google", "google/nano-banana-lite",
          _nano_params(False, False, "1:1"), 0.042),
     _gen("gpt-image-2.5-flare", "GPT Image 2.5 Flare", "openai", "openai/gpt-image-2.5/flare/text-to-image",
@@ -326,8 +318,6 @@ IMAGE_MODELS: tuple[ImageModel, ...] = (
     _edit("nano-banana-2.1-edit", "Nano Banana 2.1", "google", "google/nano-banana-2.1/edit",
           _nano_params(True, True, "auto"), 0.044, 14, price_param="resolution", price_table=_NB21_EDIT_TABLE,
           is_default=True),
-    _edit("nano-banana-pro-edit", "Nano Banana Pro", "google", "fal-ai/nano-banana-pro/edit",
-          _nano_params(True, True, "auto"), 0.15, 14, pricing_strategy_key="nano_banana_pro_edit"),
     _edit("nano-banana-lite-edit", "Nano Banana Lite", "google", "google/nano-banana-lite/edit",
           _nano_params(False, False, "auto"), 0.042, 14),
     _edit("gpt-image-2.5-flare-edit", "GPT Image 2.5 Flare", "openai", "openai/gpt-image-2.5/flare/edit",

@@ -138,7 +138,7 @@ async def test_edit_grok_uses_plural_image_urls_and_fixed_quality(fal_submit):
 
 @pytest.mark.asyncio
 async def test_edit_nano_banana_uses_resolution_safety_and_web_search_arguments(fal_submit):
-    await FalEditor(edit_model="nano-banana-pro-edit").edit(
+    await FalEditor(edit_model="nano-banana-2.1-edit").edit(
         ["https://example.com/source.png"],
         "replace the sky",
         resolution="2K",
@@ -148,7 +148,7 @@ async def test_edit_nano_banana_uses_resolution_safety_and_web_search_arguments(
     )
 
     endpoint, = fal_submit.call_args.args
-    assert endpoint == FAL_EDIT_MODEL_CONFIG["nano-banana-pro-edit"]["endpoint"]
+    assert endpoint == FAL_EDIT_MODEL_CONFIG["nano-banana-2.1-edit"]["endpoint"]
     assert fal_submit.call_args.kwargs["arguments"] == {
         "prompt": "replace the sky",
         "num_images": 1,

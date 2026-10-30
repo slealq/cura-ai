@@ -98,11 +98,11 @@ def test_fal_trainer_raises_on_unknown_base_model_but_reads_legacy_rows():
 
 
 def test_loras_on_a_model_without_lora_support_are_rejected_by_the_api(gen_service):
-    gen_service.get_lora_model.return_value = _lora("nano-banana-2.1")
+    gen_service.get_lora_model.return_value = _lora("nano-banana-pro")
     with pytest.raises(HTTPException) as exc:
         run(generation_api.generate_images(
             generation_api.GenerateRequest(
-                prompt="a fox", base_model="nano-banana-2.1", loras=[generation_api.LoraInput(lora_model_id=5)],
+                prompt="a fox", base_model="nano-banana-pro", loras=[generation_api.LoraInput(lora_model_id=5)],
             ),
             db=MagicMock(), current_user=USER,
         ))
@@ -123,13 +123,13 @@ def test_generation_with_a_legacy_lora_row_is_rejected(gen_service):
 
 def test_generator_never_silently_drops_loras():
     with pytest.raises(ValueError):
-        FalGenerator(base_model="nano-banana-2.1").build_arguments("x", loras=[{"path": "p", "scale": 1}])
+        FalGenerator(base_model="nano-banana-pro").build_arguments("x", loras=[{"path": "p", "scale": 1}])
 
 
 def test_invalid_option_for_a_supported_param_is_a_400(gen_service):
     with pytest.raises(HTTPException) as exc:
         run(generation_api.generate_images(
-            generation_api.GenerateRequest(prompt="a fox", base_model="nano-banana-2.1", resolution="9K"),
+            generation_api.GenerateRequest(prompt="a fox", base_model="nano-banana-pro", resolution="9K"),
             db=MagicMock(), current_user=USER,
         ))
     assert exc.value.status_code == 400
@@ -175,12 +175,12 @@ def test_table_pricing_defaults_to_the_catalog_default_option(model):
 
 
 def test_table_pricing_known_values():
-    assert compute_raw_cost("fal", "google/nano-banana-2.1", "generate", {"resolution": "4K"}) == Decimal("0.134")
     assert compute_raw_cost("fal", "openai/gpt-image-2.5/flare/text-to-image", "generate", {"quality": "max"}) == Decimal("0.21072")
     assert compute_raw_cost("fal", "bytedance/seedream/v5/pro/edit", "edit", {"image_size": "square_hd"}) == Decimal("0.0675")
     assert compute_raw_cost("fal", "bytedance/seedream/v5/pro/edit", "edit", {}) == Decimal("0.135")
     assert compute_raw_cost("fal", "xai/grok-imagine-image/v2.0/edit", "edit", {"resolution": "2k"}) == Decimal("0.09")
     assert compute_raw_cost("fal", "fal-ai/kling-image/o3/image-to-image", "edit", {"resolution": "4K"}) == Decimal("0.056")
+    assert compute_raw_cost("fal", "google/nano-banana-2.1/edit", "edit", {"resolution": "4K"}) == Decimal("0.138")
 
 
 def test_existing_strategies_still_apply_and_flat_models_have_none():

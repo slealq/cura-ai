@@ -338,7 +338,7 @@ def test_estimate_operation_tokens_defaults_vision_dimensions():
 
 @pytest.mark.parametrize(
     "model",
-    ["anthropic/claude-sonnet-5.5", "openai/gpt-6.1-sol", "google/gemini-4-argon", "qwen/qwen3.8-max-prime"],
+    ["anthropic/claude-sonnet-5.5", "openai/gpt-6.1-sol", "google/gemini-4-argon", "z-ai/glm-5.3-flash"],
 )
 def test_reasoning_heavy_models_get_reasoning_output_estimates(model):
     assert estimate_output_tokens(model, "tag") == 2048

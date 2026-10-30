@@ -1,0 +1,592 @@
+{
+  "date_utc": "2026-10-30T16:56:56.342518+00:00",
+  "method": "paid fal requests; language text and vision, image generation and edit; results include 512px edit retests",
+  "candidate_checks": 78,
+  "candidate_passes": 69,
+  "final_offered_counts": {
+    "language": 17,
+    "generate": 17,
+    "edit": 17
+  },
+  "provider_cost_note": "null means the provider did not report a cost, not zero cost",
+  "notes": [
+    "Mandatory-reasoning payload corrected before targeted language reruns",
+    "Flux3 and Kling editing retested successfully with512px fixture meeting provider minimums",
+    "Three Qwen language models fail account ZDR policy; account policy unchanged",
+    "NanoBanana2.1 generation and Pro editing reject benign fixture through content policy",
+    "Grok4.7 text final answer not observed within4096 token smoke budget; vision passes",
+    "PostgreSQL fresh upgrade055/downgrade054/upgrade055 verified on isolated temporary database"
+  ],
+  "smoke": [
+    {
+      "kind": "text",
+      "model": "anthropic/claude-haiku-5.5",
+      "ok": true,
+      "cost": 3.6e-06,
+      "offered": true
+    },
+    {
+      "kind": "vision",
+      "model": "anthropic/claude-haiku-5.5",
+      "ok": true,
+      "cost": 6.8e-06,
+      "offered": true
+    },
+    {
+      "kind": "text",
+      "model": "anthropic/claude-sonnet-5.5",
+      "ok": true,
+      "cost": 7.6e-05,
+      "offered": true
+    },
+    {
+      "kind": "vision",
+      "model": "anthropic/claude-sonnet-5.5",
+      "ok": true,
+      "cost": 0.00015,
+      "offered": true
+    },
+    {
+      "kind": "text",
+      "model": "anthropic/claude-opus-5.5",
+      "ok": true,
+      "cost": 0.000152,
+      "offered": true
+    },
+    {
+      "kind": "vision",
+      "model": "anthropic/claude-opus-5.5",
+      "ok": true,
+      "cost": 0.00028,
+      "offered": true
+    },
+    {
+      "kind": "text",
+      "model": "openai/gpt-6-luna",
+      "ok": true,
+      "cost": 3.6e-06,
+      "offered": true
+    },
+    {
+      "kind": "vision",
+      "model": "openai/gpt-6-luna",
+      "ok": true,
+      "cost": 6.2e-06,
+      "offered": true
+    },
+    {
+      "kind": "text",
+      "model": "openai/gpt-6.1-terra",
+      "ok": true,
+      "cost": 3.6e-05,
+      "offered": true
+    },
+    {
+      "kind": "vision",
+      "model": "openai/gpt-6.1-terra",
+      "ok": true,
+      "cost": 6.2e-05,
+      "offered": true
+    },
+    {
+      "kind": "text",
+      "model": "openai/gpt-6.1-sol",
+      "ok": true,
+      "cost": 7.2e-05,
+      "offered": true
+    },
+    {
+      "kind": "vision",
+      "model": "openai/gpt-6.1-sol",
+      "ok": true,
+      "cost": 0.000124,
+      "offered": true
+    },
+    {
+      "kind": "text",
+      "model": "openai/gpt-6-astra",
+      "ok": true,
+      "cost": 0.00036,
+      "offered": true
+    },
+    {
+      "kind": "vision",
+      "model": "openai/gpt-6-astra",
+      "ok": true,
+      "cost": 0.00062,
+      "offered": true
+    },
+    {
+      "kind": "text",
+      "model": "google/gemini-3.5-flash-lite",
+      "ok": true,
+      "cost": 4e-06,
+      "offered": true
+    },
+    {
+      "kind": "vision",
+      "model": "google/gemini-3.5-flash-lite",
+      "ok": true,
+      "cost": 0.0003325,
+      "offered": true
+    },
+    {
+      "kind": "text",
+      "model": "google/gemini-3.8-flash",
+      "ok": true,
+      "cost": 0.0003495,
+      "offered": true
+    },
+    {
+      "kind": "vision",
+      "model": "google/gemini-3.8-flash",
+      "ok": true,
+      "cost": 0.00093,
+      "offered": true
+    },
+    {
+      "kind": "text",
+      "model": "google/gemini-4-argon",
+      "ok": true,
+      "cost": 0.000122,
+      "offered": true
+    },
+    {
+      "kind": "vision",
+      "model": "google/gemini-4-argon",
+      "ok": true,
+      "cost": 0.002316,
+      "offered": true
+    },
+    {
+      "kind": "text",
+      "model": "x-ai/grok-4.3",
+      "ok": true,
+      "cost": 0.00010435,
+      "offered": true
+    },
+    {
+      "kind": "vision",
+      "model": "x-ai/grok-4.3",
+      "ok": true,
+      "cost": 0.0001731,
+      "offered": true
+    },
+    {
+      "kind": "text",
+      "model": "x-ai/grok-4.7",
+      "ok": false,
+      "cost": null,
+      "offered": false,
+      "curation_reason": "text final answer absent after two 4096-token attempts"
+    },
+    {
+      "kind": "vision",
+      "model": "x-ai/grok-4.7",
+      "ok": true,
+      "cost": 0.00093,
+      "offered": false,
+      "curation_reason": "text final answer absent after two 4096-token attempts"
+    },
+    {
+      "kind": "text",
+      "model": "qwen/qwen3.8-flash",
+      "ok": false,
+      "cost": null,
+      "offered": false,
+      "curation_reason": "account ZDR guardrail"
+    },
+    {
+      "kind": "vision",
+      "model": "qwen/qwen3.8-flash",
+      "ok": false,
+      "cost": null,
+      "offered": false,
+      "curation_reason": "account ZDR guardrail"
+    },
+    {
+      "kind": "text",
+      "model": "qwen/qwen3.8-max-0902",
+      "ok": false,
+      "cost": null,
+      "offered": false,
+      "curation_reason": "account ZDR guardrail"
+    },
+    {
+      "kind": "vision",
+      "model": "qwen/qwen3.8-max-0902",
+      "ok": false,
+      "cost": null,
+      "offered": false,
+      "curation_reason": "account ZDR guardrail"
+    },
+    {
+      "kind": "text",
+      "model": "qwen/qwen3.8-max-prime",
+      "ok": false,
+      "cost": null,
+      "offered": false,
+      "curation_reason": "account ZDR guardrail"
+    },
+    {
+      "kind": "vision",
+      "model": "qwen/qwen3.8-max-prime",
+      "ok": false,
+      "cost": null,
+      "offered": false,
+      "curation_reason": "account ZDR guardrail"
+    },
+    {
+      "kind": "text",
+      "model": "deepseek/deepseek-v4.1-flash",
+      "ok": true,
+      "cost": 5.82e-07,
+      "offered": true
+    },
+    {
+      "kind": "vision",
+      "model": "deepseek/deepseek-v4.1-flash",
+      "ok": true,
+      "cost": 2.7686e-05,
+      "offered": true
+    },
+    {
+      "kind": "text",
+      "model": "moonshotai/kimi-k3.1-pro",
+      "ok": true,
+      "cost": 0.000156,
+      "offered": true
+    },
+    {
+      "kind": "vision",
+      "model": "moonshotai/kimi-k3.1-pro",
+      "ok": true,
+      "cost": 0.000234,
+      "offered": true
+    },
+    {
+      "kind": "text",
+      "model": "z-ai/glm-5.3-flash",
+      "ok": true,
+      "cost": 3.7923e-06,
+      "offered": true
+    },
+    {
+      "kind": "vision",
+      "model": "z-ai/glm-5.3-flash",
+      "ok": true,
+      "cost": 1.6e-05,
+      "offered": true
+    },
+    {
+      "kind": "text",
+      "model": "z-ai/glm-5.3-flashx",
+      "ok": true,
+      "cost": 5.379e-05,
+      "offered": true
+    },
+    {
+      "kind": "vision",
+      "model": "z-ai/glm-5.3-flashx",
+      "ok": true,
+      "cost": 5.1e-05,
+      "offered": true
+    },
+    {
+      "kind": "text",
+      "model": "minimax/minimax-m3.1-flash",
+      "ok": true,
+      "cost": 1.992e-05,
+      "offered": true
+    },
+    {
+      "kind": "vision",
+      "model": "minimax/minimax-m3.1-flash",
+      "ok": true,
+      "cost": 2.2305e-05,
+      "offered": true
+    },
+    {
+      "kind": "text",
+      "model": "minimax/minimax-m3",
+      "ok": true,
+      "cost": 2.0568e-05,
+      "offered": true
+    },
+    {
+      "kind": "vision",
+      "model": "minimax/minimax-m3",
+      "ok": true,
+      "cost": 2.9808e-05,
+      "offered": true
+    },
+    {
+      "kind": "generate",
+      "model": "nano-banana-2.1",
+      "ok": false,
+      "cost": null,
+      "offered": false,
+      "curation_reason": "two content policy rejections on generation"
+    },
+    {
+      "kind": "generate",
+      "model": "nano-banana-pro",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "generate",
+      "model": "nano-banana-lite",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "generate",
+      "model": "gpt-image-2.5-flare",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "generate",
+      "model": "gpt-image-2.5-sunburst",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "generate",
+      "model": "gpt-image-2",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "generate",
+      "model": "flux-3",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "generate",
+      "model": "flux-3-klein",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "generate",
+      "model": "flux-2-pro",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "generate",
+      "model": "flux-2-max",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "generate",
+      "model": "flux-2",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "generate",
+      "model": "qwen-image-2512",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "generate",
+      "model": "seedream-5-pro",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "generate",
+      "model": "seedream-5-flash",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "generate",
+      "model": "qwen-image-3",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "generate",
+      "model": "grok-imagine-quality",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "generate",
+      "model": "grok-imagine-v2",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "generate",
+      "model": "ideogram-v4.5",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "edit",
+      "model": "nano-banana-2.1-edit",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "edit",
+      "model": "flux-3-edit",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "edit",
+      "model": "kling-image",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "edit",
+      "model": "flux-2-lora-edit",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "edit",
+      "model": "flux-2-max-edit",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "edit",
+      "model": "flux-2-pro-edit",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "edit",
+      "model": "flux-3-klein-edit",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "edit",
+      "model": "gpt-image-2-edit",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "edit",
+      "model": "gpt-image-2.5-flare-edit",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "edit",
+      "model": "gpt-image-2.5-sunburst-edit",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "edit",
+      "model": "grok-imagine-quality-edit",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "edit",
+      "model": "grok-imagine-v2-edit",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "edit",
+      "model": "ideogram-v4.5-edit",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "edit",
+      "model": "nano-banana-lite-edit",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "edit",
+      "model": "nano-banana-pro-edit",
+      "ok": false,
+      "cost": null,
+      "offered": false,
+      "curation_reason": "two content policy rejections on editing"
+    },
+    {
+      "kind": "edit",
+      "model": "qwen-image-3-edit",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "edit",
+      "model": "seedream-5-flash-edit",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    },
+    {
+      "kind": "edit",
+      "model": "seedream-5-pro-edit",
+      "ok": true,
+      "cost": null,
+      "offered": true
+    }
+  ],
+  "edit_512px_retests": [
+    {
+      "kind": "edit",
+      "model": "flux-3-edit",
+      "ok": true,
+      "cost": null
+    },
+    {
+      "kind": "edit",
+      "model": "kling-image",
+      "ok": true,
+      "cost": null
+    }
+  ]
+}
