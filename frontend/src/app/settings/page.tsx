@@ -3,12 +3,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { settingsApi } from '@/lib/api';
-import { RotateCcw, Plus, Trash2, Check, Copy, HelpCircle, Eye, EyeOff, Shield, ShieldAlert, ShieldCheck, ShieldX, Loader2, Sun, Moon, Monitor } from 'lucide-react';
+import { RotateCcw, Plus, Trash2, Check, Copy, HelpCircle, Sun, Moon, Monitor } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/contexts/ThemeContext';
 import ModelSelector from '@/components/ModelSelector';
-import type { GenerationConfig, ProviderConfig, ProviderModel, TrainingConfig, PromptPreset } from '@/types';
+import type { GenerationConfig, ProviderConfig, TrainingConfig } from '@/types';
 import { Slider } from '@/components/Slider';
 import { useModelCatalog } from '@/hooks/useModelCatalog';
 
@@ -56,7 +56,7 @@ function PromptSuggest({
           value={changeRequest}
           onChange={(e) => setChangeRequest(e.target.value)}
           placeholder="Describe how to change the prompt..."
-          className="flex-1 px-3 py-1.5 border border-border rounded-lg text-sm"
+          className="flex-1 px-3 py-1.5 border border-input rounded-lg bg-background text-sm"
           onKeyDown={(e) => {
             if (e.key === 'Enter' && changeRequest.trim()) {
               suggestMutation.mutate();
@@ -73,21 +73,21 @@ function PromptSuggest({
       </div>
 
       {suggestMutation.isError && (
-        <p className="text-sm text-red-600 dark:text-red-400">
+        <p className="text-sm text-danger">
           Failed to generate suggestion. Please try again.
         </p>
       )}
 
       {suggestion && (
-        <div className="border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-900/30 rounded-lg p-3 space-y-2">
-          <p className="text-xs font-medium text-blue-700 dark:text-blue-300">AI Suggestion:</p>
-          <div className="text-sm whitespace-pre-wrap bg-card rounded p-2 border border-blue-100 dark:border-blue-800 max-h-[200px] overflow-y-auto">
+        <div className="border border-selection/30 bg-selection-soft rounded-lg p-3 space-y-2">
+          <p className="text-xs font-medium text-selection">AI Suggestion:</p>
+          <div className="text-sm whitespace-pre-wrap bg-card rounded p-2 border border-selection/20 max-h-[200px] overflow-y-auto">
             {suggestion}
           </div>
           <div className="flex gap-2">
             <button
               onClick={handleAccept}
-              className="px-3 py-1 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              className="px-3 py-1 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
             >
               Accept
             </button>
@@ -126,17 +126,17 @@ function AutoTextarea({
       ref={ref}
       value={value}
       onChange={(e) => { onChange?.(e); resize(); }}
-      className={cn('w-full px-4 py-3 border border-border rounded-lg text-sm leading-relaxed overflow-hidden', className)}
+      className={cn('w-full px-4 py-3 border border-input rounded-lg bg-background text-sm leading-relaxed overflow-hidden', className)}
       {...props}
     />
   );
 }
 
-type SettingsTab = 'appearance' | 'prompts' | 'vision' | 'language' | 'generation';
+type SettingsTab = 'general' | 'prompts' | 'models';
 
 export default function SettingsPage() {
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<SettingsTab>('appearance');
+  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
 
   const { data: presets } = useQuery({
     queryKey: ['presets'],
@@ -248,20 +248,19 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="max-w-6xl mx-auto space-y-8">
+    <div className="mx-auto w-full max-w-[880px] space-y-5">
       <div>
-        <h1 className="text-2xl font-bold">Settings</h1>
-        <div className="flex gap-1 bg-muted rounded-lg p-1 mt-4 w-fit">
+        <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
+        <div className="flex flex-wrap gap-1 bg-muted rounded-lg p-1 mt-4 w-fit">
           {([
-            { key: 'appearance', label: 'Appearance' },
-            { key: 'prompts', label: 'Prompt Library' },
-            { key: 'vision', label: 'Vision Models' },
-            { key: 'language', label: 'Language Models' },
-            { key: 'generation', label: 'Generation & Training' },
+            { key: 'general', label: 'General' },
+            { key: 'prompts', label: 'Prompt library' },
+            { key: 'models', label: 'Default models' },
           ] as const).map(({ key, label }) => (
             <button
               key={key}
               onClick={() => setActiveTab(key)}
+              aria-pressed={activeTab === key}
               className={cn(
                 'px-3 py-1 text-sm rounded-md transition-colors',
                 activeTab === key ? 'bg-background shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'
@@ -273,11 +272,11 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {activeTab === 'appearance' && <AppearanceSettings />}
+      {activeTab === 'general' && <AppearanceSettings />}
 
       {activeTab === 'prompts' && (
-      <section className="bg-card rounded-xl border border-border p-6">
-        <div className="flex items-center justify-between mb-4">
+      <section className="rounded-lg border border-border bg-background p-4 sm:p-6">
+        <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
           <div>
             <h2 className="font-semibold">Prompt Library</h2>
             <p className="text-sm text-muted-foreground mt-1">
@@ -295,9 +294,9 @@ export default function SettingsPage() {
           </button>
         </div>
 
-        <div className="flex gap-6 min-h-[500px]">
+        <div className="flex flex-col gap-5 md:flex-row md:min-h-[500px]">
           {/* Left column: preset list */}
-          <div className="w-64 shrink-0 space-y-2 overflow-y-auto max-h-[600px] pr-2">
+          <div className="w-full shrink-0 space-y-2 overflow-y-auto max-h-[240px] md:max-h-[600px] md:w-48 md:pr-2">
             {presets?.map((preset) => (
               <button
                 key={preset.id}
@@ -312,7 +311,7 @@ export default function SettingsPage() {
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium truncate">{preset.name}</span>
                   {preset.is_default && (
-                    <span className="shrink-0 ml-2 px-1.5 py-0.5 text-[10px] font-semibold bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300 rounded">
+                    <span className="shrink-0 ml-2 px-1.5 py-0.5 text-[10px] font-semibold bg-success/10 text-success rounded">
                       Active
                     </span>
                   )}
@@ -335,7 +334,7 @@ export default function SettingsPage() {
                     type="text"
                     value={editName}
                     onChange={(e) => setEditName(e.target.value)}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm"
+                    className="w-full px-3 py-2 border border-input rounded-lg bg-background text-sm"
                   />
                 </div>
 
@@ -381,7 +380,7 @@ export default function SettingsPage() {
                     <button
                       onClick={() => activateMutation.mutate(selectedPreset.id)}
                       disabled={activateMutation.isPending}
-                      className="flex items-center gap-1.5 px-4 py-2 text-sm border border-green-300 text-green-700 dark:border-green-800 dark:text-green-400 rounded-lg hover:bg-green-50 dark:hover:bg-green-900/30 transition-colors disabled:opacity-50"
+                      className="flex items-center gap-1.5 px-4 py-2 text-sm border border-success/30 text-success rounded-lg hover:bg-success/10 transition-colors disabled:opacity-50"
                     >
                       <Check className="h-3.5 w-3.5" />
                       Set as Active
@@ -412,7 +411,7 @@ export default function SettingsPage() {
                     <button
                       onClick={() => deleteMutation.mutate(selectedPreset.id)}
                       disabled={deleteMutation.isPending}
-                      className="flex items-center gap-1.5 px-4 py-2 text-sm border border-red-200 text-red-600 dark:border-red-800 dark:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors disabled:opacity-50"
+                      className="flex items-center gap-1.5 px-4 py-2 text-sm border border-danger/30 text-danger rounded-lg hover:bg-danger/10 transition-colors disabled:opacity-50"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                       Delete
@@ -430,11 +429,13 @@ export default function SettingsPage() {
       </section>
       )}
 
-      {activeTab === 'vision' && <VisionModelSettings />}
-
-      {activeTab === 'language' && <LanguageModelSettings />}
-
-      {activeTab === 'generation' && <GenerationSettings />}
+      {activeTab === 'models' && (
+        <div className="space-y-5">
+          <VisionModelSettings />
+          <LanguageModelSettings />
+          <GenerationSettings />
+        </div>
+      )}
 
     </div>
   );
@@ -469,7 +470,7 @@ function AppearanceSettings() {
   ];
 
   return (
-    <section className="bg-card rounded-xl border border-border p-6">
+    <section className="rounded-lg border border-border bg-background p-4 sm:p-6">
       <div className="mb-4">
         <h2 className="font-semibold">Appearance</h2>
         <p className="text-sm text-muted-foreground mt-1">
@@ -511,7 +512,7 @@ function AppearanceSettings() {
           <select
             value={timezone}
             onChange={(e) => setTimezone(e.target.value)}
-            className="w-full max-w-xs px-3 py-2 border border-border rounded-lg text-sm bg-card"
+            className="w-full max-w-xs px-3 py-2 border border-input rounded-lg bg-background text-sm bg-card"
           >
             {timezones.map((tz) => (
               <option key={tz} value={tz}>
@@ -644,7 +645,7 @@ function GenerationSettings() {
 
   if (!catalog || baseModelLoading || genLoading || !genDraft || (modelHasTraining && (trainLoading || !trainDraft))) {
     return (
-      <section className="bg-card rounded-xl border border-border p-6">
+      <section className="rounded-lg border border-border bg-background p-4 sm:p-6">
         <h2 className="font-semibold mb-4">Generation &amp; Training</h2>
         <p className="text-muted-foreground text-sm">{catalogError ? "Failed to load model catalog." : "Loading..."}</p>
       </section>
@@ -660,7 +661,7 @@ function GenerationSettings() {
   const trainStepsMax = isQwen ? 30000 : 4000;
 
   return (
-    <section className="bg-card rounded-xl border border-border p-6">
+    <section className="rounded-lg border border-border bg-background p-4 sm:p-6">
       <div className="mb-4">
         <h2 className="font-semibold">Generation &amp; Training</h2>
         <p className="text-sm text-muted-foreground mt-1">
@@ -837,7 +838,7 @@ function GenerationSettings() {
         <div className="border border-border rounded-lg p-4 mt-6">
           <h3 className="text-sm font-medium mb-3">Default Edit Model</h3>
           <p className="text-xs text-muted-foreground mb-3">
-            The default model selected when you open the Edit page.
+            The default model selected for image editing.
           </p>
           <ModelSelector
             models={EDIT_MODELS}
@@ -850,48 +851,6 @@ function GenerationSettings() {
         </div>
       </div>
     </section>
-  );
-}
-
-const PROVIDER_LABELS: Record<string, string> = {
-  openai: 'OpenAI',
-  anthropic: 'Anthropic',
-  fal: 'fal.ai',
-};
-
-function StatusBadge({ status }: { status: string }) {
-  if (status === 'active') {
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300 rounded-full">
-        <ShieldCheck className="h-3 w-3" /> Active
-      </span>
-    );
-  }
-  if (status === 'invalid') {
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300 rounded-full">
-        <ShieldX className="h-3 w-3" /> Invalid
-      </span>
-    );
-  }
-  if (status === 'quota_exceeded') {
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300 rounded-full">
-        <ShieldAlert className="h-3 w-3" /> Quota Exceeded
-      </span>
-    );
-  }
-  if (status === 'not_set') {
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-500 dark:bg-gray-900/50 dark:text-gray-400 rounded-full border border-dashed border-gray-300 dark:border-gray-600">
-        <Shield className="h-3 w-3" /> Not Set
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-900/50 dark:text-gray-400 rounded-full">
-      <Shield className="h-3 w-3" /> Unknown
-    </span>
   );
 }
 
@@ -948,7 +907,7 @@ function VisionModelSettings() {
 
   if (isLoading || !draft || !catalog) {
     return (
-      <section className="bg-card rounded-xl border border-border p-6">
+      <section className="rounded-lg border border-border bg-background p-4 sm:p-6">
         <h2 className="font-semibold mb-4">Vision Models</h2>
         <p className="text-muted-foreground text-sm">{catalogError ? "Failed to load model catalog." : "Loading..."}</p>
       </section>
@@ -963,7 +922,7 @@ function VisionModelSettings() {
   const handleVisionModelChange = (modelId: string) => setDraft({ ...draft, vision_provider: 'fal', fal_vision_model: modelId });
 
   return (
-    <section className="bg-card rounded-xl border border-border p-6">
+    <section className="rounded-lg border border-border bg-background p-4 sm:p-6">
       <div className="mb-4">
         <h2 className="font-semibold">Vision Models</h2>
         <p className="text-sm text-muted-foreground mt-1">
@@ -986,7 +945,7 @@ function VisionModelSettings() {
           <select
             value={draft.openai_embedding_model}
             onChange={(e) => setDraft({ ...draft, openai_embedding_model: e.target.value })}
-            className="w-full px-3 py-1.5 border border-border rounded-lg text-sm max-w-xs"
+            className="w-full px-3 py-1.5 border border-input rounded-lg bg-background text-sm max-w-xs"
           >
             {embeddingCapableModels.length > 0 ? (
               embeddingCapableModels.map((m) => (
@@ -1128,7 +1087,7 @@ function LanguageModelSettings() {
 
   if (isLoading || !draft || !catalog) {
     return (
-      <section className="bg-card rounded-xl border border-border p-6">
+      <section className="rounded-lg border border-border bg-background p-4 sm:p-6">
         <h2 className="font-semibold mb-4">Language Models</h2>
         <p className="text-muted-foreground text-sm">{catalogError ? "Failed to load model catalog." : "Loading..."}</p>
       </section>
@@ -1139,7 +1098,7 @@ function LanguageModelSettings() {
   const handleLanguageModelChange = (modelId: string) => setDraft({ ...draft, language_provider: 'fal', fal_language_model: modelId });
 
   return (
-    <section className="bg-card rounded-xl border border-border p-6">
+    <section className="rounded-lg border border-border bg-background p-4 sm:p-6">
       <div className="mb-4">
         <h2 className="font-semibold">Language Models</h2>
         <p className="text-sm text-muted-foreground mt-1">
