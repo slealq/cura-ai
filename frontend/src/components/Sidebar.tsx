@@ -1,222 +1,302 @@
 'use client';
 
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  LayoutGrid,
-  FolderOpen,
-  Settings,
   Activity,
-  Upload,
-  Bug,
-  Sparkles,
-  Pencil,
-  Eye,
   Box,
-  LogOut,
+  Bug,
+  ChevronsLeft,
+  ChevronsRight,
   CreditCard,
+  Eye,
+  FolderOpen,
+  Image as ImageIcon,
+  LayoutGrid,
+  LogOut,
+  Pencil,
+  Settings,
   ShieldCheck,
-  Zap,
-  AlertTriangle,
+  Sparkles,
+  Upload,
+  type LucideIcon,
 } from 'lucide-react';
-import SightLabLogo from '@/components/SightLabLogo';
 import { useQuery } from '@tanstack/react-query';
-import { cn, formatNumber } from '@/lib/utils';
+import SightLabLogo from '@/components/SightLabLogo';
+import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
-import { billingApi } from '@/lib/api';
+import { clustersApi, foldersApi } from '@/lib/api';
 
 const ENV_LABEL = process.env.NEXT_PUBLIC_ENV_LABEL || 'local';
 
-const ENV_BADGE: Record<string, { label: string; color: string } | null> = {
-  local: { label: 'Local', color: 'blue' },
-  'cloud-native': { label: 'Cloud Native', color: 'emerald' },
-  'cloud-docker': { label: 'Cloud Docker', color: 'teal' },
-  dev: { label: 'DEV', color: 'purple' },
+const ENV_BADGE: Record<string, { label: string; className: string } | null> = {
+  local: { label: 'Local', className: 'bg-blue-500/10 text-blue-600 dark:text-blue-400' },
+  'cloud-native': { label: 'Native', className: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' },
+  'cloud-docker': { label: 'Docker', className: 'bg-teal-500/10 text-teal-600 dark:text-teal-400' },
+  dev: { label: 'Dev', className: 'bg-purple-500/10 text-purple-600 dark:text-purple-400' },
   prod: null,
 };
 
-const BADGE_COLORS: Record<string, { bg: string; text: string; border: string; dot: string; pulse: boolean }> = {
-  blue: { bg: 'bg-blue-500/15', text: 'text-blue-500', border: 'border-blue-500/25', dot: 'bg-blue-500', pulse: false },
-  emerald: { bg: 'bg-emerald-500/15', text: 'text-emerald-500', border: 'border-emerald-500/25', dot: 'bg-emerald-500', pulse: true },
-  teal: { bg: 'bg-teal-500/15', text: 'text-teal-500', border: 'border-teal-500/25', dot: 'bg-teal-500', pulse: true },
-  purple: { bg: 'bg-purple-500/15', text: 'text-purple-500', border: 'border-purple-500/25', dot: 'bg-purple-500', pulse: true },
-};
+const SIDEBAR_FOLDER_LIMIT = 8;
+const SIDEBAR_CLUSTER_LIMIT = 6;
+const COLLAPSED_KEY = 'sidebar-collapsed';
 
-const navigation = [
-  { name: 'Upload', href: '/upload', icon: Upload },
-  { name: 'Images', href: '/images', icon: FolderOpen },
-  { name: 'Clusters', href: '/clusters', icon: LayoutGrid },
-  { name: 'Models', href: '/models', icon: Box },
-  { name: 'Vision', href: '/vision', icon: Eye },
-  { name: 'Generate', href: '/generate', icon: Sparkles },
-  { name: 'Edit', href: '/edit', icon: Pencil },
-  { name: 'Jobs', href: '/jobs', icon: Activity },
-  { name: 'Billing', href: '/billing', icon: CreditCard },
-  { name: 'Debug', href: '/debug', icon: Bug },
-  { name: 'Settings', href: '/settings', icon: Settings },
-];
-
-function getSparkTier(balance: number) {
-  if (balance <= 0) return { label: 'Empty', color: 'text-red-500', bg: 'bg-red-500', glow: 'shadow-red-500/40', barBg: 'bg-red-500/15', pct: 0 };
-  if (balance < 50) return { label: 'Low', color: 'text-orange-400', bg: 'bg-orange-400', glow: 'shadow-orange-400/40', barBg: 'bg-orange-400/15', pct: Math.max(5, (balance / 50) * 15) };
-  if (balance < 500) return { label: 'Warm', color: 'text-amber-400', bg: 'bg-amber-400', glow: 'shadow-amber-400/30', barBg: 'bg-amber-400/15', pct: 15 + ((balance - 50) / 450) * 25 };
-  if (balance < 2000) return { label: 'Charged', color: 'text-yellow-400', bg: 'bg-yellow-400', glow: 'shadow-yellow-400/30', barBg: 'bg-yellow-400/10', pct: 40 + ((balance - 500) / 1500) * 25 };
-  if (balance < 5000) return { label: 'Supercharged', color: 'text-emerald-400', bg: 'bg-emerald-400', glow: 'shadow-emerald-400/30', barBg: 'bg-emerald-400/10', pct: 65 + ((balance - 2000) / 3000) * 20 };
-  return { label: 'Overloaded', color: 'text-cyan-400', bg: 'bg-cyan-400', glow: 'shadow-cyan-400/40', barBg: 'bg-cyan-400/10', pct: Math.min(100, 85 + ((balance - 5000) / 10000) * 15) };
+function NavItem({
+  href,
+  icon: Icon,
+  label,
+  count,
+  active,
+  collapsed,
+}: {
+  href: string;
+  icon: LucideIcon;
+  label: string;
+  count?: number;
+  active: boolean;
+  collapsed: boolean;
+}) {
+  return (
+    <Link
+      href={href}
+      title={collapsed ? label : undefined}
+      aria-current={active ? 'page' : undefined}
+      className={cn(
+        'flex h-8 items-center gap-2.5 rounded-md px-2 text-[13px] font-medium transition-colors',
+        collapsed && 'justify-center px-0',
+        active
+          ? 'bg-background text-foreground shadow-[0_0_0_1px_hsl(var(--border)),0_1px_2px_rgb(0_0_0/0.04)] dark:bg-accent dark:shadow-none'
+          : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+      )}
+    >
+      <Icon className="h-4 w-4 shrink-0" />
+      {!collapsed && <span className="truncate">{label}</span>}
+      {!collapsed && count != null && (
+        <span className="ml-auto font-mono text-[11px] tabular-nums text-muted-foreground">{count}</span>
+      )}
+    </Link>
+  );
 }
 
-function SparkBalance({ balance, reserved }: { balance: number; reserved: number }) {
-  const displayBalance = reserved > 0 ? balance - reserved : balance;
-  const tier = getSparkTier(displayBalance);
-  return (
-    <div className={cn(
-      'rounded-lg border border-border px-3 py-2.5 transition-all',
-      'hover:border-border/80 hover:bg-muted/30',
-      tier.barBg,
-    )}>
-      <div className="flex items-center justify-between mb-1.5">
-        <div className="flex items-center gap-1.5">
-          <Zap className={cn('h-3.5 w-3.5', tier.color, displayBalance > 0 && 'drop-shadow-sm')} />
-          <span className={cn('text-[11px] font-semibold uppercase tracking-wider', tier.color)}>
-            {tier.label}
-          </span>
-        </div>
-        <span className="text-xs text-muted-foreground font-medium">
-          sparks
-        </span>
-      </div>
-      <div className="text-lg font-bold tracking-tight leading-none mb-1.5">
-        {formatNumber(displayBalance)}
-      </div>
-      {reserved > 0 && (
-        <div className="text-[10px] text-muted-foreground mb-1" title={`${formatNumber(reserved)} sparks reserved for in-progress operations`}>
-          {formatNumber(reserved)} reserved
-        </div>
-      )}
-      <div className="h-1 rounded-full bg-muted/50 overflow-hidden">
-        <div
-          className={cn('h-full rounded-full transition-all duration-700 ease-out', tier.bg)}
-          style={{ width: `${tier.pct}%` }}
-        />
-      </div>
-    </div>
+function GroupLabel({ children, href, collapsed }: { children: string; href?: string; collapsed: boolean }) {
+  if (collapsed) return <div className="mx-3 my-2 border-t border-border" />;
+  const cls = 'block px-2 pb-1 pt-3 font-mono text-[10.5px] font-medium uppercase tracking-[0.08em] text-muted-foreground';
+  return href ? (
+    <Link href={href} className={cn(cls, 'hover:text-foreground')}>{children}</Link>
+  ) : (
+    <div className={cls}>{children}</div>
   );
 }
 
 export default function Sidebar() {
   const pathname = usePathname();
   const { user, logout } = useAuth();
+  const [collapsed, setCollapsed] = useState(false);
 
-  const { data: balanceData } = useQuery({
-    queryKey: ['billing', 'balance'],
-    queryFn: billingApi.getBalance,
-    refetchInterval: 30000,
+  useEffect(() => {
+    try {
+      setCollapsed(localStorage.getItem(COLLAPSED_KEY) === '1');
+    } catch {
+      // localStorage unavailable — keep expanded
+    }
+  }, []);
+
+  const toggleCollapsed = () => {
+    setCollapsed((prev) => {
+      try {
+        localStorage.setItem(COLLAPSED_KEY, prev ? '0' : '1');
+      } catch {
+        // ignore
+      }
+      return !prev;
+    });
+  };
+
+  // Shares the ['folders', ...] prefix so folder mutations invalidate it too
+  const { data: folderData } = useQuery({
+    queryKey: ['folders', 'sidebar'],
+    queryFn: () => foldersApi.list({ limit: 50 }),
     enabled: !!user,
   });
 
-  const isAdmin = user?.role === 'admin';
+  const { data: clusterData } = useQuery({
+    queryKey: ['clusters', 'sidebar'],
+    queryFn: () => clustersApi.list({ limit: 50 }),
+    enabled: !!user,
+  });
 
-  // Build navigation with conditional admin item
-  const navItems = [
-    ...navigation,
-    ...(isAdmin ? [{ name: 'Admin', href: '/admin', icon: ShieldCheck }] : []),
-  ];
+  // Hide folders that are being deleted (same sessionStorage contract as the Images page)
+  const folders = useMemo(() => {
+    const items = folderData?.items ?? [];
+    try {
+      const raw = sessionStorage.getItem('deleting-folders');
+      if (!raw) return items;
+      const deleting = new Set<number>(JSON.parse(raw) as number[]);
+      return items.filter((f) => !deleting.has(f.id));
+    } catch {
+      return items;
+    }
+  }, [folderData]);
+
+  const clusters = useMemo(
+    () => (clusterData?.items ?? []).filter((c) => !c.is_archived),
+    [clusterData]
+  );
+
+  const isAdmin = user?.role === 'admin';
+  const isActive = (href: string, exact = false) =>
+    exact ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
+  const badge = ENV_BADGE[ENV_LABEL];
 
   return (
-    <aside className="w-64 bg-card border-r border-border flex flex-col">
-      <div className="p-6 border-b border-border">
-        <Link href="/generate" className="flex items-center gap-2">
+    <aside
+      className={cn(
+        'flex shrink-0 flex-col border-r border-border bg-chrome transition-[width] duration-150',
+        collapsed ? 'w-[60px]' : 'w-[232px]'
+      )}
+      aria-label="Navigation"
+    >
+      <div className={cn('flex items-center gap-2 px-3 pb-2 pt-3', collapsed && 'flex-col px-0')}>
+        <Link href="/images" className="flex shrink-0 items-center gap-2" title="SightLab">
           <SightLabLogo size="sm" />
-          <div>
-            <h1 className="font-semibold text-lg">SightLab</h1>
-            <p className="text-xs text-muted-foreground">
-              See more. Create more.
-            </p>
-            {ENV_BADGE[ENV_LABEL] && (() => {
-              const colors = BADGE_COLORS[ENV_BADGE[ENV_LABEL]!.color];
-              return (
-                <span className={cn(
-                  'inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider border',
-                  colors.bg, colors.text, colors.border,
-                )}>
-                  <span className={cn(
-                    'h-1.5 w-1.5 rounded-full',
-                    colors.dot, colors.pulse && 'animate-pulse',
-                  )} />
-                  {ENV_BADGE[ENV_LABEL]!.label}
-                </span>
-              );
-            })()}
-          </div>
+          {!collapsed && <span className="text-[14.5px] font-semibold tracking-tight">SightLab</span>}
+        </Link>
+        {!collapsed && badge && (
+          <span className={cn('truncate whitespace-nowrap rounded px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wider', badge.className)}>
+            {badge.label}
+          </span>
+        )}
+        <button
+          onClick={toggleCollapsed}
+          className={cn(
+            'grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground',
+            !collapsed && 'ml-auto'
+          )}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {collapsed ? <ChevronsRight className="h-4 w-4" /> : <ChevronsLeft className="h-4 w-4" />}
+        </button>
+      </div>
+
+      <div className={cn('flex gap-1.5 px-2.5 pb-2', collapsed && 'flex-col items-center')}>
+        <Link
+          href="/generate"
+          title="Create"
+          className={cn(
+            'flex h-8 items-center justify-center gap-1.5 rounded-md bg-primary text-[13px] font-medium text-primary-foreground hover:opacity-90',
+            collapsed ? 'w-9' : 'flex-1'
+          )}
+        >
+          <Sparkles className="h-4 w-4" />
+          {!collapsed && 'Create'}
+        </Link>
+        <Link
+          href="/upload"
+          title="Upload"
+          className={cn(
+            'flex h-8 items-center justify-center gap-1.5 rounded-md border border-input bg-background px-2.5 text-[13px] font-medium hover:bg-accent',
+            collapsed && 'w-9 px-0'
+          )}
+        >
+          <Upload className="h-4 w-4" />
+          {!collapsed && 'Upload'}
         </Link>
       </div>
 
-      {balanceData && (
-        <div className="mx-4 mt-4 space-y-2">
-          <Link href="/billing" className="block group">
-            <SparkBalance balance={balanceData.balance} reserved={balanceData.reserved ?? 0} />
-          </Link>
-          {(balanceData.available ?? balanceData.balance) < 100 && (
-            <Link
-              href="/billing"
-              className={cn(
-                'flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors',
-                (balanceData.available ?? balanceData.balance) <= 0
-                  ? 'bg-red-500/15 text-red-500 border border-red-500/25 hover:bg-red-500/25'
-                  : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/25 hover:bg-amber-500/25',
-              )}
-            >
-              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-              <span>Low balance — <span className="underline">buy more</span></span>
-            </Link>
-          )}
+      <nav className="min-h-0 flex-1 overflow-y-auto px-2">
+        <GroupLabel collapsed={collapsed}>Library</GroupLabel>
+        <div className="space-y-px">
+          <NavItem href="/images" icon={ImageIcon} label="All images" active={isActive('/images', true)} collapsed={collapsed} />
+          <NavItem href="/clusters" icon={LayoutGrid} label="Clusters" active={isActive('/clusters', true)} collapsed={collapsed} />
         </div>
-      )}
 
-      <nav className="flex-1 p-4 space-y-1">
-        {navItems.map((item) => {
-          const isActive =
-            pathname === item.href ||
-            (item.href !== '/' && pathname.startsWith(item.href));
-
-          return (
-            <Link
-              key={item.name}
-              href={item.href}
-              className={cn(
-                'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
-                isActive
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+        {!collapsed && folders.length > 0 && (
+          <>
+            <GroupLabel href="/images" collapsed={collapsed}>Folders</GroupLabel>
+            <div className="space-y-px">
+              {folders.slice(0, SIDEBAR_FOLDER_LIMIT).map((f) => (
+                <NavItem
+                  key={f.id}
+                  href={`/images/folder/${f.id}`}
+                  icon={FolderOpen}
+                  label={f.name}
+                  count={f.image_count}
+                  active={isActive(`/images/folder/${f.id}`)}
+                  collapsed={collapsed}
+                />
+              ))}
+              {folders.length > SIDEBAR_FOLDER_LIMIT && (
+                <Link href="/images" className="block px-2 py-1 text-xs text-muted-foreground hover:text-foreground">
+                  All {folders.length} folders
+                </Link>
               )}
-            >
-              <item.icon className="h-5 w-5" />
-              {item.name}
-            </Link>
-          );
-        })}
+            </div>
+          </>
+        )}
+
+        {!collapsed && clusters.length > 0 && (
+          <>
+            <GroupLabel href="/clusters" collapsed={collapsed}>Clusters</GroupLabel>
+            <div className="space-y-px">
+              {clusters.slice(0, SIDEBAR_CLUSTER_LIMIT).map((c) => (
+                <NavItem
+                  key={c.id}
+                  href={`/clusters/${c.id}`}
+                  icon={LayoutGrid}
+                  label={c.display_name || c.summary_title || `Cluster ${c.id}`}
+                  count={c.size}
+                  active={isActive(`/clusters/${c.id}`)}
+                  collapsed={collapsed}
+                />
+              ))}
+            </div>
+          </>
+        )}
+
+        <GroupLabel collapsed={collapsed}>Tools</GroupLabel>
+        <div className="space-y-px pb-3">
+          <NavItem href="/generate" icon={Sparkles} label="Generate" active={isActive('/generate')} collapsed={collapsed} />
+          <NavItem href="/edit" icon={Pencil} label="Edit" active={isActive('/edit')} collapsed={collapsed} />
+          <NavItem href="/vision" icon={Eye} label="Vision" active={isActive('/vision')} collapsed={collapsed} />
+          <NavItem href="/models" icon={Box} label="Models" active={isActive('/models')} collapsed={collapsed} />
+        </div>
       </nav>
 
-      <div className="p-4 border-t border-border">
+      <div className="space-y-px border-t border-border p-2">
+        <NavItem href="/jobs" icon={Activity} label="Jobs" active={isActive('/jobs')} collapsed={collapsed} />
+        <NavItem href="/billing" icon={CreditCard} label="Billing" active={isActive('/billing')} collapsed={collapsed} />
+        <NavItem href="/settings" icon={Settings} label="Settings" active={isActive('/settings')} collapsed={collapsed} />
+        {isAdmin && (
+          <>
+            <NavItem href="/debug" icon={Bug} label="Debug" active={isActive('/debug')} collapsed={collapsed} />
+            <NavItem href="/admin" icon={ShieldCheck} label="Admin" active={isActive('/admin')} collapsed={collapsed} />
+          </>
+        )}
+
         {user && (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
+          <div className={cn('flex items-center gap-2 px-1 pt-2', collapsed && 'flex-col')}>
+            <span
+              className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-emerald-500 text-xs font-semibold text-white"
+              title={user.email}
+            >
+              {(user.display_name || user.email).charAt(0).toUpperCase()}
+            </span>
+            {!collapsed && (
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium truncate">
-                  {user.display_name || user.email}
-                </p>
-                {user.display_name && (
-                  <p className="text-xs text-muted-foreground truncate">{user.email}</p>
-                )}
+                <p className="truncate text-[13px] font-medium">{user.display_name || user.email}</p>
+                {user.display_name && <p className="truncate text-[11px] text-muted-foreground">{user.email}</p>}
               </div>
-              <button
-                onClick={logout}
-                className="ml-2 p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
-                title="Sign out"
-              >
-                <LogOut className="h-4 w-4" />
-              </button>
-            </div>
+            )}
+            <button
+              onClick={logout}
+              className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+              title="Sign out"
+              aria-label="Sign out"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
           </div>
         )}
       </div>

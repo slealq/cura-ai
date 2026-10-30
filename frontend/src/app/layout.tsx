@@ -60,9 +60,9 @@ function AppShell({ children }: { children: React.ReactNode }) {
       <SentryUserSync />
       <div className="flex h-screen">
         <Sidebar />
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           <Header />
-          <main className="flex-1 overflow-auto p-6">{children}</main>
+          <main className="flex-1 overflow-auto px-5 py-5">{children}</main>
         </div>
       </div>
       <Toaster position="bottom-right" richColors theme={resolvedTheme} />
@@ -163,6 +163,12 @@ export default function RootLayout({
         <title>SightLab</title>
         <meta name="description" content="SightLab — AI-powered image intelligence, tagging, and generation" />
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link
+          rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap"
+        />
         <script
           dangerouslySetInnerHTML={{
             __html: `

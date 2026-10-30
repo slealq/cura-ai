@@ -13,8 +13,8 @@ Five environments exist, each with a UI badge in the sidebar (except PROD):
 | Environment | What runs locally | Data source | UI Badge | How to run |
 |---|---|---|---|---|
 | **Local** | Everything in Docker (frontend, backend, DB, Redis) | Local containers | Blue "Local" | `cura local` |
-| **Cloud Native** | Frontend + backend natively on host (hot-reload) | Azure cloud (DB, Redis, Storage) | Emerald "Cloud Native" | `cura cloud-native` |
-| **Cloud Docker** | Frontend + backend in Docker containers | Azure cloud (DB, Redis, Storage) | Teal "Cloud Docker" | `cura cloud-docker` |
+| **Cloud Native** | Frontend + backend natively on host (hot-reload) | Azure cloud (DB, Redis, Storage) | Emerald "Native" | `cura cloud-native` |
+| **Cloud Docker** | Frontend + backend in Docker containers | Azure cloud (DB, Redis, Storage) | Teal "Docker" | `cura cloud-docker` |
 | **DEV** | Nothing — fully deployed | Azure cloud | Purple "DEV" | Merge PR to `dev` branch (CI/CD) |
 | **PROD** | Nothing — fully deployed | Azure cloud | None | Manual dispatch (CI/CD) |
 
