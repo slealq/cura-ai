@@ -33,6 +33,8 @@ export interface Image {
   id: number;
   source: string;
   original_filename: string | null;
+  /** Set for library copies of generations/edits (source 'generated' | 'edited'). */
+  generated_image_id?: number | null;
   object_key: string;
   width: number | null;
   height: number | null;

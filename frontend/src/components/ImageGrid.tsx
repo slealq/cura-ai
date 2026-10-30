@@ -1,12 +1,11 @@
 'use client';
 
-import { Suspense, useState, useEffect, useRef } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useSearchParams, useRouter } from 'next/navigation';
-import { Loader2, CheckSquare, X, RefreshCw, FolderPlus, Trash2, FileText } from 'lucide-react';
+import { Suspense, useState, useEffect, useMemo, useRef } from 'react';
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams, useRouter, usePathname } from 'next/navigation';
+import { Check, FileText, FolderMinus, FolderPlus, Loader2, RefreshCw, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { imagesApi, jobsApi, foldersApi } from '@/lib/api';
-import ImageCard from '@/components/ImageCard';
 import ImageDrawer from '@/components/ImageDrawer';
 import AddToFolderDialog from '@/components/AddToFolderDialog';
 import DescribeAllDialog from '@/components/DescribeAllDialog';
@@ -14,65 +13,229 @@ import { cn } from '@/lib/utils';
 import type { Image, ImageListResponse } from '@/types';
 
 type FilterKey = 'failed' | 'not_described' | 'not_clustered';
+type SourceKey = 'upload' | 'generated' | 'edited';
+type Density = 'S' | 'M' | 'L';
 
-const imageFilters: { key: FilterKey; label: string }[] = [
+const STATUS_FILTERS: { key: FilterKey | null; label: string }[] = [
+  { key: null, label: 'Any status' },
   { key: 'failed', label: 'Failed' },
   { key: 'not_described', label: 'Not described' },
   { key: 'not_clustered', label: 'Not clustered' },
 ];
 
+const SOURCE_FILTERS: { key: SourceKey | null; label: string }[] = [
+  { key: null, label: 'All' },
+  { key: 'upload', label: 'Uploads' },
+  { key: 'generated', label: 'Generated' },
+  { key: 'edited', label: 'Edited' },
+];
+
+const COLUMN_WIDTH: Record<Density, number> = { S: 150, M: 210, L: 300 };
+const DENSITY_KEY = 'library-density';
+const PAGE_SIZE = 60;
+const NOT_DESCRIBED = new Set(['ingested', 'normalized', 'tagged']);
+
+interface FetchParams {
+  status?: string;
+  min_status?: string;
+  max_status?: string;
+  source?: string;
+  in_folder?: boolean;
+  skip?: number;
+  limit?: number;
+}
+
 interface ImageGridProps {
   title: string;
   queryKeyPrefix: string;
-  fetchImages: (params: {
-    status?: string;
-    min_status?: string;
-    max_status?: string;
-    in_folder?: boolean;
-    skip?: number;
-    limit?: number;
-  }) => Promise<ImageListResponse>;
+  fetchImages: (params: FetchParams) => Promise<ImageListResponse>;
   folderId?: number;
+  /** Show the All / Uploads / Generated / Edited filter (needs `source` support in fetchImages). */
+  showSourceFilter?: boolean;
+  /** Extra controls rendered next to the title, e.g. folder actions. */
+  headerActions?: React.ReactNode;
+  /** Rendered between the title row and the toolbar, e.g. a folder description. */
+  subtitle?: React.ReactNode;
 }
 
-export default function ImageGrid({ title, queryKeyPrefix, fetchImages, folderId }: ImageGridProps) {
+export default function ImageGrid(props: ImageGridProps) {
   return (
     <Suspense
       fallback={
-        <div className="flex items-center justify-center h-64">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <div className="flex h-64 items-center justify-center">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
       }
     >
-      <ImageGridContent
-        title={title}
-        queryKeyPrefix={queryKeyPrefix}
-        fetchImages={fetchImages}
-        folderId={folderId}
-      />
+      <ImageGridContent {...props} />
     </Suspense>
   );
 }
 
-function ImageGridContent({ title, queryKeyPrefix, fetchImages, folderId }: ImageGridProps) {
+function Segmented<T extends string | null>({
+  options,
+  value,
+  onChange,
+  label,
+}: {
+  options: { key: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  label: string;
+}) {
+  return (
+    <div role="group" aria-label={label} className="inline-flex gap-0.5 rounded-lg bg-muted p-0.5">
+      {options.map((o) => (
+        <button
+          key={o.label}
+          onClick={() => onChange(o.key)}
+          aria-pressed={value === o.key}
+          className={cn(
+            'h-7 whitespace-nowrap rounded-md px-2.5 text-[12.5px] font-medium transition-colors',
+            value === o.key
+              ? 'bg-background text-foreground shadow-sm dark:bg-accent'
+              : 'text-muted-foreground hover:text-foreground'
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Tile({
+  image,
+  selected,
+  selecting,
+  onOpen,
+  onToggle,
+}: {
+  image: Image;
+  selected: boolean;
+  selecting: boolean;
+  onOpen: () => void;
+  onToggle: () => void;
+}) {
+  const thumb = image.thumbnail_uri_medium || image.thumbnail_uri_small;
+  const src = thumb ? imagesApi.getThumbnailUrl(thumb.split('/').pop()!) : null;
+  const ratio = image.width && image.height ? image.width / image.height : 1;
+  const flag =
+    image.status === 'failed'
+      ? { text: 'Failed', cls: 'text-danger' }
+      : image.status === 'pending'
+        ? { text: 'Processing', cls: 'text-muted-foreground' }
+        : NOT_DESCRIBED.has(image.status)
+          ? { text: 'Not described', cls: 'text-warning' }
+          : null;
+
+  return (
+    <div
+      className={cn(
+        'group relative mb-2 break-inside-avoid overflow-hidden rounded-md bg-muted',
+        selected && 'outline outline-[3px] -outline-offset-[3px] outline-selection'
+      )}
+    >
+      <button
+        type="button"
+        onClick={(e) => (selecting || e.metaKey || e.ctrlKey || e.shiftKey ? onToggle() : onOpen())}
+        className="block w-full"
+        aria-label={`${image.original_filename || `Image ${image.id}`}${selected ? ', selected' : ''}`}
+      >
+        {src ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={src}
+            alt=""
+            loading="lazy"
+            style={{ aspectRatio: ratio }}
+            className={cn('block w-full object-cover transition-transform duration-200', selected && 'scale-[0.94] rounded')}
+          />
+        ) : (
+          <div style={{ aspectRatio: ratio }} className="grid w-full place-items-center text-xs text-muted-foreground">
+            No preview
+          </div>
+        )}
+      </button>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-label={selected ? 'Deselect' : 'Select'}
+        aria-pressed={selected}
+        className={cn(
+          'absolute left-2 top-2 grid h-[22px] w-[22px] place-items-center rounded-full border-[1.5px] text-white transition-opacity',
+          selected ? 'border-selection bg-selection opacity-100' : 'border-white/95 bg-black/20',
+          !selected && (selecting ? 'opacity-100' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100')
+        )}
+      >
+        <Check className={cn('h-3 w-3', selected ? 'opacity-100' : 'opacity-0')} strokeWidth={3} />
+      </button>
+      {(image.source === 'generated' || image.source === 'edited') && (
+        <span className="pointer-events-none absolute bottom-2 left-2 rounded bg-black/45 px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wider text-white backdrop-blur">
+          {image.source}
+        </span>
+      )}
+      {flag && (
+        <span className={cn('pointer-events-none absolute right-2 top-2 rounded bg-white px-1.5 py-0.5 text-[10.5px] font-medium', flag.cls)}>
+          {flag.text}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ImageGridContent({
+  title,
+  queryKeyPrefix,
+  fetchImages,
+  folderId,
+  showSourceFilter = false,
+  headerActions,
+  subtitle,
+}: ImageGridProps) {
   const queryClient = useQueryClient();
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const imageIdParam = searchParams.get('image_id');
-  const [selectedImage, setSelectedImage] = useState<Image | null>(null);
+  const sourceParam = searchParams.get('source') as SourceKey | null;
+  const source = showSourceFilter && SOURCE_FILTERS.some((s) => s.key === sourceParam) ? sourceParam : null;
+
+  const [openImage, setOpenImage] = useState<Image | null>(null);
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null);
-  const [page, setPage] = useState(0);
-  const limit = 50;
-
-  // Multi-select state
-  const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-
-  // Add to folder dialog
+  const [density, setDensity] = useState<Density>('M');
   const [showAddToFolder, setShowAddToFolder] = useState(false);
-
-  // Describe all dialog
   const [showDescribeAll, setShowDescribeAll] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(DENSITY_KEY) as Density | null;
+      if (saved && saved in COLUMN_WIDTH) setDensity(saved);
+    } catch {
+      // keep default
+    }
+  }, []);
+
+  const changeDensity = (d: Density) => {
+    setDensity(d);
+    try {
+      localStorage.setItem(DENSITY_KEY, d);
+    } catch {
+      // ignore
+    }
+  };
+
+  const changeSource = (s: SourceKey | null) => {
+    const next = new URLSearchParams(searchParams.toString());
+    if (s) next.set('source', s);
+    else next.delete('source');
+    const qs = next.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname);
+    setSelectedIds(new Set());
+  };
 
   // Auto-open drawer when image_id is in URL params
   const hasOpenedLinked = useRef(false);
@@ -81,15 +244,14 @@ function ImageGridContent({ title, queryKeyPrefix, fetchImages, folderId }: Imag
     queryFn: () => imagesApi.get(Number(imageIdParam)),
     enabled: !!imageIdParam,
   });
-
   useEffect(() => {
     if (linkedImage && !hasOpenedLinked.current) {
       hasOpenedLinked.current = true;
-      setSelectedImage(linkedImage);
+      setOpenImage(linkedImage);
     }
   }, [linkedImage]);
 
-  const filterParams = (() => {
+  const filterParams: FetchParams = (() => {
     switch (activeFilter) {
       case 'failed': return { status: 'failed' };
       case 'not_described': return { max_status: 'tagged' };
@@ -98,336 +260,266 @@ function ImageGridContent({ title, queryKeyPrefix, fetchImages, folderId }: Imag
     }
   })();
 
-  const { data, isLoading } = useQuery({
-    queryKey: [queryKeyPrefix, activeFilter, page],
-    queryFn: () =>
-      fetchImages({
-        ...filterParams,
-        skip: page * limit,
-        limit,
-      }),
+  const { data, isLoading, isError, error, refetch, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
+    queryKey: [queryKeyPrefix, activeFilter, source],
+    queryFn: ({ pageParam }) =>
+      fetchImages({ ...filterParams, ...(source ? { source } : {}), skip: pageParam, limit: PAGE_SIZE }),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((n, p) => n + p.items.length, 0);
+      return loaded < last.total && last.items.length > 0 ? loaded : undefined;
+    },
   });
+
+  const images = useMemo(() => data?.pages.flatMap((p) => p.items) ?? [], [data]);
+  const total = data?.pages[0]?.total ?? 0;
+
+  // Load the next page when the sentinel scrolls into view
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !hasNextPage) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && !isFetchingNextPage) fetchNextPage();
+      },
+      { rootMargin: '600px' }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   const { data: jobs } = useQuery({
     queryKey: ['jobs'],
     queryFn: () => jobsApi.list({ limit: 50 }),
     refetchInterval: 5000,
   });
-
   const hasBatchRunning = jobs?.items.some(
     (j) => (j.job_type === 'batch_reprocess' || j.job_type === 'batch_describe') && (j.status === 'running' || j.status === 'pending')
   ) ?? false;
 
+  const clearSelection = () => setSelectedIds(new Set());
+
   const reprocessSelectedMutation = useMutation({
     mutationFn: (imageIds: number[]) => jobsApi.reprocessSelected(imageIds),
-    onSuccess: (data) => {
-      toast.success(`Reprocessing ${selectedIds.size} images`, {
-        description: `Job #${data.job_id}`,
+    onSuccess: (res) => {
+      toast.success(`Describing ${selectedIds.size} images`, {
+        description: `Job #${res.job_id}`,
         action: { label: 'View Jobs', onClick: () => router.push('/jobs') },
       });
       queryClient.invalidateQueries({ queryKey: ['jobs'] });
       queryClient.invalidateQueries({ queryKey: [queryKeyPrefix] });
       queryClient.invalidateQueries({ queryKey: ['pipeline-stats'] });
-      setSelectedIds(new Set());
-      setSelectMode(false);
+      clearSelection();
     },
-    onError: () => {
-      toast.error('Failed to start reprocessing');
-    },
+    onError: () => toast.error('Could not start describing. Try again in a moment.'),
   });
 
   const removeFromFolderMutation = useMutation({
     mutationFn: (imageIds: number[]) => foldersApi.removeImages(folderId!, imageIds),
-    onSuccess: (data) => {
-      toast.success(`Removed ${data.removed} images from folder`);
+    onSuccess: (res) => {
+      toast.success(`Removed ${res.removed} images from this folder`);
       queryClient.invalidateQueries({ queryKey: [queryKeyPrefix] });
       queryClient.invalidateQueries({ queryKey: ['folders'] });
-      setSelectedIds(new Set());
-      setSelectMode(false);
+      clearSelection();
     },
-    onError: () => {
-      toast.error('Failed to remove images');
-    },
+    onError: () => toast.error('Could not remove images from the folder'),
   });
-
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const deleteSelectedMutation = useMutation({
     mutationFn: (imageIds: number[]) => imagesApi.batchDelete(imageIds),
-    onSuccess: (data) => {
-      toast.success(`Deleted ${data.deleted} images`);
+    onSuccess: (res) => {
+      toast.success(`Deleted ${res.deleted} images`);
       queryClient.invalidateQueries({ queryKey: [queryKeyPrefix] });
       queryClient.invalidateQueries({ queryKey: ['stats'] });
       queryClient.invalidateQueries({ queryKey: ['folders'] });
-      setSelectedIds(new Set());
-      setSelectMode(false);
+      clearSelection();
     },
-    onError: () => {
-      toast.error('Failed to delete images');
-    },
+    onError: () => toast.error('Could not delete images'),
   });
 
-  const handleToggleSelect = (id: number) => {
+  const toggle = (id: number) =>
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  };
 
-  const handleSelectAll = () => {
-    if (!data?.items) return;
-    const allOnPage = data.items.map((img) => img.id);
-    const allSelected = allOnPage.every((id) => selectedIds.has(id));
-    if (allSelected) {
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        allOnPage.forEach((id) => next.delete(id));
-        return next;
-      });
-    } else {
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        allOnPage.forEach((id) => next.add(id));
-        return next;
-      });
-    }
-  };
+  const allLoadedSelected = images.length > 0 && images.every((img) => selectedIds.has(img.id));
+  const selecting = selectedIds.size > 0;
 
-  const exitSelectMode = () => {
-    setSelectMode(false);
-    setSelectedIds(new Set());
-  };
+  useEffect(() => {
+    if (!selecting) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !openImage && !showAddToFolder && !showDeleteConfirm) clearSelection();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [selecting, openImage, showAddToFolder, showDeleteConfirm]);
+
+  const dockButton =
+    'flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium text-primary-foreground/90 transition-colors hover:bg-primary-foreground/10 hover:text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50';
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">{title}</h1>
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <h1 className="flex items-baseline gap-2 text-xl font-semibold tracking-tight">
+          {title}
+          <span className="font-mono text-[13px] font-normal tabular-nums text-muted-foreground">{total}</span>
+        </h1>
+        {headerActions && <div className="ml-auto flex flex-wrap items-center gap-1.5">{headerActions}</div>}
+      </div>
+      {subtitle}
 
-        <div className="flex items-center gap-2">
-          {/* Folder describe button */}
+      <div className="flex flex-wrap items-center gap-2">
+        {showSourceFilter && (
+          <Segmented label="Source" options={SOURCE_FILTERS} value={source} onChange={changeSource} />
+        )}
+        <Segmented
+          label="Status"
+          options={STATUS_FILTERS}
+          value={activeFilter}
+          onChange={(v) => {
+            setActiveFilter(v);
+            clearSelection();
+          }}
+        />
+        <div className="ml-auto flex items-center gap-1.5">
           {folderId && (
-            <>
-              <button
-                onClick={() => setShowDescribeAll(true)}
-                disabled={hasBatchRunning}
-                className={cn(
-                  'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors',
-                  'border border-border hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed'
-                )}
-              >
-                <FileText className="h-3.5 w-3.5" />
-                Describe All
-              </button>
-              <div className="w-px h-6 bg-border" />
-            </>
-          )}
-
-          {/* Select mode toggle */}
-          {selectMode ? (
-            <>
-              <button
-                onClick={handleSelectAll}
-                className={cn(
-                  'px-3 py-1.5 rounded-lg text-sm transition-colors',
-                  'border border-border hover:bg-muted'
-                )}
-              >
-                {data?.items && data.items.every((img) => selectedIds.has(img.id))
-                  ? 'Deselect Page'
-                  : 'Select Page'}
-              </button>
-              <button
-                onClick={exitSelectMode}
-                className={cn(
-                  'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors',
-                  'border border-border hover:bg-muted'
-                )}
-              >
-                <X className="h-3.5 w-3.5" />
-                Cancel
-              </button>
-              <div className="w-px h-6 bg-border" />
-            </>
-          ) : (
-            <>
-              <button
-                onClick={() => setSelectMode(true)}
-                className={cn(
-                  'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors',
-                  'border border-border hover:bg-muted'
-                )}
-              >
-                <CheckSquare className="h-3.5 w-3.5" />
-                Select
-              </button>
-              <div className="w-px h-6 bg-border" />
-            </>
-          )}
-
-          {/* Filters */}
-          {imageFilters.map((filter) => (
             <button
-              key={filter.key}
-              onClick={() => {
-                setActiveFilter((prev) => prev === filter.key ? null : filter.key);
-                setPage(0);
-              }}
-              className={cn(
-                'px-3 py-1.5 rounded-lg text-sm transition-colors',
-                activeFilter === filter.key
-                  ? 'bg-primary text-primary-foreground'
-                  : 'border border-border hover:bg-muted'
-              )}
+              onClick={() => setShowDescribeAll(true)}
+              disabled={hasBatchRunning}
+              title={hasBatchRunning ? 'A describe job is already running' : 'Describe every image in this folder'}
+              className="flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12.5px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {filter.label}
+              <FileText className="h-3.5 w-3.5" />
+              Describe all
             </button>
-          ))}
+          )}
+          {images.length > 0 && (
+            <button
+              onClick={() => (allLoadedSelected ? clearSelection() : setSelectedIds(new Set(images.map((i) => i.id))))}
+              className="h-7 rounded-md px-2.5 text-[12.5px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              {allLoadedSelected ? 'Deselect all' : 'Select all'}
+            </button>
+          )}
+          <Segmented
+            label="Thumbnail size"
+            options={(['S', 'M', 'L'] as Density[]).map((d) => ({ key: d, label: d }))}
+            value={density}
+            onChange={changeDensity}
+          />
         </div>
       </div>
 
       {isLoading ? (
-        <div className="flex items-center justify-center h-64">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <div className="flex h-64 items-center justify-center">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
-      ) : data?.items.length === 0 ? (
-        <div className="flex flex-col items-center justify-center h-64 text-center">
-          <p className="text-muted-foreground">No images found</p>
+      ) : isError ? (
+        <div className="flex h-64 flex-col items-center justify-center gap-2 text-center">
+          <p className="font-medium">Couldn&apos;t load these images</p>
+          <p className="max-w-md text-sm text-muted-foreground">{error?.message}</p>
+          <button
+            onClick={() => refetch()}
+            className="mt-1 rounded-md border border-input px-3 py-1.5 text-[13px] font-medium hover:bg-accent"
+          >
+            Try again
+          </button>
+        </div>
+      ) : images.length === 0 ? (
+        <div className="flex h-64 flex-col items-center justify-center gap-1 text-center">
+          <p className="font-medium">No images here</p>
+          <p className="text-sm text-muted-foreground">
+            {activeFilter || source
+              ? 'Nothing matches these filters. Try a different source or status.'
+              : 'Upload images or create some to start your library.'}
+          </p>
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-            {data?.items.map((image) => (
-              <ImageCard
+          <div style={{ columnWidth: COLUMN_WIDTH[density], columnGap: 8 }} className="pb-24">
+            {images.map((image) => (
+              <Tile
                 key={image.id}
                 image={image}
-                onClick={selectMode ? undefined : () => setSelectedImage(image)}
-                showStatus
-                selectable={selectMode}
                 selected={selectedIds.has(image.id)}
-                onSelect={handleToggleSelect}
+                selecting={selecting}
+                onOpen={() => setOpenImage(image)}
+                onToggle={() => toggle(image.id)}
               />
             ))}
           </div>
-
-          {/* Pagination */}
-          {data && data.total > limit && (
-            <div className="flex items-center justify-center gap-2">
-              <button
-                onClick={() => setPage((p) => Math.max(0, p - 1))}
-                disabled={page === 0}
-                className="px-4 py-2 border border-border rounded-lg hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Previous
-              </button>
-              <span className="text-sm text-muted-foreground">
-                Page {page + 1} of {Math.ceil(data.total / limit)}
-              </span>
-              <button
-                onClick={() => setPage((p) => p + 1)}
-                disabled={(page + 1) * limit >= data.total}
-                className="px-4 py-2 border border-border rounded-lg hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Next
-              </button>
-            </div>
-          )}
+          <div ref={sentinelRef} className="flex h-10 items-center justify-center">
+            {isFetchingNextPage && <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />}
+          </div>
         </>
       )}
 
-      {/* Floating action bar for selection */}
-      {selectedIds.size > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-card border border-border rounded-xl shadow-lg px-4 py-3 flex items-center gap-3 z-50">
-          <span className="text-sm font-medium">
-            {selectedIds.size} image{selectedIds.size !== 1 ? 's' : ''} selected
-          </span>
+      {/* Selection toolbar — moves into the inspector panel in a later stage */}
+      {selecting && (
+        <div
+          role="toolbar"
+          aria-label="Selection actions"
+          className="fixed bottom-5 left-1/2 z-40 flex -translate-x-1/2 items-center gap-0.5 whitespace-nowrap rounded-xl bg-primary p-1.5 text-primary-foreground shadow-[0_18px_40px_-12px_rgb(0_0_0/0.45)]"
+        >
+          <button onClick={clearSelection} className={cn(dockButton, 'px-2')} aria-label="Clear selection">
+            <X className="h-4 w-4" />
+          </button>
+          <span className="px-1.5 text-[13px] font-semibold tabular-nums">{selectedIds.size} selected</span>
+          <span className="mx-1 h-5 w-px bg-primary-foreground/20" />
           <button
             onClick={() => reprocessSelectedMutation.mutate(Array.from(selectedIds))}
             disabled={reprocessSelectedMutation.isPending || hasBatchRunning}
-            title={hasBatchRunning ? 'A batch reprocess job is already running' : undefined}
-            className={cn(
-              'flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
-              'bg-primary text-primary-foreground hover:bg-primary/90',
-              'disabled:opacity-50 disabled:cursor-not-allowed'
-            )}
+            title={hasBatchRunning ? 'A describe job is already running' : 'Tag, describe and embed these images'}
+            className={dockButton}
           >
-            <RefreshCw className={cn('h-3.5 w-3.5', reprocessSelectedMutation.isPending && 'animate-spin')} />
-            Reprocess
+            <RefreshCw className={cn('h-4 w-4', reprocessSelectedMutation.isPending && 'animate-spin')} />
+            Describe
           </button>
-
-          {/* Add to folder */}
-          <button
-            onClick={() => setShowAddToFolder(true)}
-            className={cn(
-              'flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
-              'border border-border hover:bg-muted'
-            )}
-          >
-            <FolderPlus className="h-3.5 w-3.5" />
-            Add to Folder
+          <button onClick={() => setShowAddToFolder(true)} className={dockButton}>
+            <FolderPlus className="h-4 w-4" />
+            Add to folder
           </button>
-
-          {/* Remove from folder (when IN a folder view) */}
           {folderId && (
             <button
               onClick={() => removeFromFolderMutation.mutate(Array.from(selectedIds))}
               disabled={removeFromFolderMutation.isPending}
-              className={cn(
-                'flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
-                'border border-border hover:bg-muted',
-                'disabled:opacity-50 disabled:cursor-not-allowed'
-              )}
+              className={dockButton}
             >
-              <Trash2 className="h-3.5 w-3.5" />
-              Remove from Folder
+              <FolderMinus className="h-4 w-4" />
+              Remove from folder
             </button>
           )}
-
-          {/* Delete images */}
-          <button
-            onClick={() => setShowDeleteConfirm(true)}
-            className={cn(
-              'flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
-              'border border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/30'
-            )}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
+          <span className="mx-1 h-5 w-px bg-primary-foreground/20" />
+          <button onClick={() => setShowDeleteConfirm(true)} className={dockButton}>
+            <Trash2 className="h-4 w-4" />
             Delete
-          </button>
-
-          <button
-            onClick={() => setSelectedIds(new Set())}
-            className="p-1.5 hover:bg-muted rounded-lg text-muted-foreground transition-colors"
-          >
-            <X className="h-4 w-4" />
           </button>
         </div>
       )}
 
-      {/* Add to Folder dialog */}
       {showAddToFolder && (
         <AddToFolderDialog
           imageIds={Array.from(selectedIds)}
           onClose={() => setShowAddToFolder(false)}
           onDone={() => {
             setShowAddToFolder(false);
-            setSelectedIds(new Set());
-            setSelectMode(false);
+            clearSelection();
             queryClient.invalidateQueries({ queryKey: [queryKeyPrefix] });
           }}
         />
       )}
 
-      {/* Describe All dialog */}
       {showDescribeAll && folderId && (
         <DescribeAllDialog
           folderId={folderId}
-          imageCount={data?.total ?? 0}
+          imageCount={total}
           onClose={() => setShowDescribeAll(false)}
-          onStarted={(jobId, total) => {
+          onStarted={(jobId, count) => {
             setShowDescribeAll(false);
-            toast.success(`Describing ${total} images`, {
+            toast.success(`Describing ${count} images`, {
               description: `Job #${jobId}`,
               action: { label: 'View Jobs', onClick: () => router.push('/jobs') },
             });
@@ -437,20 +529,19 @@ function ImageGridContent({ title, queryKeyPrefix, fetchImages, folderId }: Imag
         />
       )}
 
-      {/* Delete confirmation */}
       {showDeleteConfirm && (
         <>
-          <div className="fixed inset-0 bg-black/50 z-50" onClick={() => setShowDeleteConfirm(false)} />
+          <div className="fixed inset-0 z-50 bg-black/50" onClick={() => setShowDeleteConfirm(false)} />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="bg-card rounded-xl shadow-xl max-w-sm w-full p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
-              <h3 className="text-lg font-semibold">Delete Images</h3>
+            <div className="w-full max-w-sm space-y-4 rounded-xl bg-card p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+              <h3 className="text-lg font-semibold">Delete {selectedIds.size} image{selectedIds.size !== 1 ? 's' : ''}?</h3>
               <p className="text-sm text-muted-foreground">
-                Permanently delete {selectedIds.size} image{selectedIds.size !== 1 ? 's' : ''}? This cannot be undone.
+                They are removed from your library, folders and clusters. This cannot be undone.
               </p>
-              <div className="flex gap-2 justify-end">
+              <div className="flex justify-end gap-2">
                 <button
                   onClick={() => setShowDeleteConfirm(false)}
-                  className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors"
+                  className="rounded-lg border border-border px-4 py-2 text-sm hover:bg-muted"
                 >
                   Cancel
                 </button>
@@ -459,7 +550,7 @@ function ImageGridContent({ title, queryKeyPrefix, fetchImages, folderId }: Imag
                     setShowDeleteConfirm(false);
                     deleteSelectedMutation.mutate(Array.from(selectedIds));
                   }}
-                  className="px-4 py-2 text-sm text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors"
+                  className="rounded-lg bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700"
                 >
                   Delete
                 </button>
@@ -469,13 +560,7 @@ function ImageGridContent({ title, queryKeyPrefix, fetchImages, folderId }: Imag
         </>
       )}
 
-      {selectedImage && (
-        <ImageDrawer
-          image={selectedImage}
-          onClose={() => setSelectedImage(null)}
-        />
-      )}
+      {openImage && <ImageDrawer image={openImage} onClose={() => setOpenImage(null)} />}
     </div>
   );
 }
-
