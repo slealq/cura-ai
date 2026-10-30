@@ -257,6 +257,7 @@ export default function EvaluationResultsPage() {
   const { data: evaluation, isLoading } = useQuery({
     queryKey: ['evaluation', evalId],
     queryFn: () => generationApi.getEvaluation(evalId),
+    enabled: Number.isFinite(evalId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
       return status === 'pending' || status === 'running' ? 5000 : false;

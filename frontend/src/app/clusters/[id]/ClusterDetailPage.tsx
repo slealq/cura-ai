@@ -43,6 +43,7 @@ export default function ClusterDetailPage() {
   const { data: cluster, isLoading } = useQuery({
     queryKey: ['cluster', clusterId],
     queryFn: () => clustersApi.get(clusterId),
+    enabled: Number.isFinite(clusterId),
   });
 
   const renameMutation = useMutation({
