@@ -32,11 +32,11 @@ function PackCard({ pack, onBuy, loading }: { pack: SparkPack; onBuy: (id: numbe
   const totalSparks = pack.sparks_amount + pack.bonus_sparks;
   return (
     <div className={cn(
-      'relative bg-card border rounded-lg p-5 flex flex-col items-center text-center transition-shadow hover:shadow-md',
-      pack.is_featured && 'border-amber-400 ring-1 ring-amber-400/50'
+      'relative bg-background border rounded-lg p-5 flex flex-col items-center text-center transition-shadow hover:shadow-md',
+      pack.is_featured && 'border-warning ring-1 ring-warning/30'
     )}>
       {pack.is_featured && (
-        <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-amber-400 text-amber-950 text-xs font-semibold px-3 py-0.5 rounded-full">
+        <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-warning/15 text-warning text-xs font-semibold px-3 py-0.5 rounded-full">
           Popular
         </span>
       )}
@@ -47,7 +47,7 @@ function PackCard({ pack, onBuy, loading }: { pack: SparkPack; onBuy: (id: numbe
           <span className="font-medium">{pack.sparks_amount.toLocaleString()}</span> sparks
         </p>
         {pack.bonus_sparks > 0 && (
-          <p className="text-sm text-amber-600 dark:text-amber-400 font-medium">
+          <p className="text-sm text-warning font-medium">
             +{pack.bonus_sparks.toLocaleString()} bonus
           </p>
         )}
@@ -61,7 +61,7 @@ function PackCard({ pack, onBuy, loading }: { pack: SparkPack; onBuy: (id: numbe
         className={cn(
           'mt-4 w-full py-2 px-4 rounded-md text-sm font-medium transition-colors',
           pack.is_featured
-            ? 'bg-amber-400 text-amber-950 hover:bg-amber-500'
+            ? 'bg-primary text-primary-foreground hover:bg-primary/90'
             : 'bg-primary text-primary-foreground hover:bg-primary/90',
           'disabled:opacity-50'
         )}
@@ -76,11 +76,11 @@ function PlanCard({ plan, onSubscribe, loading }: { plan: SubscriptionPlan; onSu
   const isPro = plan.name === 'Pro';
   return (
     <div className={cn(
-      'relative bg-card border rounded-lg p-5 flex flex-col items-center text-center transition-shadow hover:shadow-md',
-      isPro && 'border-violet-400 ring-1 ring-violet-400/50'
+      'relative bg-background border rounded-lg p-5 flex flex-col items-center text-center transition-shadow hover:shadow-md',
+      isPro && 'border-selection ring-1 ring-selection/30'
     )}>
       {isPro && (
-        <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-violet-500 text-white text-xs font-semibold px-3 py-0.5 rounded-full">
+        <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-selection text-white text-xs font-semibold px-3 py-0.5 rounded-full">
           Best Value
         </span>
       )}
@@ -100,7 +100,7 @@ function PlanCard({ plan, onSubscribe, loading }: { plan: SubscriptionPlan; onSu
         className={cn(
           'mt-4 w-full py-2 px-4 rounded-md text-sm font-medium transition-colors',
           isPro
-            ? 'bg-violet-500 text-white hover:bg-violet-600'
+            ? 'bg-primary text-primary-foreground hover:bg-primary/90'
             : 'bg-primary text-primary-foreground hover:bg-primary/90',
           'disabled:opacity-50'
         )}
@@ -300,19 +300,19 @@ export default function BillingPage() {
 
   const statusColor = (status: string) => {
     switch (status) {
-      case 'active': return 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300';
-      case 'cancelled': return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/50 dark:text-yellow-300';
-      case 'past_due': return 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300';
-      default: return 'bg-gray-100 text-gray-800 dark:bg-gray-900/50 dark:text-gray-300';
+      case 'active': return 'bg-success/10 text-success';
+      case 'cancelled': return 'bg-warning/10 text-warning';
+      case 'past_due': return 'bg-danger/10 text-danger';
+      default: return 'bg-muted text-muted-foreground';
     }
   };
 
   return (
-    <div className="p-6 space-y-8 max-w-4xl mx-auto">
-      <h1 className="text-2xl font-bold">Billing</h1>
+    <div className="mx-auto w-full max-w-[880px] space-y-5">
+      <h1 className="text-xl font-semibold tracking-tight">Billing</h1>
 
       {/* Balance Card */}
-      <div className="bg-card border rounded-lg p-8 text-center">
+      <div className="bg-background border rounded-lg p-8 text-center">
         {balanceLoading ? (
           <Loader2 className="h-6 w-6 animate-spin mx-auto" />
         ) : balance ? (
@@ -336,10 +336,10 @@ export default function BillingPage() {
 
       {/* Active Subscription Banner */}
       {!subLoading && subscription && (
-        <div className="bg-card border border-violet-300 dark:border-violet-700 rounded-lg p-5">
+        <div className="bg-background border border-violet-300 dark:border-violet-700 rounded-lg p-5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <Crown className="h-6 w-6 text-violet-500" />
+              <Crown className="h-6 w-6 text-selection" />
               <div>
                 <div className="flex items-center gap-2">
                   <h3 className="font-semibold">{subscription.plan_name} Plan</h3>
@@ -364,7 +364,7 @@ export default function BillingPage() {
               <button
                 onClick={handleCancelSubscription}
                 disabled={cancellingSubscription}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-red-600 hover:text-red-700 border border-red-200 dark:border-red-800 rounded-md hover:bg-red-50 dark:hover:bg-red-950 transition-colors disabled:opacity-50"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-danger border border-danger/30 rounded-md hover:bg-danger/10 transition-colors disabled:opacity-50"
               >
                 {cancellingSubscription ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <XCircle className="h-3.5 w-3.5" />}
                 Cancel
@@ -376,9 +376,9 @@ export default function BillingPage() {
 
       {/* Subscription Plans (show if no active subscription) */}
       {!subLoading && (!subscription || subscription.status === 'expired' || subscription.status === 'cancelled') && (
-        <section>
+        <section className="rounded-lg border border-border bg-background p-4 sm:p-6">
           <div className="flex items-center gap-2 mb-4">
-            <Crown className="h-5 w-5 text-violet-500" />
+            <Crown className="h-5 w-5 text-selection" />
             <h2 className="text-lg font-semibold">Subscription Plans</h2>
           </div>
           {subPlansLoading ? (
@@ -401,24 +401,24 @@ export default function BillingPage() {
       )}
 
       {/* Redeem Promo Code */}
-      <section>
+      <section className="rounded-lg border border-border bg-background p-4 sm:p-6">
         <div className="flex items-center gap-2 mb-4">
-          <Gift className="h-5 w-5 text-emerald-500" />
+          <Gift className="h-5 w-5 text-success" />
           <h2 className="text-lg font-semibold">Promo Code</h2>
         </div>
-        <div className="flex gap-3 max-w-md">
+        <div className="flex flex-wrap gap-3 max-w-md">
           <input
             type="text"
             value={promoCode}
             onChange={(e) => setPromoCode(e.target.value.toUpperCase())}
             onKeyDown={(e) => e.key === 'Enter' && handleRedeemPromo()}
             placeholder="Enter promo code"
-            className="flex-1 px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+            className="flex-1 px-3 py-2 text-sm border border-input rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring"
           />
           <button
             onClick={handleRedeemPromo}
             disabled={redeemingPromo || !promoCode.trim()}
-            className="px-4 py-2 text-sm font-medium bg-emerald-500 text-white rounded-md hover:bg-emerald-600 disabled:opacity-50 transition-colors"
+            className="px-4 py-2 text-sm font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 transition-colors"
           >
             {redeemingPromo ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Redeem'}
           </button>
@@ -426,7 +426,7 @@ export default function BillingPage() {
       </section>
 
       {/* Buy Sparks */}
-      <section>
+      <section className="rounded-lg border border-border bg-background p-4 sm:p-6">
         <div className="flex items-center gap-2 mb-4">
           <Sparkles className="h-5 w-5 text-amber-400" />
           <h2 className="text-lg font-semibold">Buy Sparks</h2>
@@ -434,7 +434,7 @@ export default function BillingPage() {
         {packsLoading ? (
           <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
         ) : packs && packs.length > 0 ? (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
             {packs.map((pack) => (
               <PackCard
                 key={pack.id}
@@ -450,8 +450,8 @@ export default function BillingPage() {
       </section>
 
       {/* Usage Summary */}
-      <section>
-        <div className="flex items-center justify-between mb-4">
+      <section className="rounded-lg border border-border bg-background p-4 sm:p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <h2 className="text-lg font-semibold">Usage Summary</h2>
           <div className="flex gap-1 bg-muted rounded-lg p-1">
             {(['7d', '30d', '90d', 'all'] as DateRange[]).map((range) => (
@@ -474,14 +474,14 @@ export default function BillingPage() {
         ) : usage ? (
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
-              <div className="bg-card border rounded-lg p-4">
+              <div className="bg-background border rounded-lg p-4">
                 <div className="flex items-center gap-2">
                   <TrendingDown className="h-4 w-4 text-muted-foreground" />
                   <p className="text-sm text-muted-foreground">Total Spent</p>
                 </div>
                 <p className="text-2xl font-bold mt-1">{formatNumber(usage.total_cost)} sparks</p>
               </div>
-              <div className="bg-card border rounded-lg p-4">
+              <div className="bg-background border rounded-lg p-4">
                 <p className="text-sm text-muted-foreground">API Calls</p>
                 <p className="text-2xl font-bold mt-1">{usage.record_count.toLocaleString()}</p>
               </div>
@@ -489,7 +489,7 @@ export default function BillingPage() {
 
             {/* By provider */}
             {Object.keys(usage.by_provider).length > 0 && (
-              <div className="bg-card border rounded-lg p-4">
+              <div className="bg-background border rounded-lg p-4">
                 <p className="text-sm font-medium mb-3">By Provider</p>
                 <div className="space-y-2">
                   {Object.entries(usage.by_provider)
@@ -506,7 +506,7 @@ export default function BillingPage() {
 
             {/* By operation — detailed table */}
             {usage.by_operation_detail && usage.by_operation_detail.length > 0 && (
-              <div className="bg-card border rounded-lg overflow-hidden">
+              <div className="bg-background border rounded-lg overflow-x-auto">
                 <div className="px-4 py-3 border-b">
                   <p className="text-sm font-medium">By Operation</p>
                 </div>
@@ -537,13 +537,13 @@ export default function BillingPage() {
       </section>
 
       {/* Transaction History */}
-      <section>
+      <section className="rounded-lg border border-border bg-background p-4 sm:p-6">
         <h2 className="text-lg font-semibold mb-4">Transaction History</h2>
         {txnLoading ? (
           <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
         ) : transactions && transactions.items.length > 0 ? (
           <>
-            <div className="bg-card border rounded-lg overflow-hidden">
+            <div className="bg-background border rounded-lg overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/50">
@@ -561,10 +561,10 @@ export default function BillingPage() {
                         <span className={cn(
                           'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium',
                           txn.transaction_type === 'credit'
-                            ? 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300'
+                            ? 'bg-success/10 text-success'
                             : txn.transaction_type === 'debit'
-                            ? 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300'
-                            : 'bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300'
+                            ? 'bg-danger/10 text-danger'
+                            : 'bg-selection-soft text-selection'
                         )}>
                           {txn.transaction_type === 'credit' ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
                           {txn.transaction_type}
@@ -573,7 +573,7 @@ export default function BillingPage() {
                       <td className="px-4 py-3 text-muted-foreground truncate max-w-[300px]">{txn.description}</td>
                       <td className={cn(
                         'text-right px-4 py-3 font-medium',
-                        txn.amount > 0 ? 'text-green-600' : 'text-red-600'
+                        txn.amount > 0 ? 'text-success' : 'text-danger'
                       )}>
                         {txn.amount > 0 ? '+' : ''}{formatNumber(txn.amount, 4)}
                       </td>
@@ -613,7 +613,7 @@ export default function BillingPage() {
       </section>
 
       {/* Purchase History */}
-      <section>
+      <section className="rounded-lg border border-border bg-background p-4 sm:p-6">
         <div className="flex items-center gap-2 mb-4">
           <ShoppingBag className="h-5 w-5 text-muted-foreground" />
           <h2 className="text-lg font-semibold">Purchases</h2>
@@ -621,7 +621,7 @@ export default function BillingPage() {
         {purchasesLoading ? (
           <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
         ) : purchases && purchases.items.length > 0 ? (
-          <div className="bg-card border rounded-lg overflow-hidden">
+          <div className="bg-background border rounded-lg overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/50">
@@ -643,12 +643,12 @@ export default function BillingPage() {
                       <span className={cn(
                         'inline-flex px-2 py-0.5 rounded-full text-xs font-medium',
                         p.status === 'completed'
-                          ? 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300'
+                          ? 'bg-success/10 text-success'
                           : p.status === 'pending'
-                          ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/50 dark:text-yellow-300'
+                          ? 'bg-warning/10 text-warning'
                           : p.status === 'refunded'
-                          ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300'
-                          : 'bg-gray-100 text-gray-800 dark:bg-gray-900/50 dark:text-gray-300'
+                          ? 'bg-selection-soft text-selection'
+                          : 'bg-muted text-muted-foreground'
                       )}>
                         {p.status}
                       </span>
@@ -666,7 +666,7 @@ export default function BillingPage() {
       {/* Manual PayPal payment dialog */}
       {manualPack && paymentConfig?.paypal_me_url && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-card border border-border rounded-lg w-full max-w-md p-6 space-y-4">
+          <div className="bg-background border border-border rounded-lg w-full max-w-md p-6 space-y-4">
             <div>
               <h3 className="text-lg font-semibold">Pay with PayPal</h3>
               <p className="text-sm text-muted-foreground mt-1">
