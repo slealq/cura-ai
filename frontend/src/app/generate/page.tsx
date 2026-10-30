@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { trackFunnelStep } from '@/lib/observability';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
+import ToolEntry from '@/components/ToolEntry';
 import GeneratedImageCard from '@/components/GeneratedImageCard';
 import ModelSelector from '@/components/ModelSelector';
 import { cn } from '@/lib/utils';
@@ -41,7 +42,7 @@ function AspectIcon({ ratio, className }: { ratio: string; className?: string })
 export default function GeneratePage() {
   return (
     <Suspense fallback={<div className="flex items-center justify-center h-32"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>}>
-      <GeneratePageInner />
+      <ToolEntry tool="generate"><GeneratePageInner /></ToolEntry>
     </Suspense>
   );
 }

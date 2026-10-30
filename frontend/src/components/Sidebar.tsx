@@ -11,12 +11,10 @@ import {
   ChevronsLeft,
   ChevronsRight,
   CreditCard,
-  Eye,
   FolderOpen,
   Image as ImageIcon,
   LayoutGrid,
   LogOut,
-  Pencil,
   Plus,
   Settings,
   ShieldCheck,
@@ -199,7 +197,7 @@ export default function Sidebar() {
 
       <div className={cn('flex gap-1.5 px-2.5 pb-2', collapsed && 'flex-col items-center')}>
         <Link
-          href="/generate"
+          href="/images?tool=Create"
           title="Create"
           className={cn(
             'flex h-8 items-center justify-center gap-1.5 rounded-md bg-primary text-[13px] font-medium text-primary-foreground hover:opacity-90',
@@ -313,9 +311,6 @@ export default function Sidebar() {
 
         <GroupLabel collapsed={collapsed}>Tools</GroupLabel>
         <div className="space-y-px pb-3">
-          <NavItem href="/generate" icon={Sparkles} label="Generate" active={isActive('/generate')} collapsed={collapsed} />
-          <NavItem href="/edit" icon={Pencil} label="Edit" active={isActive('/edit')} collapsed={collapsed} />
-          <NavItem href="/vision" icon={Eye} label="Vision" active={isActive('/vision')} collapsed={collapsed} />
           <NavItem href="/models" icon={Box} label="Models" active={isActive('/models')} collapsed={collapsed} />
         </div>
       </nav>
