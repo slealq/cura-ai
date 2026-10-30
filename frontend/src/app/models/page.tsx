@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { generationApi } from '@/lib/api';
+import { generationApi, jobsApi } from '@/lib/api';
 import {
   Loader2,
   Plus,
@@ -30,13 +30,31 @@ import TrainLoraModal from './components/TrainLoraModal';
 import { useModelCatalog } from '@/hooks/useModelCatalog';
 
 const statusConfig: Record<string, { icon: typeof Clock; color: string; label: string }> = {
-  pending: { icon: Clock, color: 'text-gray-500 bg-gray-100 dark:bg-gray-900/50 dark:text-gray-400', label: 'Pending' },
-  training: { icon: Loader2, color: 'text-blue-600 bg-blue-100 dark:bg-blue-900/50 dark:text-blue-300', label: 'Training' },
-  completed: { icon: CheckCircle, color: 'text-green-600 bg-green-100 dark:bg-green-900/50 dark:text-green-300', label: 'Completed' },
-  failed: { icon: XCircle, color: 'text-red-600 bg-red-100 dark:bg-red-900/50 dark:text-red-300', label: 'Failed' },
-  archived: { icon: Archive, color: 'text-gray-500 bg-gray-100 dark:bg-gray-900/50 dark:text-gray-400', label: 'Archived' },
-  uploaded: { icon: Upload, color: 'text-violet-600 bg-violet-100 dark:bg-violet-900/50 dark:text-violet-300', label: 'Uploaded' },
+  pending: { icon: Clock, color: 'text-warning bg-warning/10', label: 'Needs attention' },
+  training: { icon: Loader2, color: 'text-selection bg-selection-soft', label: 'Running' },
+  completed: { icon: CheckCircle, color: 'text-success bg-success/10', label: 'Ready' },
+  failed: { icon: XCircle, color: 'text-danger bg-danger/10', label: 'Failed' },
+  archived: { icon: Archive, color: 'text-muted-foreground bg-muted', label: 'Archived' },
+  uploaded: { icon: Upload, color: 'text-success bg-success/10', label: 'Ready' },
 };
+
+function TrainingProgress({ model }: { model: LoraModel }) {
+  const { data: job } = useQuery({
+    queryKey: ['jobs', model.job_id],
+    queryFn: () => jobsApi.get(model.job_id!),
+    enabled: !!model.job_id && (model.status === 'training' || model.status === 'pending'),
+    refetchInterval: 5000,
+  });
+  if (model.status !== 'training' && model.status !== 'pending') return null;
+  const percent = job && job.total_items > 0 ? Math.min(100, job.progress / job.total_items * 100) : null;
+  return (
+    <div className="mt-3 space-y-1 text-xs text-muted-foreground" role="status">
+      <span>{model.status === 'pending' ? 'Queued for training' : percent == null ? 'Training in progress' : `Training ${Math.round(percent)}%`}</span>
+      {percent != null && <div className="h-1 rounded bg-muted"><div className="h-full rounded bg-selection" style={{ width: `${percent}%` }} /></div>}
+      {model.job_id && <Link href="/jobs" className="block hover:underline">View training job #{model.job_id}</Link>}
+    </div>
+  );
+}
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -220,7 +238,9 @@ function LoraModelCard({
   model,
   onDelete,
   onClick,
+  selected,
 }: {
+  selected: boolean;
   model: LoraModel;
   onDelete: () => void;
   onClick: () => void;
@@ -233,8 +253,13 @@ function LoraModelCard({
 
   return (
     <div
-      className="bg-card border border-border rounded-xl overflow-hidden hover:shadow-md transition-shadow cursor-pointer"
+      className={cn('bg-background border rounded-lg overflow-hidden hover:border-selection/50 transition-colors cursor-pointer', selected ? 'border-selection ring-1 ring-selection' : 'border-border')}
       onClick={onClick}
+      onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onClick(); } }}
+      tabIndex={0}
+      role="button"
+      aria-label={`Inspect ${model.name}`}
+      aria-pressed={selected}
     >
       {/* Preview images strip */}
       {previews.length > 0 ? (
@@ -274,7 +299,7 @@ function LoraModelCard({
 
         <div className="mt-3 flex flex-wrap gap-3 text-xs text-muted-foreground items-center">
           <span>{model.training_images_count} images</span>
-          <span className={cn('px-1.5 py-0.5 rounded-full text-[10px] font-semibold', 'bg-gray-100 text-gray-700 dark:bg-gray-900/50 dark:text-gray-300')}>
+          <span className={cn('px-1.5 py-0.5 rounded-full text-[10px] font-semibold', 'bg-muted text-muted-foreground')}>
             {catalog?.training_base_models.find((m) => m.key === model.base_model)?.label || model.base_model}
           </span>
           {model.has_local_weights && model.file_size && (
@@ -294,6 +319,8 @@ function LoraModelCard({
           )}
         </div>
 
+        <TrainingProgress model={model} />
+
         {/* Evaluation info */}
         {isModelReady(model) && (
           <div className="mt-3">
@@ -303,7 +330,7 @@ function LoraModelCard({
                 onClick={(e) => e.stopPropagation()}
                 className="flex items-center gap-2 text-xs px-2.5 py-1.5 rounded-lg bg-muted/50 hover:bg-muted transition-colors"
               >
-                <FlaskConical className="h-3 w-3 text-amber-600 flex-shrink-0" />
+                <FlaskConical className="h-3 w-3 text-warning flex-shrink-0" />
                 {model.latest_evaluation.status === 'completed' && model.latest_evaluation.overall_score != null ? (
                   <span>
                     Score: <span className="font-semibold text-foreground">{model.latest_evaluation.overall_score.toFixed(1)}</span>
@@ -315,7 +342,7 @@ function LoraModelCard({
                     Evaluating...
                   </span>
                 ) : model.latest_evaluation.status === 'failed' ? (
-                  <span className="text-red-600 dark:text-red-400">Evaluation failed</span>
+                  <span className="text-danger">Evaluation failed</span>
                 ) : (
                   <span className="text-muted-foreground">Evaluation pending</span>
                 )}
@@ -327,7 +354,7 @@ function LoraModelCard({
         )}
 
         {model.error_message && (
-          <p className="mt-2 text-xs text-red-600 dark:text-red-400 line-clamp-1">{model.error_message}</p>
+          <p className="mt-2 text-xs text-danger line-clamp-1">{model.error_message}</p>
         )}
 
         <div className="mt-3 flex items-center justify-between">
@@ -351,7 +378,7 @@ function LoraModelCard({
                 <Link
                   href={`/models/${model.id}/evaluate`}
                   onClick={(e) => e.stopPropagation()}
-                  className="p-1.5 hover:bg-muted rounded-lg transition-colors text-amber-600"
+                  className="p-1.5 hover:bg-muted rounded-lg transition-colors text-warning"
                   title="Evaluate model quality"
                 >
                   <FlaskConical className="h-4 w-4" />
@@ -359,7 +386,7 @@ function LoraModelCard({
                 <Link
                   href={`/generate?lora=${model.id}`}
                   onClick={(e) => e.stopPropagation()}
-                  className="p-1.5 hover:bg-muted rounded-lg transition-colors text-purple-600"
+                  className="p-1.5 hover:bg-muted rounded-lg transition-colors text-selection"
                   title="Generate with this LoRA"
                 >
                   <Sparkles className="h-4 w-4" />
@@ -371,7 +398,7 @@ function LoraModelCard({
                 e.stopPropagation();
                 onDelete();
               }}
-              className="p-1.5 hover:bg-red-50 rounded-lg transition-colors text-muted-foreground hover:text-red-600"
+              className="p-1.5 hover:bg-danger/10 rounded-lg transition-colors text-muted-foreground hover:text-danger"
               title="Delete"
             >
               <Trash2 className="h-4 w-4" />
@@ -387,7 +414,8 @@ export default function ModelsPage() {
   const queryClient = useQueryClient();
   const [showTrainModal, setShowTrainModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
-  const [selectedModel, setSelectedModel] = useState<LoraModel | null>(null);
+  const [selectedModelId, setSelectedModelId] = useState<number | null>(null);
+  const setSelectedModel = (model: LoraModel | null) => setSelectedModelId(model?.id ?? null);
 
   // Fetch LoRA models
   const { data: loraData, isLoading } = useQuery({
@@ -426,18 +454,45 @@ export default function ModelsPage() {
   });
 
   const models = loraData?.items || [];
+  const selectedModel = models.find((model) => model.id === selectedModelId) ?? null;
+  const { data: usage, isError: usageError } = useQuery({
+    queryKey: ['model-usage', selectedModelId],
+    queryFn: () => generationApi.listImages({ lora_model_id: selectedModelId!, limit: 1 }),
+    enabled: selectedModelId != null,
+    refetchInterval: 10000,
+  });
+  const recoverMutation = useMutation({
+    mutationFn: generationApi.recoverLoraTraining,
+    onSuccess: (result) => {
+      if (result.status === 'failed') toast.error(result.error || 'Training failed');
+      else toast.success(result.status === 'recovered' ? 'Training recovered' : 'Training status checked');
+      queryClient.invalidateQueries({ queryKey: ['lora-models'] });
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
+    onError: () => toast.error('Could not recover training'),
+  });
+  const retryMutation = useMutation({
+    mutationFn: generationApi.retryLoraTraining,
+    onSuccess: () => {
+      toast.success('Training retry started');
+      queryClient.invalidateQueries({ queryKey: ['lora-models'] });
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
+    onError: () => toast.error('Could not retry training'),
+  });
   const modelsWithoutWeights = models.filter((m) => isModelReady(m) && m.lora_url && !m.has_local_weights);
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="flex items-start gap-5">
+      <div className="min-w-0 flex-1 space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">LoRA Models</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Models</h1>
           <p className="text-muted-foreground mt-1">
             Train and manage LoRA adapters for image generation
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {modelsWithoutWeights.length > 0 && (
             <button
               onClick={() => downloadAllWeightsMutation.mutate()}
@@ -481,11 +536,12 @@ export default function ModelsPage() {
           <p className="text-sm mt-1">Train your first model from a folder or cluster of images</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-4">
           {models.map((model) => (
             <LoraModelCard
               key={model.id}
               model={model}
+              selected={selectedModelId === model.id}
               onDelete={() => deleteMutation.mutate(model.id)}
               onClick={() => setSelectedModel(model)}
             />
@@ -505,29 +561,35 @@ export default function ModelsPage() {
         onClose={() => setShowUploadModal(false)}
       />
 
-      {/* Detail Modal */}
+      </div>
+      {!selectedModel && <aside className="hidden min-[1100px]:block sticky top-4 w-[340px] shrink-0 rounded-lg border border-border bg-chrome p-5 text-sm text-muted-foreground">Select a model to view training details, evaluations, and actions.</aside>}
+      {/* Model inspector */}
       {selectedModel && (
-        <>
-          <div
-            className="fixed inset-0 bg-black/50 z-50"
-            onClick={() => setSelectedModel(null)}
-          />
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div
-              className="bg-card rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto"
-              onClick={(e) => e.stopPropagation()}
-            >
+        <aside aria-label="Model inspector" className="fixed inset-0 z-40 overflow-y-auto bg-chrome p-5 min-[1100px]:sticky min-[1100px]:top-4 min-[1100px]:z-auto min-[1100px]:max-h-[calc(100vh-120px)] min-[1100px]:w-[340px] min-[1100px]:shrink-0 min-[1100px]:rounded-lg min-[1100px]:border min-[1100px]:border-border">
+            <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-semibold">{selectedModel.name}</h3>
                 <button
                   onClick={() => setSelectedModel(null)}
+                  aria-label="Close model inspector"
                   className="p-1 hover:bg-muted rounded-lg transition-colors"
                 >
                   <X className="h-5 w-5" />
                 </button>
               </div>
 
+              <TrainingProgress model={selectedModel} />
               <div className="space-y-3 text-sm">
+                <section className="rounded-md border border-border p-3">
+                  <h4 className="font-medium">Usage</h4>
+                  <p className="text-muted-foreground">{usageError ? 'Usage unavailable' : usage ? `${usage.total} generated images` : 'Loading usage…'}</p>
+                </section>
+                <section className="rounded-md border border-border p-3">
+                  <h4 className="font-medium">Latest evaluation</h4>
+                  {selectedModel.latest_evaluation ? <Link className="text-sm hover:underline" href={`/models/${selectedModel.id}/evaluations/${selectedModel.latest_evaluation.id}`}>
+                    {selectedModel.latest_evaluation.status}{selectedModel.latest_evaluation.overall_score != null ? ` · ${selectedModel.latest_evaluation.overall_score.toFixed(1)}/10` : ''} — View evaluation
+                  </Link> : <p className="text-muted-foreground">No evaluations yet</p>}
+                </section>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <span className="text-muted-foreground">Status</span>
@@ -627,7 +689,7 @@ export default function ModelsPage() {
                       </div>
                     ) : selectedModel.lora_url ? (
                       <div className="mt-1 flex items-center gap-2">
-                        <span className="text-sm text-amber-600 dark:text-amber-400">CDN only</span>
+                        <span className="text-sm text-warning dark:text-amber-400">CDN only</span>
                         <button
                           onClick={() => downloadWeightsMutation.mutate(selectedModel.id)}
                           disabled={downloadWeightsMutation.isPending}
@@ -671,7 +733,7 @@ export default function ModelsPage() {
                             </button>
                             <Link
                               href={`/generate?lora=${selectedModel.id}&prompt=${encodeURIComponent(prompt)}`}
-                              className="p-1 hover:bg-muted rounded transition-colors text-purple-600"
+                              className="p-1 hover:bg-muted rounded transition-colors text-selection"
                               title="Try this prompt"
                               onClick={() => setSelectedModel(null)}
                             >
@@ -685,9 +747,9 @@ export default function ModelsPage() {
                 )}
 
                 {selectedModel.error_message && (
-                  <div className="p-3 bg-red-50 rounded-lg">
-                    <span className="text-red-700 font-medium">Error:</span>
-                    <p className="text-red-600 mt-0.5">{selectedModel.error_message}</p>
+                  <div className="p-3 bg-danger/10 rounded-lg">
+                    <span className="text-danger font-medium">Error:</span>
+                    <p className="text-danger mt-0.5">{selectedModel.error_message}</p>
                   </div>
                 )}
 
@@ -703,7 +765,7 @@ export default function ModelsPage() {
               </div>
 
               {isModelReady(selectedModel) && (
-                <div className="flex gap-2 pt-2">
+                <div className="flex flex-wrap gap-2 pt-2">
                   {selectedModel.has_local_weights && (
                     <a
                       href={generationApi.getLoraWeightsUrl(selectedModel.id)}
@@ -726,13 +788,17 @@ export default function ModelsPage() {
                     className="flex items-center gap-2 px-4 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
                   >
                     <Sparkles className="h-4 w-4" />
-                    Generate
+                    Create with it
                   </Link>
                 </div>
               )}
+              <div className="flex flex-wrap gap-2 border-t border-border pt-3 text-sm">
+                {selectedModel.status === 'training' && <button disabled={recoverMutation.isPending} onClick={() => recoverMutation.mutate(selectedModel.id)} className="rounded-md border border-input px-3 py-2 disabled:opacity-50">Recover training</button>}
+                {selectedModel.status === 'failed' && <button disabled={retryMutation.isPending} onClick={() => retryMutation.mutate(selectedModel.id)} className="rounded-md border border-input px-3 py-2 disabled:opacity-50">Retry training</button>}
+                <button onClick={() => { if (confirm(`Delete model “${selectedModel.name}”?`)) { deleteMutation.mutate(selectedModel.id); setSelectedModel(null); } }} className="rounded-md px-3 py-2 text-danger hover:bg-danger/10">Delete model</button>
+              </div>
             </div>
-          </div>
-        </>
+        </aside>
       )}
     </div>
   );
