@@ -299,7 +299,9 @@ async def list_images(
         skip=skip,
         limit=limit,
     )
-    total = image_service.count_images(status=status, min_status=min_status, max_status=max_status, in_folder=in_folder)
+    total = image_service.count_images(
+        status=status, min_status=min_status, max_status=max_status, in_folder=in_folder, source=source
+    )
 
     return ImageListResponse(
         items=[ImageResponse.model_validate(img) for img in images],

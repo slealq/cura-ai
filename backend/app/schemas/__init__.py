@@ -59,6 +59,7 @@ class ImageResponse(BaseModel):
     id: int
     source: str
     original_filename: str | None
+    generated_image_id: int | None = None
     object_key: str
     width: int | None
     height: int | None

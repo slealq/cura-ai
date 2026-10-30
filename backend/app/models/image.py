@@ -56,6 +56,9 @@ class ImageSource(str, enum.Enum):
     S3 = "s3"
     GCS = "gcs"
     GOOGLE_DRIVE = "google_drive"
+    # Library copies of finished generations / edits (see GeneratedImage)
+    GENERATED = "generated"
+    EDITED = "edited"
 
 
 class Image(Base):
@@ -74,6 +77,11 @@ class Image(Base):
     original_uri: Mapped[str] = mapped_column(String(1024), nullable=True)
     object_key: Mapped[str] = mapped_column(String(512), unique=True, nullable=False)
     original_filename: Mapped[str] = mapped_column(String(512), nullable=True)
+    # For GENERATED/EDITED sources: the generation this library copy came from.
+    # The library image holds its own copy of the file, so it outlives the generation.
+    generated_image_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("generated_images.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     # Deduplication
     file_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
