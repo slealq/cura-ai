@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import {
   Activity,
   Box,
@@ -16,13 +17,14 @@ import {
   LayoutGrid,
   LogOut,
   Pencil,
+  Plus,
   Settings,
   ShieldCheck,
   Sparkles,
   Upload,
   type LucideIcon,
 } from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import SightLabLogo from '@/components/SightLabLogo';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
@@ -91,6 +93,8 @@ function GroupLabel({ children, href, collapsed }: { children: string; href?: st
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const queryClient = useQueryClient();
   const { user, logout } = useAuth();
   const [collapsed, setCollapsed] = useState(false);
 
@@ -143,6 +147,19 @@ export default function Sidebar() {
     () => (clusterData?.items ?? []).filter((c) => !c.is_archived),
     [clusterData]
   );
+
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const createFolder = useMutation({
+    mutationFn: (name: string) => foldersApi.create({ name }),
+    onSuccess: (folder) => {
+      queryClient.invalidateQueries({ queryKey: ['folders'] });
+      setCreatingFolder(false);
+      setNewFolderName('');
+      router.push(`/images/folder/${folder.id}`);
+    },
+    onError: (err: Error) => toast.error(err.message || 'Could not create the folder'),
+  });
 
   const isAdmin = user?.role === 'admin';
   const isActive = (href: string, exact = false) =>
@@ -212,9 +229,48 @@ export default function Sidebar() {
           <NavItem href="/clusters" icon={LayoutGrid} label="Clusters" active={isActive('/clusters', true)} collapsed={collapsed} />
         </div>
 
-        {!collapsed && folders.length > 0 && (
+        {!collapsed && (
           <>
-            <GroupLabel href="/images" collapsed={collapsed}>Folders</GroupLabel>
+            <div className="flex items-center justify-between pr-1">
+              <GroupLabel collapsed={collapsed}>Folders</GroupLabel>
+              <button
+                onClick={() => setCreatingFolder(true)}
+                className="mt-2 grid h-5 w-5 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                aria-label="New folder"
+                title="New folder"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            {creatingFolder && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (newFolderName.trim()) createFolder.mutate(newFolderName.trim());
+                }}
+                className="px-1 pb-1"
+              >
+                <input
+                  autoFocus
+                  value={newFolderName}
+                  onChange={(e) => setNewFolderName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      setCreatingFolder(false);
+                      setNewFolderName('');
+                    }
+                  }}
+                  onBlur={() => !newFolderName.trim() && setCreatingFolder(false)}
+                  placeholder="Folder name, then Enter"
+                  aria-label="New folder name"
+                  disabled={createFolder.isPending}
+                  className="h-8 w-full rounded-md border border-input px-2 text-[13px] focus:border-selection focus:outline-none focus:ring-2 focus:ring-selection/20"
+                />
+              </form>
+            )}
+            {folders.length === 0 && !creatingFolder && (
+              <p className="px-2 py-1 text-xs text-muted-foreground">No folders yet</p>
+            )}
             <div className="space-y-px">
               {folders.slice(0, SIDEBAR_FOLDER_LIMIT).map((f) => (
                 <NavItem
