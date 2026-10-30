@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { Suspense, useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { editApi, settingsApi, billingApi } from '@/lib/api';
 import { Check, CheckSquare, Loader2, Pencil, ChevronDown, ChevronUp, Trash2, X, Upload, ImageIcon, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import GeneratedImageCard from '@/components/GeneratedImageCard';
+import ToolEntry from '@/components/ToolEntry';
 import ImagePickerModal from '@/components/ImagePickerModal';
 import ModelSelector from '@/components/ModelSelector';
 import { useModelCatalog } from '@/hooks/useModelCatalog';
@@ -41,6 +42,14 @@ function formatDuration(createdAt: string, completedAt: string | null): string |
 }
 
 export default function EditPage() {
+  return (
+    <Suspense fallback={<div className="grid h-32 place-items-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>}>
+      <ToolEntry tool="edit"><EditPageInner /></ToolEntry>
+    </Suspense>
+  );
+}
+
+function EditPageInner() {
   const queryClient = useQueryClient();
   const hasInitEditModel = useRef(false);
 

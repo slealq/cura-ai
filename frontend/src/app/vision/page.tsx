@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { Suspense, useState, useCallback, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { visionApi, settingsApi, billingApi, imagesApi, authUrl } from '@/lib/api';
 import { Loader2, Eye, X, Upload, ImageIcon, Copy, Check, Trash2, ChevronDown, ChevronUp, Save, Zap } from 'lucide-react';
 import { toast } from 'sonner';
+import ToolEntry from '@/components/ToolEntry';
 import ImagePickerModal from '@/components/ImagePickerModal';
 import ModelSelector from '@/components/ModelSelector';
 import { cn, formatDateCompact } from '@/lib/utils';
@@ -35,6 +36,14 @@ function formatDuration(ms: number | undefined | null): string {
 }
 
 export default function VisionPage() {
+  return (
+    <Suspense fallback={<div className="grid h-32 place-items-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>}>
+      <ToolEntry tool="vision"><VisionPageInner /></ToolEntry>
+    </Suspense>
+  );
+}
+
+function VisionPageInner() {
   const queryClient = useQueryClient();
   const { data: catalog, isError: catalogError } = useModelCatalog();
   const VISION_MODEL_OPTIONS = catalog?.language ?? [];

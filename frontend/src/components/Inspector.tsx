@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
@@ -243,7 +244,7 @@ export default function Inspector({
           id: notice,
           action: {
             label: action === 'Ask Vision' ? 'View results' : 'View Jobs',
-            onClick: () => router.push(action === 'Ask Vision' ? '/vision' : '/jobs'),
+            onClick: () => router.push(action === 'Ask Vision' ? '/vision?advanced=1' : '/jobs'),
           },
         }
       );
@@ -425,6 +426,9 @@ export default function Inspector({
             )}
           </>
         )}
+        {tool === 'Create' && <Link href="/generate?advanced=1" className="block text-xs text-muted-foreground underline hover:text-foreground">Advanced creation: multiple LoRAs, seeds & model controls</Link>}
+        {tool === 'Edit' && <Link href="/edit?advanced=1" className="block text-xs text-muted-foreground underline hover:text-foreground">Upload sources & advanced editing</Link>}
+        {tool === 'Ask Vision' && <Link href="/vision?advanced=1" className="block text-xs text-muted-foreground underline hover:text-foreground">Upload a file, Tag / Describe & analysis history</Link>}
         {tool === 'Edit' && (
           <p className="text-xs text-muted-foreground">
             Selected images are combined as sources for one edit. This model accepts up to {maxSources} source

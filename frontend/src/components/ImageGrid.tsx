@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { Suspense, useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
@@ -267,6 +268,8 @@ function ImageGridContent({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const imageIdParam = searchParams.get('image_id');
+  const entryTool = searchParams.get('tool');
+  const entryHint = searchParams.get('hint');
   const sourceParam = searchParams.get('source') as SourceKey | null;
   const source = showSourceFilter && SOURCE_FILTERS.some((s) => s.key === sourceParam) ? sourceParam : null;
 
@@ -285,6 +288,14 @@ function ImageGridContent({
     media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);
   }, []);
+  useEffect(() => {
+    if (entryTool !== 'Create') return;
+    setTool('Create');
+    setMobileInspector(true);
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete('tool');
+    router.replace(next.size ? `${pathname}?${next}` : pathname, { scroll: false });
+  }, [entryTool, pathname, router, searchParams]);
   const inspectorVisible = wide && !inspectorHidden;
   const [openImage, setOpenImage] = useState<Image | null>(null);
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null);
@@ -458,6 +469,16 @@ function ImageGridContent({
           </button>
         )}
         {subtitle}
+        {(entryHint === 'edit' || entryHint === 'vision') && (
+          <div className="flex items-start gap-3 rounded-lg border border-selection/20 bg-selection-soft p-3 text-sm">
+            <p className="flex-1">Select images, then choose {entryHint === 'edit' ? 'Edit' : 'Ask Vision'} in the inspector or More tools. <Link className="underline" href={`/${entryHint === 'edit' ? 'edit' : 'vision'}?advanced=1`}>{entryHint === 'edit' ? 'Upload sources or use advanced editing' : 'Upload a file or view analysis history'}</Link></p>
+            <button aria-label="Dismiss hint" onClick={() => {
+              const next = new URLSearchParams(searchParams.toString());
+              next.delete('hint');
+              router.replace(next.size ? `${pathname}?${next}` : pathname, { scroll: false });
+            }} className="rounded p-1 hover:bg-accent"><X className="h-4 w-4" /></button>
+          </div>
+        )}
 
         <div className="flex flex-wrap items-center gap-2">
           {showSourceFilter && (
