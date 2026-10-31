@@ -22,7 +22,8 @@ function transactionDescription(value: string | null) {
   if (!value) return 'Balance adjustment';
   const match = value.match(/^(.+?) via (.+)$/);
   if (!match) return value;
-  const model = match[2].split('/').pop() || '';
+  const model = match[2].split('/').filter((part) => part !== 'edit').pop();
+  if (!model || model === 'fal') return operationName(match[1]);
   return operationName(match[1]) + ' · ' + model.replace(/-/g, ' ').replace(/\b[a-z]/g, (c) => c.toUpperCase());
 }
 
