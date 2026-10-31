@@ -98,6 +98,7 @@ class FolderService:
             ]
             image_files.append({
                 "object_key": img.object_key,
+                "file_hash": img.file_hash,
                 "thumbnail_uris": thumbnail_uris,
             })
 
