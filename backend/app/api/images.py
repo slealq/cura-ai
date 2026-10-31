@@ -331,6 +331,50 @@ async def get_pipeline_stats(db: Session = Depends(get_db), current_user: User =
     )
 
 
+class UsedByRequest(BaseModel):
+    image_ids: list[int] = []
+    folder_id: int | None = None
+
+
+@router.post("/used-by")
+def image_used_by(request: UsedByRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.services.image_history import used_by
+    return {"count": used_by(db, current_user.id, request.image_ids, request.folder_id)}
+
+
+def owned_history_image(db, user_id, image_id):
+    image = db.query(Image).filter(Image.id == image_id, Image.user_id == user_id).first()
+    if image is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+    return image
+
+
+@router.get("/{image_id}/history")
+def image_history(image_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.models import ImageHistoryLink
+    from app.services.image_history import read_history
+    image = owned_history_image(db, current_user.id, image_id)
+    results = db.query(Image).join(ImageHistoryLink, ImageHistoryLink.result_image_id == Image.id).filter(
+        ImageHistoryLink.source_image_id == image_id, ImageHistoryLink.user_id == current_user.id,
+        Image.user_id == current_user.id).all()
+    return {"history": read_history(db, image), "used_to_make": [
+        {"id": result.id, "filename": result.original_filename, "thumbnail_uri": result.thumbnail_uri_small} for result in results]}
+
+
+@router.get("/{image_id}/history/inputs/{index}")
+def history_input(image_id: int, index: int, db: Session = Depends(get_db),
+                  current_user: User = Depends(get_current_user_from_token_param)):
+    from app.services.storage import get_storage_service
+    image = owned_history_image(db, current_user.id, image_id)
+    inputs = (image.history or {}).get("inputs", [])
+    if index < 0 or index >= len(inputs) or not inputs[index].get("copy_key"):
+        raise HTTPException(status_code=404, detail="Input copy not found")
+    response = get_storage_service().history_copy_response(inputs[index]["copy_key"])
+    if response is None:
+        raise HTTPException(status_code=404, detail="Input copy not found")
+    return response
+
+
 @router.get("/{image_id}", response_model=ImageResponse)
 async def get_image(image_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get image by ID."""
@@ -405,23 +449,31 @@ class BatchDeleteRequest(BaseModel):
     image_ids: list[int]
 
 
+def queue_image_delete(db, user_id, image_ids):
+    from app.workers.dispatch import dispatch_or_fail
+    from app.workers.tasks import delete_library_images
+
+    ids = [row[0] for row in db.query(Image.id).filter(Image.id.in_(image_ids), Image.user_id == user_id)]
+    job = Job(job_type=JobType.IMAGE_DELETE, user_id=user_id, status=JobStatus.PENDING,
+              total_items=len(ids), parameters={"image_ids": ids})
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    task = dispatch_or_fail(delete_library_images, job, db, ids, user_id, job.id)
+    job.celery_task_id = task.id
+    db.commit()
+    return {"status": "queued", "job_id": job.id, "total": len(ids)}
+
+
 @router.post("/batch-delete")
 async def batch_delete_images(request: BatchDeleteRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Delete multiple images."""
-    image_service = get_image_service(db, current_user.id)
-    deleted = image_service.delete_images_batch(request.image_ids)
-    return {"status": "deleted", "deleted": deleted}
+    return queue_image_delete(db, current_user.id, request.image_ids)
 
 
 @router.delete("/{image_id}")
 async def delete_image(image_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Delete an image."""
-    image_service = get_image_service(db, current_user.id)
-
-    if not image_service.delete_image(image_id):
-        raise HTTPException(status_code=404, detail="Image not found")
-
-    return {"status": "deleted", "image_id": image_id}
+    owned_history_image(db, current_user.id, image_id)
+    return queue_image_delete(db, current_user.id, [image_id])
 
 
 @router.get("/{image_id}/similar", response_model=list[ImageResponse])

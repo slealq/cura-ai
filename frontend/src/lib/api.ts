@@ -252,7 +252,7 @@ export const imagesApi = {
     return data;
   },
 
-  batchDelete: async (imageIds: number[]): Promise<{ deleted: number }> => {
+  batchDelete: async (imageIds: number[]): Promise<{ status: string; job_id: number; total: number }> => {
     const { data } = await api.post('/images/batch-delete', { image_ids: imageIds });
     return data;
   },
@@ -1144,6 +1144,7 @@ export const editApi = {
     source_image_ids?: number[];
     source_generated_ids?: number[];
     source_upload_keys?: string[];
+    source_upload_names?: Record<string, string>;
     edit_model?: string;
     image_size?: string | { width: number; height: number };
     num_images?: number;
@@ -1637,3 +1638,23 @@ export const billingApi = {
 };
 
 export default api;
+
+export interface ImageHistory {
+  job_type: string;
+  date: string;
+  prompt: string;
+  negative_prompt: string | null;
+  model: { key: string; name: string; offered: boolean };
+  provider: string;
+  settings: Record<string, unknown>;
+  seed: number | null;
+  charged_cost: number | null;
+  partial: boolean;
+  loras: { name: string; strength: number; base_model: string | null; trigger_word: string | null; deleted: boolean }[];
+  inputs: { label: string; filename: string; copy_key: string | null; uploaded?: boolean; image_id: number | null; width: number | null; height: number | null }[];
+}
+export const historyApi = {
+  get: async (id: number) => (await api.get<{ history: ImageHistory | null; used_to_make: { id: number; filename: string; thumbnail_uri?: string | null }[] }>(`/images/${id}/history`)).data,
+  usedBy: async (image_ids: number[], folder_id?: number) => (await api.post<{ count: number }>('/images/used-by', { image_ids, folder_id })).data,
+  inputUrl: (id: number, index: number) => authUrl(`/api/images/${id}/history/inputs/${index}`),
+};

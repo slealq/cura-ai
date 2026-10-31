@@ -1,6 +1,7 @@
 'use client';
 
 import LibraryImage from '@/components/LibraryImage';
+import ImageHistoryPanel from './ImageHistoryPanel';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -8,7 +9,7 @@ import { X, ExternalLink, RefreshCw, FolderOpen, Zap, ChevronDown, ChevronUp, Cl
 import { toast } from 'sonner';
 import Link from 'next/link';
 import type { Image } from '@/types';
-import { imagesApi, jobsApi, settingsApi, billingApi, generationApi, editApi } from '@/lib/api';
+import { imagesApi, jobsApi, settingsApi, billingApi } from '@/lib/api';
 import { STATUS_RANK } from '@/lib/pipeline';
 import { cn, formatDate, formatDateCompact, formatFileSize } from '@/lib/utils';
 import ImageCard from './ImageCard';
@@ -39,14 +40,6 @@ export default function ImageDrawer({ image, onClose, images, onNavigate, onTool
     },
     [images, index, onNavigate]
   );
-  const { data: generation } = useQuery({
-    queryKey: ['viewer-generation', image.generated_image_id],
-    queryFn: () =>
-      image.source === 'edited'
-        ? editApi.getImage(image.generated_image_id!)
-        : generationApi.getImage(image.generated_image_id!),
-    enabled: !!image.generated_image_id,
-  });
   const { data: catalog } = useModelCatalog();
   const VISION_MODELS = (catalog?.language ?? []).map((m) => ({
     value: m.id,
@@ -470,16 +463,12 @@ export default function ImageDrawer({ image, onClose, images, onNavigate, onTool
           <div className="p-6 space-y-6 overflow-y-auto flex-1">
             {(!images || tab === 'Details') && (
               <>
-                {generation && (
-                  <div className="space-y-2 text-sm">
-                    <h3 className="font-medium">Generation</h3>
-                    <p>{generation.base_model}</p>
-                    <p className="whitespace-pre-wrap">{generation.prompt}</p>
-                    {generation.lora_model_id && (
-                      <p>LoRA: {generation.lora_model_name || `#${generation.lora_model_id}`}</p>
-                    )}
-                  </div>
-                )}
+                <ImageHistoryPanel imageId={image.id} onOpen={async (id) => {
+                  try {
+                    const linked = await imagesApi.get(id);
+                    onNavigate?.(linked);
+                  } catch { toast.error('This image is no longer available'); }
+                }} />
                 {images && (
                   <div className="grid grid-cols-5 gap-1">
                     {['ingested', 'tagged', 'described', 'embedded', 'clustered'].map((step) => {

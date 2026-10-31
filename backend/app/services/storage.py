@@ -106,6 +106,29 @@ class StorageService:
         else:
             raise ValueError(f"Unsupported storage backend: {self.storage_backend}")
 
+    async def save_history_copy(self, data: bytes, key: str) -> str:
+        if self.storage_backend == "local":
+            return await self._save_local(data, key, "history")
+        if self.storage_backend == "azure":
+            return await self._save_azure(data, f"history/{key}", "image/jpeg")
+        import asyncio
+
+        import boto3
+        client = boto3.client("s3", region_name=settings.s3_region)
+        await asyncio.to_thread(client.put_object, Bucket=settings.s3_bucket,
+                                Key=f"history/{key}", Body=data, ContentType="image/jpeg")
+        return f"s3://{settings.s3_bucket}/history/{key}"
+
+    def history_copy_response(self, key: str):
+        if self.storage_backend == "s3":
+            import boto3
+            from fastapi.responses import RedirectResponse
+
+            url = boto3.client("s3", region_name=settings.s3_region).generate_presigned_url(
+                "get_object", Params={"Bucket": settings.s3_bucket, "Key": f"history/{key}"}, ExpiresIn=300)
+            return RedirectResponse(url, headers={"Cache-Control": "private, no-store"})
+        return self.get_file_response("history", key)
+
     async def save_lora_weights(
         self, file_data: bytes, object_key: str, mime_type: str = "application/octet-stream"
     ) -> str:
@@ -444,6 +467,11 @@ class StorageService:
                 return True
             except Exception:
                 return False
+        elif self.storage_backend == "s3":
+            import boto3
+            boto3.client("s3", region_name=settings.s3_region).delete_object(
+                Bucket=settings.s3_bucket, Key=f"{subdir}/{filename}")
+            return True
         else:
             raise ValueError(f"Unsupported storage backend: {self.storage_backend}")
 

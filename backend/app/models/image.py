@@ -69,6 +69,8 @@ class Image(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
 
+    history: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     # Source information
     source: Mapped[ImageSource] = mapped_column(
         Enum(ImageSource, values_callable=lambda x: [e.value for e in x]),

@@ -235,7 +235,10 @@ function EditPageInner() {
 
     if (galleryIds.length > 0) params.source_image_ids = galleryIds;
     if (generatedIds.length > 0) params.source_generated_ids = generatedIds;
-    if (uploadKeys.length > 0) params.source_upload_keys = uploadKeys;
+    if (uploadKeys.length > 0) {
+      params.source_upload_keys = uploadKeys;
+      params.source_upload_names = Object.fromEntries(sources.filter(source => source.type === 'upload').map(source => [source.key!, source.name || source.key!]));
+    }
 
     editMutation.mutate(params);
   };

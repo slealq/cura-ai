@@ -2282,3 +2282,31 @@ def _dispatch_pipeline_child(db, parent, image_id, user_id, *args, **kwargs):
         child.completed_at = datetime.utcnow()
         db.commit()
         raise
+
+
+@celery_app.task
+def cleanup_history_copies(keys: list[str]):
+    from app.services.image_history import remove_unused_copies
+    from app.services.storage import get_storage_service
+
+    db = SessionLocal()
+    try:
+        run_async(remove_unused_copies(db, get_storage_service(), keys))
+    finally:
+        db.close()
+
+
+@celery_app.task
+def delete_library_images(image_ids: list[int], user_id: int, job_id: int, trace_id=None, session_id=None):
+    db = SessionLocal()
+    try:
+        _update_job_status(db, job_id, JobStatus.RUNNING)
+        count = get_image_service(db, user_id).delete_images_batch(image_ids)
+        _update_job_status(db, job_id, JobStatus.COMPLETED, progress=count, result={"deleted": count})
+        return {"deleted": count}
+    except Exception as exc:
+        db.rollback()
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=str(exc))
+        raise
+    finally:
+        db.close()
