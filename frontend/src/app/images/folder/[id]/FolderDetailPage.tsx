@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import Link from 'next/link';
 import { foldersApi } from '@/lib/api';
 import ImageGrid from '@/components/ImageGrid';
+import ImageDeleteWarning from '@/components/ImageDeleteWarning';
 import { cn, useRouteParam } from '@/lib/utils';
 import type { Folder, FolderListResponse } from '@/types';
 
@@ -191,6 +192,7 @@ export default function FolderDetailPage() {
               onClick={(e) => e.stopPropagation()}
             >
               <h3 className="text-lg font-semibold">Delete Folder</h3>
+              <div hidden={!deleteWithImages}><ImageDeleteWarning folderId={folderId} /></div>
               <p className="text-sm text-muted-foreground">
                 Delete &ldquo;{folder.name}&rdquo;?
               </p>

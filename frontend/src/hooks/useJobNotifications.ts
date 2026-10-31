@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { clearDeleting } from '@/lib/deletingImages';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { jobsApi } from '@/lib/api';
@@ -25,6 +26,7 @@ const JOB_TYPE_LABELS: Record<string, string> = {
   batch_generate: 'Batch Generation',
   lora_evaluate: 'LoRA Evaluation',
   folder_delete: 'Folder Delete',
+  image_delete: 'Image Delete',
 };
 
 export function jobLabel(job: Job): string {
@@ -32,7 +34,7 @@ export function jobLabel(job: Job): string {
 }
 
 // Job types that may create/modify folders — refresh folder list on completion
-const FOLDER_AFFECTING_JOBS = new Set(['ingest', 'folder_delete']);
+const FOLDER_AFFECTING_JOBS = new Set(['ingest', 'folder_delete', 'image_delete']);
 
 // Job types that replace/update clusters — refresh cluster list on completion
 const CLUSTER_AFFECTING_JOBS = new Set(['cluster', 'summarize_cluster']);
@@ -74,6 +76,7 @@ export function useJobNotifications() {
       if (!prev || prev === job.status) continue;
 
       if (job.status === 'failed') {
+        if (job.job_type === 'image_delete') clearDeleting();
         toast.error(`${jobLabel(job)} failed`, {
           description: job.error_message || `Job #${job.id}`,
           action: {
@@ -95,6 +98,9 @@ export function useJobNotifications() {
         if (job.job_type === 'lora_train') {
           trackFunnelStep('training', 'training_complete', { jobId: job.id });
         }
+
+        // Every grid and count can include a deleted image
+        if (job.job_type === 'image_delete') queryClient.invalidateQueries();
 
         // Refresh folder list when ingest/delete jobs complete (deferred folder assignment)
         if (FOLDER_AFFECTING_JOBS.has(job.job_type)) {

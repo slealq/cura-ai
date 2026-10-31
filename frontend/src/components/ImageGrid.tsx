@@ -4,6 +4,7 @@ import LibraryThumbnail from '@/components/LibraryThumbnail';
 
 import Link from 'next/link';
 import { Suspense, useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useDeletingImages } from '@/lib/deletingImages';
 import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { Check, FileText, FolderMinus, FolderPlus, Loader2, RefreshCw, Trash2, X } from 'lucide-react';
@@ -384,7 +385,11 @@ function ImageGridContent({
       },
     });
 
-  const images = useMemo(() => data?.pages.flatMap((p) => p.items) ?? [], [data]);
+  const deleting = useDeletingImages();
+  const images = useMemo(
+    () => (data?.pages.flatMap((p) => p.items) ?? []).filter((image) => !deleting.has(image.id)),
+    [data, deleting]
+  );
   const total = data?.pages[0]?.total ?? 0;
 
   // Load the next page when the sentinel scrolls into view

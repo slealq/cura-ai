@@ -108,6 +108,7 @@ function SearchContent() {
       {selectedImage && (
         <ImageDrawer
           image={selectedImage}
+          onNavigate={setSelectedImage}
           onClose={() => setSelectedImage(null)}
         />
       )}

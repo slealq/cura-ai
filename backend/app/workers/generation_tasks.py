@@ -611,6 +611,10 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
         # Get generation params
         params = gen.generation_params or {}
 
+        from app.services.image_history import safe_snapshot
+        gen.history = safe_snapshot(db, gen)
+        db.commit()
+
         # Build loras list for provider
         loras_for_provider: list[dict] | None = None
         if "loras" in params:
@@ -926,10 +930,20 @@ def _to_data_uri(image_data: bytes, mime_type: str = "image/jpeg") -> str:
     return f"data:{mime_type};base64,{b64}"
 
 
-def _resolve_edit_sources(db: Session, gen_params: dict, user_id: int) -> list[str]:
+def _resolve_edit_sources(db: Session, gen_params: dict, user_id: int, history_inputs: list | None = None) -> list[str]:
     """Resolve source image references to data URIs for the edit provider."""
     sources = gen_params.get("sources", {})
     data_uris: list[str] = []
+
+    from app.services.image_history import input_snapshot
+    from app.services.storage import get_storage_service
+    storage = get_storage_service()
+
+    def remember(data, filename, source_key=None, uploaded=False):
+        if history_inputs is not None:
+            item = _run_async(input_snapshot(storage, user_id, data, filename, source_key, uploaded=uploaded))
+            item["label"] = f"Image {len(history_inputs) + 1}"
+            history_inputs.append(item)
 
     # Gallery images
     for img_id in sources.get("image_ids", []):
@@ -940,6 +954,7 @@ def _resolve_edit_sources(db: Session, gen_params: dict, user_id: int) -> list[s
         image_data = _run_async(image_service.get_image_data(img_id))
         if not image_data:
             raise Exception(f"Failed to load image data for {img_id}")
+        remember(image_data, image.original_filename or image.object_key, image.object_key)
         data_uris.append(_to_data_uri(image_data, image.mime_type or "image/jpeg"))
 
     # Generated images
@@ -949,6 +964,12 @@ def _resolve_edit_sources(db: Session, gen_params: dict, user_id: int) -> list[s
         if not gen_data:
             raise Exception(f"Failed to load generated image data for {gen_id}")
         gen = gen_service.get_generated_image(gen_id)
+        from app.models.image import Image
+        library = db.query(Image).filter_by(user_id=user_id, generated_image_id=gen_id).first()
+        if library is None:
+            import hashlib
+            library = db.query(Image).filter_by(user_id=user_id, file_hash=hashlib.sha256(gen_data).hexdigest()).first()
+        remember(gen_data, gen.object_key if gen else "generated.png", library.object_key if library else None)
         mime = gen.mime_type if gen else "image/png"
         data_uris.append(_to_data_uri(gen_data, mime or "image/png"))
 
@@ -962,6 +983,7 @@ def _resolve_edit_sources(db: Session, gen_params: dict, user_id: int) -> list[s
                 raise Exception(f"Failed to load uploaded source {key}")
             ext = key.rsplit(".", 1)[-1] if "." in key else "png"
             mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif"}
+            remember(file_data, sources.get("upload_names", {}).get(key, key), uploaded=True)
             data_uris.append(_to_data_uri(file_data, mime_map.get(ext, "image/png")))
 
     return data_uris
@@ -995,7 +1017,11 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
         edit_model = params.get("edit_model", DEFAULT_EDIT_MODEL)
 
         # Resolve source images to data URIs
-        image_urls = _resolve_edit_sources(db, params, user_id)
+        from app.services.image_history import safe_snapshot
+        history_inputs = []
+        image_urls = _resolve_edit_sources(db, params, user_id, history_inputs)
+        gen.history = safe_snapshot(db, gen, history_inputs)
+        db.commit()
         if not image_urls:
             raise Exception("No source images could be resolved")
 

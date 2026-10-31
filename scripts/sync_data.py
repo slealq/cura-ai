@@ -201,6 +201,14 @@ TABLE_SYNC_ORDER = [
         "natural_key_fallback": ["user_id", "created_at", "prompt"],
     },
     {
+        "table": "image_history_links",
+        "natural_key": ["result_key", "source_key"],
+        "exclude_cols": ["id"],
+        "fk_remaps": {"user_id": "users", "result_image_id": "images", "source_image_id": "images"},
+        "thumbnail_cols": [],
+        "filter_by_user": True,
+    },
+    {
         "table": "lora_evaluations",
         "natural_key": ["user_id", "created_at"],
         "exclude_cols": ["id"],
@@ -428,11 +436,6 @@ def sync_table(src_conn, dst_conn, table_def: dict, user_ids_src: list[int],
     # Get columns and detect JSON columns in destination
     all_columns = get_table_columns(src_conn, table_name)
     json_cols = get_json_columns(dst_conn, table_name)
-    sync_columns = [c for c in all_columns if c not in exclude_cols]
-
-    # For users table, we need to include some extra columns but exclude hashed_password
-    if table_name == "users":
-        sync_columns = [c for c in all_columns if c not in ["id", "hashed_password"]]
 
     # Fetch source rows
     rows = fetch_rows(src_conn, table_name, all_columns, user_ids_src, table_def)
@@ -482,9 +485,6 @@ def sync_table(src_conn, dst_conn, table_def: dict, user_ids_src: list[int],
         for col in thumbnail_cols:
             if col in sync_row:
                 sync_row[col] = translate_thumbnail_uri(sync_row.get(col), direction)
-
-        # Remap natural key FK values for lookup
-        nk_for_lookup = list(natural_key)
 
         # Serialize JSON column values (Python lists/dicts -> JSON strings)
         if json_cols:
@@ -578,6 +578,17 @@ def collect_object_keys(conn, user_ids: list[int]) -> list[str]:
         if row[0]:
             keys.add(row[0])
 
+    # JSON history columns travel with their image; copy keys are stable across environments.
+    for table in ("images", "generated_images"):
+        result = conn.execute(text(
+            f"SELECT history FROM {table} WHERE user_id IN ({placeholders}) AND history IS NOT NULL"
+        ), {f"uid_{i}": uid for i, uid in enumerate(user_ids)})
+        for (history,) in result:
+            if isinstance(history, str):
+                history = json.loads(history)
+            for item in (history or {}).get("inputs", []):
+                if item.get("copy_key"):
+                    keys.add(f"history/{item['copy_key']}")
     return sorted(keys)
 
 
@@ -629,8 +640,8 @@ def sync_files_local_to_cloud(
     dry_run: bool,
 ) -> None:
     """Upload files from local storage to Azure Blob Storage."""
-    from azure.storage.blob import BlobServiceClient, ContentSettings
     from azure.core.exceptions import HttpResponseError
+    from azure.storage.blob import BlobServiceClient, ContentSettings
 
     all_paths = []
     for key in object_keys:
@@ -693,8 +704,8 @@ def sync_files_cloud_to_local(
     dry_run: bool,
 ) -> None:
     """Download files from Azure Blob Storage to local storage."""
-    from azure.storage.blob import BlobServiceClient
     from azure.core.exceptions import HttpResponseError
+    from azure.storage.blob import BlobServiceClient
 
     all_paths = []
     for key in object_keys:

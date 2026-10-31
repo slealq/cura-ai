@@ -231,6 +231,23 @@ class GenerationService:
             params["actual_seed"] = seed
             gen.generation_params = params
 
+        if gen.history:
+            from copy import deepcopy
+
+            from sqlalchemy import func
+
+            from app.models.billing import UsageRecord
+            from app.models.cost_decision import CostDecision
+
+            history = deepcopy(gen.history)
+            history["seed"] = seed
+            cost = self.db.query(func.sum(UsageRecord.charged_cost)).join(
+                CostDecision, UsageRecord.cost_decision_id == CostDecision.id
+            ).filter(CostDecision.resource_id == generated_image_id,
+                     CostDecision.user_id == self.user_id,
+                     CostDecision.operation.in_(["generate", "edit"])).scalar()
+            history["charged_cost"] = float(cost) if cost is not None else None
+            gen.history = history
         self.db.commit()
         self.db.refresh(gen)
 
@@ -258,9 +275,17 @@ class GenerationService:
                 filename=f"{source.value}-{gen.id}.png",
                 source=source,
             )
+            from app.services.image_history import attach_history
             if image is None:
-                # Identical file is already in the library
+                if not isinstance(gen.history, dict):
+                    return None
+                image = self.db.query(Image).filter_by(
+                    user_id=gen.user_id, file_hash=self.storage.compute_file_hash(image_data)).first()
+                if image:
+                    attach_history(self.db, image, gen.history)
+                    self.db.commit()
                 return None
+            attach_history(self.db, image, gen.history)
             image.generated_image_id = gen.id
             self.db.commit()
         except Exception:

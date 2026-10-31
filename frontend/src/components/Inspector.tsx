@@ -1,5 +1,8 @@
 'use client';
 
+import ImageDeleteWarning from './ImageDeleteWarning';
+import { clearDeleting, markDeleting } from '@/lib/deletingImages';
+
 import { useMobileSheet } from '@/hooks/useMobileSheet';
 import LibraryImage from '@/components/LibraryImage';
 
@@ -241,13 +244,14 @@ export default function Inspector({
           await foldersApi.removeImages(folderId!, ids);
           break;
         case 'Delete':
+          markDeleting(ids);
           await imagesApi.batchDelete(ids);
           break;
       }
       toast.success(
         action === 'Ask Vision'
           ? 'Analysis ready in Vision'
-          : ['Add to folder', 'Remove from folder', 'Delete'].includes(action)
+          : ['Add to folder', 'Remove from folder'].includes(action)
             ? `${action} complete`
             : `${action} submitted`,
         {
@@ -259,7 +263,10 @@ export default function Inspector({
         }
       );
       await client.invalidateQueries();
-    })().catch((error: Error) => toast.error(`${action} failed: ${error.message}`, { id: notice }));
+    })().catch((error: Error) => {
+      if (action === 'Delete') clearDeleting();
+      toast.error(`${action} failed: ${error.message}`, { id: notice });
+    });
   };
   const visionModel =
     tool === 'Describe' ? providerConfig?.fal_vision_model || catalog?.defaults.vision_model : model;
@@ -428,12 +435,13 @@ export default function Inspector({
         {tool === 'Recluster library' && (
           <p>This reclusters the whole library, including images outside this selection.</p>
         )}
-        {['Add to folder', 'Remove from folder', 'Delete'].includes(tool || '') && (
+        {['Add to folder', 'Remove from folder'].includes(tool || '') && (
           <p className="text-xs text-muted-foreground">
             This operation runs in the background of this tab. The current API does not create a trackable
             Job.
           </p>
         )}
+        {tool === 'Delete' && <ImageDeleteWarning imageIds={images.map(image => image.id)} />}
         {tool === 'Delete' && (
           <p className="text-danger">
             Permanently delete {images.length} images from the library, folders and clusters? This cannot be

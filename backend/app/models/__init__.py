@@ -12,6 +12,7 @@ from app.models.cost_decision import CostDecision, DecisionStatus
 from app.models.folder import Folder, FolderImage
 from app.models.generated_image import GeneratedImage, GenerationStatus
 from app.models.image import Image, ImageMetadata, ImageSource, ImageStatus
+from app.models.image_history_link import ImageHistoryLink
 from app.models.job import Job, JobStatus, JobType
 from app.models.lora_evaluation import EvaluationPair, EvaluationStatus, LoraEvaluation
 from app.models.lora_model import LoraModel, LoraModelStatus
@@ -51,6 +52,7 @@ __all__ = [
     "GenerationStatus",
     "Image",
     "ImageMetadata",
+    "ImageHistoryLink",
     "ImageStatus",
     "ImageSource",
     "Cluster",
@@ -94,3 +96,7 @@ def _sanitize_error(target, value, oldvalue, initiator):
 
 for _model in (Image, Job, GeneratedImage, CostDecision, LoraModel, LoraEvaluation, EvaluationPair):
     _event.listen(_model.error_message, "set", _sanitize_error, retval=True)
+
+from app.models.history_cleanup import install_cleanup_hooks as _install_cleanup_hooks  # noqa: E402
+
+_install_cleanup_hooks()

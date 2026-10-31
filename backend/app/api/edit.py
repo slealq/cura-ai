@@ -32,6 +32,7 @@ class EditImageRequest(BaseModel):
     source_image_ids: list[int] | None = None
     source_generated_ids: list[int] | None = None
     source_upload_keys: list[str] | None = None
+    source_upload_names: dict[str, str] | None = None
     edit_model: str = DEFAULT_EDIT_MODEL
     image_size: dict | str | None = None
     num_images: int = Field(1, ge=1, le=9)
@@ -104,6 +105,7 @@ async def edit_images(
     if request.source_upload_keys:
         source_count += len(request.source_upload_keys)
         source_refs["upload_keys"] = request.source_upload_keys
+        source_refs["upload_names"] = request.source_upload_names or {}
 
     if source_count == 0:
         raise HTTPException(status_code=400, detail="At least one source image is required")
