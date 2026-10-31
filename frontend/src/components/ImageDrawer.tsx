@@ -343,11 +343,12 @@ export default function ImageDrawer({ image, onClose, images, onNavigate, onTool
   return (
     <>
       {/* Backdrop */}
-      <div className="fixed inset-0 bg-black/50 z-40" onClick={onClose} />
+      <div className="fixed inset-0 bg-black/50 z-40" style={{ margin: 0 }} onClick={onClose} />
 
       {/* Drawer */}
       <div
         ref={viewerRef}
+        style={{ margin: 0 }}
         role={images ? 'dialog' : undefined}
         aria-modal={images ? true : undefined}
         aria-label={images ? 'Image viewer' : undefined}

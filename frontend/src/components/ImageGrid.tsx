@@ -186,7 +186,7 @@ function Tile({
       {flag && (
         <span
           className={cn(
-            'pointer-events-none absolute right-2 top-2 rounded bg-white px-1.5 py-0.5 text-[10.5px] font-medium',
+            'pointer-events-none absolute right-2 top-2 rounded bg-background px-1.5 py-0.5 text-[10.5px] font-medium',
             flag.cls
           )}
         >

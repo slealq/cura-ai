@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { generationApi, jobsApi } from '@/lib/api';
 import {
@@ -68,6 +68,14 @@ function isModelReady(model: LoraModel): boolean {
 }
 
 function UploadLoraModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', dismiss);
+    return () => window.removeEventListener('keydown', dismiss);
+  }, [open, onClose]);
   const queryClient = useQueryClient();
   const { data: catalog } = useModelCatalog();
   const BASE_MODELS = (catalog?.training_base_models ?? []).map(m => ({ value: m.key, label: m.label }));
@@ -115,8 +123,8 @@ function UploadLoraModal({ open, onClose }: { open: boolean; onClose: () => void
 
   return (
     <>
-      <div className="fixed inset-0 bg-black/50 z-50" onClick={onClose} />
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="fixed inset-0 bg-black/50 z-50" style={{ margin: 0 }} onClick={onClose} />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ margin: 0 }}>
         <div className="bg-card rounded-xl shadow-xl max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold">Upload LoRA</h3>
