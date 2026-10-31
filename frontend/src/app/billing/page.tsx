@@ -2,15 +2,29 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { Loader2, Zap, TrendingDown, ArrowUpRight, ArrowDownRight, Sparkles, ShoppingBag, Crown, Gift, XCircle, ExternalLink } from 'lucide-react';
+import { Loader2, TrendingDown, Sparkles, ShoppingBag, Crown, XCircle, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
 import { billingApi } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
-import { cn, formatDateCompact, formatNumber } from '@/lib/utils';
+import { cn, formatDateCompact } from '@/lib/utils';
 import type { BalanceTransaction, Purchase, SparkPack, SubscriptionPlan } from '@/types';
 
 type DateRange = '7d' | '30d' | '90d' | 'all';
+
+const formatNumber = (value: number) => value.toLocaleString('en-US', { maximumFractionDigits: 2 });
+const operationName = (value: string) => ({
+  describe: 'Describe', tag: 'Tag', generate: 'Generate', edit: 'Edit',
+  expand_prompt: 'Expand prompt', embed: 'Embed', train: 'Train model',
+}[value] || value.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()));
+function transactionDescription(value: string | null) {
+  if (!value) return 'Balance adjustment';
+  const match = value.match(/^(.+?) via (.+)$/);
+  if (!match) return value;
+  const model = match[2].split('/').pop() || '';
+  return operationName(match[1]) + ' · ' + model.replace(/-/g, ' ').replace(/\b[a-z]/g, (c) => c.toUpperCase());
+}
 
 function getStartDate(range: DateRange): string | undefined {
   if (range === 'all') return undefined;
@@ -32,27 +46,27 @@ function PackCard({ pack, onBuy, loading }: { pack: SparkPack; onBuy: (id: numbe
   const totalSparks = pack.sparks_amount + pack.bonus_sparks;
   return (
     <div className={cn(
-      'relative bg-background border rounded-lg p-5 flex flex-col items-center text-center transition-shadow hover:shadow-md',
-      pack.is_featured && 'border-warning ring-1 ring-warning/30'
+      'relative bg-background border border-border rounded-lg p-4 flex flex-col items-start text-left',
+      pack.is_featured && 'border-selection bg-selection-soft'
     )}>
       {pack.is_featured && (
-        <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-warning/15 text-warning text-xs font-semibold px-3 py-0.5 rounded-full">
-          Popular
+        <span className="absolute -top-2.5 left-3 bg-selection-soft text-selection text-xs font-semibold px-3 py-0.5 rounded-full">
+          Recommended
         </span>
       )}
-      <h3 className="text-lg font-semibold mt-1">{pack.name}</h3>
-      <p className="text-3xl font-bold mt-2">{formatPrice(pack.price_cents, pack.currency)}</p>
+      <h3 className="text-sm font-semibold mt-1">{pack.name}</h3>
+      <p className="text-2xl font-mono font-medium mt-2">{formatPrice(pack.price_cents, pack.currency)}</p>
       <div className="mt-3 space-y-1">
         <p className="text-sm">
-          <span className="font-medium">{pack.sparks_amount.toLocaleString()}</span> sparks
+          <span className="font-medium">{formatNumber(pack.sparks_amount)}</span> sparks
         </p>
         {pack.bonus_sparks > 0 && (
-          <p className="text-sm text-warning font-medium">
-            +{pack.bonus_sparks.toLocaleString()} bonus
+          <p className="text-sm text-selection font-medium">
+            +{formatNumber(pack.bonus_sparks)} bonus
           </p>
         )}
         <p className="text-xs text-muted-foreground">
-          {totalSparks.toLocaleString()} total
+          {formatPrice(pack.price_cents * 1000 / totalSparks, pack.currency)} per 1k sparks
         </p>
       </div>
       <button
@@ -76,22 +90,22 @@ function PlanCard({ plan, onSubscribe, loading }: { plan: SubscriptionPlan; onSu
   const isPro = plan.name === 'Pro';
   return (
     <div className={cn(
-      'relative bg-background border rounded-lg p-5 flex flex-col items-center text-center transition-shadow hover:shadow-md',
+      'relative bg-background border border-border rounded-lg p-4 flex flex-col items-start text-left',
       isPro && 'border-selection ring-1 ring-selection/30'
     )}>
       {isPro && (
-        <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-selection text-white text-xs font-semibold px-3 py-0.5 rounded-full">
-          Best Value
+        <span className="absolute -top-2.5 left-3 bg-selection-soft text-selection text-xs font-semibold px-3 py-0.5 rounded-full">
+          Recommended
         </span>
       )}
-      <h3 className="text-lg font-semibold mt-1">{plan.name}</h3>
-      <p className="text-3xl font-bold mt-2">{formatPrice(plan.price_cents, plan.currency)}<span className="text-sm font-normal text-muted-foreground">/mo</span></p>
+      <h3 className="text-sm font-semibold mt-1">{plan.name}</h3>
+      <p className="text-2xl font-mono font-medium mt-2">{formatPrice(plan.price_cents, plan.currency)}<span className="text-sm font-normal text-muted-foreground">/mo</span></p>
       <div className="mt-3">
         <p className="text-sm">
-          <span className="font-medium">{plan.sparks_per_month.toLocaleString()}</span> sparks/month
+          <span className="font-medium">{formatNumber(plan.sparks_per_month)}</span> sparks/month
         </p>
         <p className="text-xs text-muted-foreground mt-1">
-          {formatPrice(Math.round(plan.price_cents / (plan.sparks_per_month / 1000)), plan.currency)} per 1k sparks
+          {formatPrice(plan.price_cents * 1000 / plan.sparks_per_month, plan.currency)} per 1k sparks
         </p>
       </div>
       <button
@@ -112,6 +126,7 @@ function PlanCard({ plan, onSubscribe, loading }: { plan: SubscriptionPlan; onSu
 }
 
 export default function BillingPage() {
+  const [purchaseTab, setPurchaseTab] = useState<'plans' | 'packs'>('plans');
   const [dateRange, setDateRange] = useState<DateRange>('30d');
   const [txnPage, setTxnPage] = useState(0);
   const [buyingPackId, setBuyingPackId] = useState<number | null>(null);
@@ -308,35 +323,32 @@ export default function BillingPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[880px] space-y-5">
-      <h1 className="text-xl font-semibold tracking-tight">Billing</h1>
-
-      {/* Balance Card */}
-      <div className="bg-background border rounded-lg p-8 text-center">
-        {balanceLoading ? (
-          <Loader2 className="h-6 w-6 animate-spin mx-auto" />
-        ) : balance ? (
-          <>
-            <Zap className="h-10 w-10 mx-auto text-amber-400 mb-2" />
-            <p className="text-sm text-muted-foreground mb-1">Available Sparks</p>
-            <p className={cn(
-              'text-5xl font-bold',
-              (balance.available ?? balance.balance) < 10 ? 'text-red-500' : 'text-foreground'
-            )}>
-              {formatNumber(balance.available ?? balance.balance)}
-            </p>
-            {(balance.reserved ?? 0) > 0 && (
-              <p className="text-xs text-muted-foreground mt-1">
-                {formatNumber(balance.reserved)} reserved for in-progress operations
-              </p>
-            )}
-          </>
-        ) : null}
+    <div className="mx-auto w-full max-w-[880px] flex flex-col gap-5">
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold tracking-tight">Billing</h1>
+        <a href="#add-sparks" className="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground">Add sparks</a>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="rounded-lg border border-border p-4">
+          <p className="text-xs text-muted-foreground">Available sparks</p>
+          <p className="mt-2 font-mono text-2xl">{balanceLoading ? '…' : formatNumber(balance?.available ?? balance?.balance ?? 0)}</p>
+          <p className="mt-1 font-mono text-xs text-muted-foreground">≈ {formatPrice((balance?.available ?? balance?.balance ?? 0) / 10)} USD</p>
+        </div>
+        <Link href="/jobs" className="rounded-lg border border-border p-4 hover:bg-accent">
+          <p className="text-xs text-muted-foreground">Reserved sparks</p>
+          <p className="mt-2 font-mono text-2xl">{balanceLoading ? '…' : formatNumber(balance?.reserved ?? 0)}</p>
+          <p className="mt-1 text-xs text-muted-foreground">View running jobs →</p>
+        </Link>
+        <div className="rounded-lg border border-border p-4">
+          <p className="text-xs text-muted-foreground">Spent this period · {dateRange === 'all' ? 'All time' : dateRange}</p>
+          <p className="mt-2 font-mono text-2xl">{usageLoading ? '…' : formatNumber(usage?.total_cost ?? 0)}</p>
+          <p className="mt-1 text-xs text-muted-foreground">sparks</p>
+        </div>
       </div>
 
       {/* Active Subscription Banner */}
       {!subLoading && subscription && (
-        <div className="bg-background border border-violet-300 dark:border-violet-700 rounded-lg p-5">
+        <div className="bg-background border border-border rounded-lg p-5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <Crown className="h-6 w-6 text-selection" />
@@ -348,13 +360,13 @@ export default function BillingPage() {
                   </span>
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  {subscription.sparks_per_month.toLocaleString()} sparks/month
+                  {formatNumber(subscription.sparks_per_month)} sparks/month
                   {subscription.current_period_end && (
                     <> &middot; Renews {formatDateCompact(subscription.current_period_end)}</>
                   )}
                 </p>
                 {subscription.cancel_at_period_end && (
-                  <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-1">
+                  <p className="text-xs text-warning mt-1">
                     Cancels at period end
                   </p>
                 )}
@@ -374,12 +386,25 @@ export default function BillingPage() {
         </div>
       )}
 
+      <section id="add-sparks" className="scroll-mt-4 rounded-lg border border-border bg-background p-4 sm:p-5">
+        <h2 className="mb-4 text-sm font-semibold">Add sparks</h2>
+        <div role="group" aria-label="Purchase type" className="mb-5 inline-flex gap-1 rounded-md bg-muted p-1">
+          {(['plans', 'packs'] as const).map((tab) => (
+            <button key={tab} aria-pressed={purchaseTab === tab} onClick={() => setPurchaseTab(tab)}
+              className={cn('rounded px-3 py-1.5 text-sm', purchaseTab === tab ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground')}>
+              {tab === 'plans' ? 'Monthly plans' : 'One-time packs'}
+            </button>
+          ))}
+        </div>
+      {purchaseTab === 'plans' && subscription && !['expired', 'cancelled'].includes(subscription.status) && (
+        <p className="text-sm text-muted-foreground">Your {subscription.plan_name} plan is shown above. You can add one-time packs at any time.</p>
+      )}
       {/* Subscription Plans (show if no active subscription) */}
-      {!subLoading && (!subscription || subscription.status === 'expired' || subscription.status === 'cancelled') && (
-        <section className="rounded-lg border border-border bg-background p-4 sm:p-6">
+      {purchaseTab === 'plans' && !subLoading && (!subscription || subscription.status === 'expired' || subscription.status === 'cancelled') && (
+        <div className="pt-2">
           <div className="flex items-center gap-2 mb-4">
             <Crown className="h-5 w-5 text-selection" />
-            <h2 className="text-lg font-semibold">Subscription Plans</h2>
+            <h2 className="text-sm font-semibold">Subscription Plans</h2>
           </div>
           {subPlansLoading ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
@@ -397,44 +422,19 @@ export default function BillingPage() {
           ) : (
             <p className="text-sm text-muted-foreground">No subscription plans available.</p>
           )}
-        </section>
+        </div>
       )}
 
-      {/* Redeem Promo Code */}
-      <section className="rounded-lg border border-border bg-background p-4 sm:p-6">
-        <div className="flex items-center gap-2 mb-4">
-          <Gift className="h-5 w-5 text-success" />
-          <h2 className="text-lg font-semibold">Promo Code</h2>
-        </div>
-        <div className="flex flex-wrap gap-3 max-w-md">
-          <input
-            type="text"
-            value={promoCode}
-            onChange={(e) => setPromoCode(e.target.value.toUpperCase())}
-            onKeyDown={(e) => e.key === 'Enter' && handleRedeemPromo()}
-            placeholder="Enter promo code"
-            className="flex-1 px-3 py-2 text-sm border border-input rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-          <button
-            onClick={handleRedeemPromo}
-            disabled={redeemingPromo || !promoCode.trim()}
-            className="px-4 py-2 text-sm font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 transition-colors"
-          >
-            {redeemingPromo ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Redeem'}
-          </button>
-        </div>
-      </section>
-
       {/* Buy Sparks */}
-      <section className="rounded-lg border border-border bg-background p-4 sm:p-6">
+      {purchaseTab === 'packs' && <div className="pt-2">
         <div className="flex items-center gap-2 mb-4">
-          <Sparkles className="h-5 w-5 text-amber-400" />
-          <h2 className="text-lg font-semibold">Buy Sparks</h2>
+          <Sparkles className="h-5 w-5 text-selection" />
+          <h2 className="text-sm font-semibold">Buy Sparks</h2>
         </div>
         {packsLoading ? (
           <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
         ) : packs && packs.length > 0 ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             {packs.map((pack) => (
               <PackCard
                 key={pack.id}
@@ -447,12 +447,36 @@ export default function BillingPage() {
         ) : (
           <p className="text-sm text-muted-foreground">No spark packs available.</p>
         )}
+      </div>}
+
+      {/* Redeem Promo Code */}
+      <div className="mt-4 border-t border-border pt-4">
+        <div className="flex flex-wrap gap-3 max-w-md">
+          <input
+            type="text"
+            value={promoCode}
+            onChange={(e) => setPromoCode(e.target.value.toUpperCase())}
+            onKeyDown={(e) => e.key === 'Enter' && handleRedeemPromo()}
+            aria-label="Promo code"
+            placeholder="Promo code"
+            className="flex-1 px-3 py-2 text-sm border border-input rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+          <button
+            onClick={handleRedeemPromo}
+            disabled={redeemingPromo || !promoCode.trim()}
+            className="px-4 py-2 text-sm font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 transition-colors"
+          >
+            {redeemingPromo ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Redeem'}
+          </button>
+        </div>
+      </div>
+
       </section>
 
       {/* Usage Summary */}
       <section className="rounded-lg border border-border bg-background p-4 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-          <h2 className="text-lg font-semibold">Usage Summary</h2>
+          <h2 className="text-sm font-semibold">Usage Summary</h2>
           <div className="flex gap-1 bg-muted rounded-lg p-1">
             {(['7d', '30d', '90d', 'all'] as DateRange[]).map((range) => (
               <button
@@ -479,16 +503,16 @@ export default function BillingPage() {
                   <TrendingDown className="h-4 w-4 text-muted-foreground" />
                   <p className="text-sm text-muted-foreground">Total Spent</p>
                 </div>
-                <p className="text-2xl font-bold mt-1">{formatNumber(usage.total_cost)} sparks</p>
+                <p className="text-2xl font-mono font-medium mt-1">{formatNumber(usage.total_cost)} sparks</p>
               </div>
               <div className="bg-background border rounded-lg p-4">
-                <p className="text-sm text-muted-foreground">API Calls</p>
-                <p className="text-2xl font-bold mt-1">{usage.record_count.toLocaleString()}</p>
+                <p className="text-sm text-muted-foreground">Operations</p>
+                <p className="text-2xl font-mono font-medium mt-1">{usage.record_count.toLocaleString()}</p>
               </div>
             </div>
 
             {/* By provider */}
-            {Object.keys(usage.by_provider).length > 0 && (
+            {user?.role === 'admin' && Object.keys(usage.by_provider).length > 0 && (
               <div className="bg-background border rounded-lg p-4">
                 <p className="text-sm font-medium mb-3">By Provider</p>
                 <div className="space-y-2">
@@ -497,7 +521,7 @@ export default function BillingPage() {
                     .map(([provider, cost]) => (
                       <div key={provider} className="flex items-center justify-between text-sm">
                         <span className="text-muted-foreground capitalize">{provider}</span>
-                        <span className="font-medium">{formatNumber(cost, 4)} credits</span>
+                        <span className="font-medium">{formatNumber(cost)} sparks</span>
                       </div>
                     ))}
                 </div>
@@ -515,17 +539,17 @@ export default function BillingPage() {
                     <tr className="border-b bg-muted/50">
                       <th className="text-left px-4 py-2 font-medium">Operation</th>
                       <th className="text-right px-4 py-2 font-medium">Count</th>
-                      <th className="text-right px-4 py-2 font-medium">Total Sparks</th>
-                      <th className="text-right px-4 py-2 font-medium">Avg/Call</th>
+                      <th className="text-right px-4 py-2 font-medium">Total sparks</th>
+                      <th className="text-right px-4 py-2 font-medium">Avg sparks</th>
                     </tr>
                   </thead>
                   <tbody>
                     {usage.by_operation_detail.map((row) => (
-                      <tr key={row.operation} className="border-b last:border-0">
-                        <td className="px-4 py-2">{row.operation}</td>
+                      <tr key={operationName(row.operation)} className="border-b last:border-0">
+                        <td className="px-4 py-2">{operationName(row.operation)}</td>
                         <td className="px-4 py-2 text-right font-mono">{row.count.toLocaleString()}</td>
                         <td className="px-4 py-2 text-right font-mono">{formatNumber(row.total_sparks)}</td>
-                        <td className="px-4 py-2 text-right font-mono text-muted-foreground">{row.avg_sparks.toFixed(1)}</td>
+                        <td className="px-4 py-2 text-right font-mono text-muted-foreground">{formatNumber(row.avg_sparks)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -538,7 +562,7 @@ export default function BillingPage() {
 
       {/* Transaction History */}
       <section className="rounded-lg border border-border bg-background p-4 sm:p-6">
-        <h2 className="text-lg font-semibold mb-4">Transaction History</h2>
+        <h2 className="text-sm font-semibold mb-4">Transaction History</h2>
         {txnLoading ? (
           <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
         ) : transactions && transactions.items.length > 0 ? (
@@ -548,7 +572,7 @@ export default function BillingPage() {
                 <thead>
                   <tr className="border-b bg-muted/50">
                     <th className="text-left px-4 py-3 font-medium">Date</th>
-                    <th className="text-left px-4 py-3 font-medium">Type</th>
+
                     <th className="text-left px-4 py-3 font-medium">Description</th>
                     <th className="text-right px-4 py-3 font-medium">Amount</th>
                   </tr>
@@ -557,25 +581,12 @@ export default function BillingPage() {
                   {transactions.items.map((txn: BalanceTransaction) => (
                     <tr key={txn.id} className="border-b last:border-0">
                       <td className="px-4 py-3 text-muted-foreground">{formatDateCompact(txn.created_at)}</td>
-                      <td className="px-4 py-3">
-                        <span className={cn(
-                          'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium',
-                          txn.transaction_type === 'credit'
-                            ? 'bg-success/10 text-success'
-                            : txn.transaction_type === 'debit'
-                            ? 'bg-danger/10 text-danger'
-                            : 'bg-selection-soft text-selection'
-                        )}>
-                          {txn.transaction_type === 'credit' ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
-                          {txn.transaction_type}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground truncate max-w-[300px]">{txn.description}</td>
+                      <td className="px-4 py-3 text-muted-foreground truncate max-w-[300px]">{transactionDescription(txn.description)}</td>
                       <td className={cn(
-                        'text-right px-4 py-3 font-medium',
+                        'text-right px-4 py-3 font-mono whitespace-nowrap',
                         txn.amount > 0 ? 'text-success' : 'text-danger'
                       )}>
-                        {txn.amount > 0 ? '+' : ''}{formatNumber(txn.amount, 4)}
+                        {txn.amount > 0 ? '+' : ''}{formatNumber(txn.amount)} sparks
                       </td>
                     </tr>
                   ))}
@@ -616,7 +627,7 @@ export default function BillingPage() {
       <section className="rounded-lg border border-border bg-background p-4 sm:p-6">
         <div className="flex items-center gap-2 mb-4">
           <ShoppingBag className="h-5 w-5 text-muted-foreground" />
-          <h2 className="text-lg font-semibold">Purchases</h2>
+          <h2 className="text-sm font-semibold">Purchases</h2>
         </div>
         {purchasesLoading ? (
           <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
@@ -637,7 +648,7 @@ export default function BillingPage() {
                   <tr key={p.id} className="border-b last:border-0">
                     <td className="px-4 py-3 text-muted-foreground">{formatDateCompact(p.created_at)}</td>
                     <td className="px-4 py-3 font-medium">{p.pack_name}</td>
-                    <td className="px-4 py-3 text-right font-mono">{p.sparks_amount.toLocaleString()}</td>
+                    <td className="px-4 py-3 text-right font-mono">{formatNumber(p.sparks_amount)}</td>
                     <td className="px-4 py-3 text-right font-mono">{formatPrice(p.amount_cents, p.currency)}</td>
                     <td className="px-4 py-3 text-center">
                       <span className={cn(
@@ -668,10 +679,10 @@ export default function BillingPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="bg-background border border-border rounded-lg w-full max-w-md p-6 space-y-4">
             <div>
-              <h3 className="text-lg font-semibold">Pay with PayPal</h3>
+              <h3 className="text-sm font-semibold">Pay with PayPal</h3>
               <p className="text-sm text-muted-foreground mt-1">
                 {manualPack.name} pack — {formatPrice(manualPack.price_cents, manualPack.currency)} for{' '}
-                {(manualPack.sparks_amount + manualPack.bonus_sparks).toLocaleString()} sparks
+                {formatNumber(manualPack.sparks_amount + manualPack.bonus_sparks)} sparks
               </p>
             </div>
 
