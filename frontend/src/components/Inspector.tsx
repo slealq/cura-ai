@@ -318,13 +318,15 @@ export default function Inspector({
               ))}
             <p className="text-xs text-muted-foreground">Health covers the whole library.</p>
             <div className="grid grid-cols-2 gap-2">
-              {(['Create', 'Recluster library'] as InspectorTool[]).map((t) => (
+              {(['Create', 'Edit', 'Ask Vision', 'Describe', 'Train model', 'Recluster library', 'Add to folder', ...(folderId ? ['Remove from folder'] : []), 'Delete'] as InspectorTool[]).map((t) => (
                 <button
                   key={t}
                   onClick={() => onTool(t)}
-                  className="rounded-lg border border-border p-3 hover:bg-accent"
+                  disabled={!['Create', 'Recluster library', 'Edit', 'Ask Vision'].includes(t)}
+                  className="rounded-lg border border-border p-3 text-left hover:bg-accent disabled:opacity-50"
                 >
                   {t}
+                  {!['Create', 'Recluster library'].includes(t) && <span className="mt-1 block text-xs text-muted-foreground">Select images first</span>}
                 </button>
               ))}
             </div>
@@ -377,6 +379,11 @@ export default function Inspector({
               Delete selected images…
             </button>
           </>
+        )}
+        {tool && !images.length && !['Create', 'Recluster library'].includes(tool) && (
+          <p className="rounded-md border border-border bg-chrome p-3 text-muted-foreground">
+            Select images in the grid to {tool === 'Edit' ? 'edit' : 'analyze'} them, or upload an outside image using the advanced tool below.
+          </p>
         )}
         {tool === 'Describe' && (
           <p>

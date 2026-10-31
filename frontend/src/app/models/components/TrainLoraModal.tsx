@@ -110,13 +110,13 @@ export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
   const defaultLearningRate = trainConfig?.learning_rate ?? 0.0005;
 
   return (
-    <>
+    <div className="contents">
       <div
         className="fixed inset-0 bg-black/50 z-50"
-        style={{ margin: 0 }}
+
         onClick={onClose}
       />
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ margin: 0 }}>
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div
           className="bg-card rounded-xl shadow-xl max-w-md w-full max-h-[90vh] overflow-y-auto p-6 space-y-4"
           onClick={(e) => e.stopPropagation()}
@@ -161,6 +161,6 @@ export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
           />
         </div>
       </div>
-    </>
+    </div>
   );
 }

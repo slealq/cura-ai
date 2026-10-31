@@ -341,14 +341,14 @@ export default function ImageDrawer({ image, onClose, images, onNavigate, onTool
   const tags = liveImage.metadata?.tags || [];
 
   return (
-    <>
+    <div className="contents">
       {/* Backdrop */}
-      <div className="fixed inset-0 bg-black/50 z-40" style={{ margin: 0 }} onClick={onClose} />
+      <div className="fixed inset-0 bg-black/50 z-40" onClick={onClose} />
 
       {/* Drawer */}
       <div
         ref={viewerRef}
-        style={{ margin: 0 }}
+
         role={images ? 'dialog' : undefined}
         aria-modal={images ? true : undefined}
         aria-label={images ? 'Image viewer' : undefined}
@@ -938,6 +938,6 @@ export default function ImageDrawer({ image, onClose, images, onNavigate, onTool
           </div>
         </>
       )}
-    </>
+    </div>
   );
 }

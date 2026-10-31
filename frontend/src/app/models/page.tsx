@@ -122,9 +122,9 @@ function UploadLoraModal({ open, onClose }: { open: boolean; onClose: () => void
   if (!open) return null;
 
   return (
-    <>
-      <div className="fixed inset-0 bg-black/50 z-50" style={{ margin: 0 }} onClick={onClose} />
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ margin: 0 }}>
+    <div className="contents">
+      <div className="fixed inset-0 bg-black/50 z-50" onClick={onClose} />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div className="bg-card rounded-xl shadow-xl max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold">Upload LoRA</h3>
@@ -228,7 +228,7 @@ function UploadLoraModal({ open, onClose }: { open: boolean; onClose: () => void
           </form>
         </div>
       </div>
-    </>
+    </div>
   );
 }
 
