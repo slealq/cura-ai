@@ -1763,27 +1763,70 @@ def delete_folder_with_images(self, folder_id: int, user_id: int, job_id: int, t
 
 @celery_app.task
 def cleanup_storage_files(image_files: list[dict]) -> dict:
-    """
-    Fire-and-forget task to delete image files from storage.
+    """Remove library files after commit, rechecking global physical references.
 
-    Args:
-        image_files: List of {"object_key": str, "thumbnail_uris": [str, ...]}
+    A different user's deduplicated row is also a reference. History is in a
+    separate namespace and is exclusively collected by cleanup_history_copies.
     """
+    from sqlalchemy import or_
+
+    from app.models import GeneratedImage
     from app.services.storage import get_storage_service
 
     storage = get_storage_service()
-    total_deleted = 0
-    total_failed = 0
+    db = SessionLocal()
+    deleted = failed = skipped = 0
+    try:
+        for entry in image_files:
+            key = entry["object_key"]
+            # Never accept a path escaping the library's physical namespace.
+            if key.startswith("/") or ".." in key.split("/") or key.startswith("history/"):
+                skipped += 1
+                continue
+            clauses = [Image.object_key == key]
+            if entry.get("file_hash"):
+                clauses.append(Image.file_hash == entry["file_hash"])
+            shared = db.query(Image.id).filter(or_(*clauses)).first() is not None
+            if shared:
+                skipped += 1
+            else:
+                try:
+                    deleted += int(run_async(storage.delete_file("images", key)))
+                except Exception:
+                    failed += 1
+                    logger.warning("Could not remove library original %s", key, exc_info=True)
 
-    for entry in image_files:
-        result = run_async(
-            storage.delete_image_files(entry["object_key"], entry.get("thumbnail_uris", []))
-        )
-        total_deleted += result["deleted"]
-        total_failed += result["failed"]
-
-    logger.info(f"Storage cleanup: {total_deleted} files deleted, {total_failed} failed")
-    return {"deleted": total_deleted, "failed": total_failed}
+            # Names, rather than URI strings, identify physical thumbnails:
+            # local/azure/S3 URI forms can all refer to the same stored file.
+            for uri in set(entry.get("thumbnail_uris", [])):
+                name = storage._extract_filename_from_uri(uri)
+                if not name or name in (".", ".."):
+                    skipped += 1
+                    continue
+                referenced = False
+                for model, columns in (
+                    (Image, (Image.thumbnail_uri_small, Image.thumbnail_uri_medium, Image.thumbnail_uri_large)),
+                    (GeneratedImage, (GeneratedImage.thumbnail_uri_small, GeneratedImage.thumbnail_uri_medium)),
+                ):
+                    matches = [condition for col in columns
+                               for condition in (col == name, col.endswith(f"/{name}", autoescape=True))]
+                    if db.query(model.id).filter(or_(*matches)).first() is not None:
+                        referenced = True
+                        break
+                if referenced:
+                    skipped += 1
+                    continue
+                try:
+                    # The existing S3 thumbnail writer prefixes its supplied key with images/.
+                    subdir = "images/thumbnails" if storage.storage_backend == "s3" else "thumbnails"
+                    deleted += int(run_async(storage.delete_file(subdir, name)))
+                except Exception:
+                    failed += 1
+                    logger.warning("Could not remove library thumbnail %s", name, exc_info=True)
+    finally:
+        db.close()
+    logger.info("Storage cleanup: %s deleted, %s failed, %s shared/skipped", deleted, failed, skipped)
+    return {"deleted": deleted, "failed": failed, "skipped": skipped}
 
 
 @celery_app.task

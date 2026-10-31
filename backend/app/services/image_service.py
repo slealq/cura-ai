@@ -402,8 +402,10 @@ class ImageService:
         """Delete an image and its metadata."""
         image = self.db.query(Image).filter(Image.id == image_id, Image.user_id == self.user_id).first()
         if image:
+            files = [self._storage_files(image)]
             self.db.delete(image)
             self.db.commit()
+            self._queue_file_cleanup(files)
             return True
         return False
 
@@ -413,10 +415,24 @@ class ImageService:
             Image.id.in_(image_ids), Image.user_id == self.user_id
         ).all()
         count = len(images)
+        files = [self._storage_files(image) for image in images]
         for image in images:
             self.db.delete(image)
         self.db.commit()
+        self._queue_file_cleanup(files)
         return count
+
+    @staticmethod
+    def _storage_files(image):
+        return {"object_key": image.object_key, "file_hash": image.file_hash,
+                "thumbnail_uris": [uri for uri in (image.thumbnail_uri_small, image.thumbnail_uri_medium,
+                                                   image.thumbnail_uri_large) if uri]}
+
+    @staticmethod
+    def _queue_file_cleanup(files):
+        if files:
+            from app.workers.tasks import cleanup_storage_files
+            cleanup_storage_files.delay(files)
 
 
 def get_image_service(db: Session, user_id: int) -> ImageService:
