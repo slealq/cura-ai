@@ -1,244 +1,90 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { clustersApi, jobsApi } from '@/lib/api';
-import ClusterCard from '@/components/ClusterCard';
-import ClusteringRunDialog from '@/components/ClusteringRunDialog';
-import { Loader2, Play } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import Link from 'next/link';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { clustersApi, jobsApi } from '@/lib/api';
+import ClusteringRunDialog from '@/components/ClusteringRunDialog';
+import ClusterStrip from '@/components/ClusterStrip';
+import ClusterInspector from '@/components/ClusterInspector';
 import { cn } from '@/lib/utils';
-import type { Cluster } from '@/types';
 
 const PAGE_SIZE = 20;
-
-function clusterIsComplete(c: Cluster): boolean {
-  return c.summary_title !== null && c.summary_title !== '';
-}
+const button = 'rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent disabled:opacity-40';
 
 export default function ClustersPage() {
-  const queryClient = useQueryClient();
-  const [allItems, setAllItems] = useState<Cluster[]>([]);
-  const [page, setPage] = useState(0);
-  const [showConfirm, setShowConfirm] = useState(false);
-  const [isReclustering, setIsReclustering] = useState(false);
-  const [reclusterJobId, setReclusterJobId] = useState<number | null>(null);
-
-  // Check if any loaded cluster is still waiting for summarization
-  const hasPendingSummaries = allItems.length > 0 && allItems.some((c) => !clusterIsComplete(c));
-
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['clusters', page],
-    queryFn: () => clustersApi.list({ skip: page * PAGE_SIZE, limit: PAGE_SIZE }),
-    enabled: !isReclustering,
-    // Keep polling while clusters are missing summaries
-    refetchInterval: hasPendingSummaries ? 5000 : false,
-  });
-
-  // Poll for clustering job completion
-  useQuery({
-    queryKey: ['cluster-job', reclusterJobId],
-    queryFn: () => jobsApi.get(reclusterJobId!),
-    refetchInterval: 3000,
-    enabled: reclusterJobId !== null,
-    select: (job) => {
-      if (job.status === 'completed') {
-        setIsReclustering(false);
-        setReclusterJobId(null);
-        setAllItems([]);
-        setPage(0);
-        queryClient.invalidateQueries({ queryKey: ['clusters'] });
-        toast.success('Clustering completed — summarizing clusters...');
-      } else if (job.status === 'failed') {
-        setIsReclustering(false);
-        setReclusterJobId(null);
-        setAllItems([]);
-        setPage(0);
-        queryClient.invalidateQueries({ queryKey: ['clusters'] });
-        toast.error('Clustering failed', {
-          description: job.error_message || `Job #${job.id}`,
-        });
-      }
-      return job;
-    },
-  });
-
+  const client = useQueryClient();
+  const [search, setSearch] = useState('');
+  const [term, setTerm] = useState('');
+  const [sort, setSort] = useState<'size' | 'name'>('size');
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [showRun, setShowRun] = useState(false);
+  const [jobId, setJobId] = useState<number | null>(null);
+  const [mobilePanel, setMobilePanel] = useState(false);
+  const [wide, setWide] = useState(false);
+  const sentinel = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (data) {
-      setAllItems((prev) => {
-        const updated = prev.slice(0, page * PAGE_SIZE);
-        return [...updated, ...data.items];
-      });
-    }
-  }, [data, page]);
-
-  const handleRunClustering = () => setShowConfirm(true);
-
-  const total = data?.total ?? 0;
-  const hasMore = allItems.length < total;
-
-  const loadMore = useCallback(() => {
-    setPage((p) => p + 1);
+    const media = window.matchMedia('(min-width: 1100px)');
+    const update = () => setWide(media.matches);
+    update(); media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
   }, []);
-
-  // Only show clusters that have been fully summarized
-  const readyItems = allItems.filter(clusterIsComplete);
-
-  // Separate pinned and regular clusters
-  const pinnedClusters = readyItems.filter((c) => c.is_pinned);
-  const regularClusters = readyItems.filter((c) => !c.is_pinned);
-
-  const header = (
-    <div className="flex items-center justify-between">
-      {showConfirm && (
-        <ClusteringRunDialog
-          hasClusters={(data?.total ?? 0) > 0 || allItems.length > 0}
-          onClose={() => setShowConfirm(false)}
-          onStarted={(jobId) => {
-            setShowConfirm(false);
-            setIsReclustering(true);
-            setReclusterJobId(jobId);
-            setAllItems([]);
-            toast.success('Clustering job started', {
-              action: { label: 'View Jobs', onClick: () => window.location.href = '/jobs' },
-            });
-          }}
-        />
-      )}
-      <h1 className="text-2xl font-bold">Clusters</h1>
-      <button
-        onClick={handleRunClustering}
-        disabled={isReclustering}
-        className={cn(
-          'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-          'bg-primary text-primary-foreground hover:bg-primary/90',
-          'disabled:opacity-50 disabled:cursor-not-allowed'
-        )}
-      >
-        {isReclustering ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
-        ) : (
-          <Play className="h-4 w-4" />
-        )}
-        Run Clustering
-      </button>
-    </div>
-  );
-
-  if (isReclustering) {
-    return (
-      <div className="space-y-8">
-        {header}
-        <div className="flex flex-col items-center justify-center h-64 text-center">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mb-4" />
-          <p className="text-muted-foreground">Clustering in progress...</p>
-          <p className="text-sm text-muted-foreground mt-1">
-            New clusters will appear automatically when complete
-          </p>
-        </div>
+  useEffect(() => { const timer = setTimeout(() => { setTerm(search); setSelected(new Set()); }, 200); return () => clearTimeout(timer); }, [search]);
+  const query = useInfiniteQuery({
+    queryKey: ['clusters', 'strips', term, sort],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => clustersApi.list({ skip: pageParam, limit: PAGE_SIZE, search: term, sort }),
+    getNextPageParam: last => last.skip + last.items.length < last.total ? last.skip + last.items.length : undefined,
+    enabled: jobId === null,
+    refetchInterval: query => query.state.data?.pages.some(page => page.items.some(c => !c.summary_title)) ? 5000 : false,
+  });
+  const job = useQuery({ queryKey: ['cluster-job', jobId], queryFn: () => jobsApi.get(jobId!), enabled: jobId !== null, refetchInterval: 3000 });
+  useEffect(() => {
+    if (jobId === null || !job.data || !['completed', 'failed'].includes(job.data.status)) return;
+    if (job.data.status === 'completed') toast.success('Clustering completed — summarizing clusters…');
+    else toast.error('Clustering failed', { description: job.data.error_message || `Job #${jobId}` });
+    setJobId(null); setSelected(new Set());
+    void client.invalidateQueries({ queryKey: ['clusters'] });
+  }, [job.data, jobId, client]);
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = query;
+  useEffect(() => {
+    if (!sentinel.current || !hasNextPage) return;
+    const observer = new IntersectionObserver(([entry]) => { if (entry.isIntersecting && !isFetchingNextPage) void fetchNextPage(); }, { rootMargin: '400px' });
+    observer.observe(sentinel.current);
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+  const items = query.data?.pages.flatMap(page => page.items).filter(c => !c.is_unclustered) || [];
+  const overview = query.data?.pages[0]?.overview;
+  const selection = items.filter(c => selected.has(c.id));
+  const pending = items.filter(c => !c.summary_title).length;
+  const clear = () => setSelected(new Set());
+  return <div className="flex min-w-0 items-start gap-5">
+    <main className="min-w-0 flex-1">
+      <header className="mb-4 flex flex-wrap items-center gap-2">
+        <h1 className="mr-1 text-xl font-semibold">Clusters</h1><span className="font-mono text-sm text-muted-foreground">{overview?.clusters ?? '—'}</span>
+        <input aria-label="Search clusters" type="search" placeholder="Search clusters" value={search} onChange={e => setSearch(e.target.value)} className="order-last w-full min-w-0 basis-full rounded-md border border-input px-3 py-1.5 text-sm md:order-none md:ml-auto md:w-auto md:flex-1 md:basis-auto md:max-w-52" />
+        <div className="flex rounded-md bg-muted p-0.5" role="group" aria-label="Sort clusters">{([['size', 'Largest'], ['name', 'A–Z']] as const).map(([value, label]) => <button key={value} aria-pressed={sort === value} onClick={() => setSort(value)} className={cn('rounded px-2 py-1 text-xs', sort === value && 'bg-background shadow-sm')}>{label}</button>)}</div>
+        <button className={button} onClick={() => setShowRun(true)} disabled={jobId !== null}>Recluster</button>
+        {!wide && <button className={button} onClick={() => setMobilePanel(true)}>Inspector{selection.length ? ` · ${selection.length}` : ''}</button>}
+      </header>
+      {jobId !== null ? <div className="grid h-64 place-content-center gap-3 text-center text-sm text-muted-foreground"><Loader2 className="mx-auto h-6 w-6 animate-spin" /><p>Clustering in progress…</p><p>New clusters will appear automatically when complete</p></div> : <>
+        {query.isLoading && <div className="grid h-64 place-items-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>}
+        {query.isError && <div role="alert" className="py-12 text-sm text-muted-foreground">Failed to load clusters. <button className="underline" onClick={() => query.refetch()}>Retry</button></div>}
+        {pending > 0 && <p role="status" className="mb-3 flex items-center gap-2 rounded-md bg-muted p-3 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Summarizing clusters… ({pending} remaining)</p>}
+        {!query.isLoading && !query.isError && !items.length && <div className="py-16 text-center text-sm text-muted-foreground">{term ? 'No clusters match that search.' : overview?.unclustered ? 'No grouped clusters yet. Review your unclustered images below.' : 'No clusters yet. Upload some images and run clustering to get started.'}</div>}
+        {items.map(cluster => <ClusterStrip key={cluster.id} cluster={cluster} selected={selected.has(cluster.id)} onSelect={() => setSelected(previous => { const next = new Set(previous); if (next.has(cluster.id)) next.delete(cluster.id); else next.add(cluster.id); return next; })} />)}
+        <div ref={sentinel} className="flex h-8 justify-center">{isFetchingNextPage && <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />}</div>
+        {overview?.unclustered && <Link className="flex items-center justify-between gap-3 rounded-md bg-muted px-3 py-2.5 text-sm" href={`/clusters/${overview.unclustered.id}`}><span>{overview.unclustered.size.toLocaleString()} images didn&apos;t fit any cluster</span><span className="text-muted-foreground">Review</span></Link>}
+      </>}
+    </main>
+    {(wide || mobilePanel) && <>
+      {!wide && <button aria-label="Dismiss inspector" className="fixed inset-0 z-40 bg-foreground/20" onClick={() => setMobilePanel(false)} />}
+      <div className={cn('library-inspector sticky top-4 h-[calc(100vh-120px)] w-[300px] shrink-0', !wide && 'fixed inset-0 z-50 h-full w-full bg-background sm:left-auto sm:w-[340px]')}>
+        <ClusterInspector selected={selection} overview={overview} onClear={clear} onDismiss={!wide ? () => setMobilePanel(false) : undefined} />
       </div>
-    );
-  }
-
-  if (isLoading && page === 0) {
-    return (
-      <div className="space-y-8">
-        {header}
-        <div className="flex items-center justify-center h-64">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="space-y-8">
-        {header}
-        <div className="flex items-center justify-center h-64">
-          <p className="text-muted-foreground">Failed to load clusters</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (allItems.length === 0 && !isLoading) {
-    return (
-      <div className="space-y-8">
-        {header}
-        <div className="flex flex-col items-center justify-center h-64 text-center">
-          <p className="text-muted-foreground mb-2">No clusters yet</p>
-          <p className="text-sm text-muted-foreground">
-            Upload some images and run clustering to get started
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  if (readyItems.length === 0 && hasPendingSummaries) {
-    return (
-      <div className="space-y-8">
-        {header}
-        <div className="flex flex-col items-center justify-center h-64 text-center">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mb-4" />
-          <p className="text-muted-foreground">Summarizing clusters...</p>
-          <p className="text-sm text-muted-foreground mt-1">
-            Clusters will appear as summaries complete ({allItems.length - readyItems.length} remaining)
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-8">
-      {header}
-
-      {pinnedClusters.length > 0 && (
-        <section>
-          <h2 className="text-lg font-semibold mb-4">Pinned Clusters</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            {pinnedClusters.map((cluster) => (
-              <ClusterCard key={cluster.id} cluster={cluster} />
-            ))}
-          </div>
-        </section>
-      )}
-
-      {hasPendingSummaries && (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/50 rounded-lg px-4 py-3">
-          <Loader2 className="h-4 w-4 animate-spin shrink-0" />
-          Summarizing clusters... ({allItems.length - readyItems.length} remaining)
-        </div>
-      )}
-
-      <section>
-        <h2 className="text-lg font-semibold mb-4">
-          All Clusters ({regularClusters.length})
-        </h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {regularClusters.map((cluster) => (
-            <ClusterCard key={cluster.id} cluster={cluster} />
-          ))}
-        </div>
-      </section>
-
-      {hasMore && (
-        <div className="flex justify-center pt-2">
-          <button
-            onClick={loadMore}
-            disabled={isLoading}
-            className="flex items-center gap-2 px-6 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
-          >
-            {isLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : null}
-            Load More ({total - allItems.length} remaining)
-          </button>
-        </div>
-      )}
-
-    </div>
-  );
+    </>}
+    {showRun && <ClusteringRunDialog hasClusters={(overview?.clusters || 0) > 0 || !!overview?.unclustered} onClose={() => setShowRun(false)} onStarted={id => { setShowRun(false); setJobId(id); clear(); toast.success('Clustering job started', { action: { label: 'View Jobs', onClick: () => { window.location.href = '/jobs'; } } }); }} />}
+  </div>;
 }

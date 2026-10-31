@@ -20,6 +20,7 @@ export interface QwenTrainData {
 }
 
 interface QwenTrainFormProps {
+  initialClusterId?: number;
   baseModel: 'flux-2' | 'qwen-image-2512';
   defaultSteps: number;
   defaultLearningRate: number;
@@ -31,6 +32,7 @@ interface QwenTrainFormProps {
 }
 
 export default function QwenTrainForm({
+  initialClusterId,
   baseModel,
   defaultSteps,
   defaultLearningRate,
@@ -43,9 +45,9 @@ export default function QwenTrainForm({
   const [name, setName] = useState('');
   const [triggerWord, setTriggerWord] = useState('');
   const [samplePromptsText, setSamplePromptsText] = useState('');
-  const [sourceType, setSourceType] = useState<SourceType>('folder');
+  const [sourceType, setSourceType] = useState<SourceType>(initialClusterId ? 'cluster' : 'folder');
   const [folderId, setFolderId] = useState<number | undefined>(undefined);
-  const [clusterId, setClusterId] = useState<number | undefined>(undefined);
+  const [clusterId, setClusterId] = useState<number | undefined>(initialClusterId);
   const [steps, setSteps] = useState(defaultSteps);
   const [learningRate, setLearningRate] = useState(defaultLearningRate);
   const [captionTags, setCaptionTags] = useState(true);
@@ -77,6 +79,7 @@ export default function QwenTrainForm({
   return (
     <div className="space-y-3">
       <SharedTrainFields
+        lockedClusters={!!initialClusterId}
         name={name}
         onNameChange={setName}
         sourceType={sourceType}

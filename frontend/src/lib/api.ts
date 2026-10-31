@@ -547,6 +547,8 @@ export const foldersApi = {
 // Clusters API
 export const clustersApi = {
   list: async (params?: {
+    search?: string;
+    sort?: 'size' | 'name';
     include_archived?: boolean;
     skip?: number;
     limit?: number;
@@ -612,7 +614,7 @@ export const clustersApi = {
   },
 
   exportCluster: (id: number, format: 'json' | 'zip' = 'json'): string => {
-    return `/api/clusters/${id}/export?format=${format}`;
+    return authUrl(`${apiBaseURL}/clusters/${id}/export?format=${format}`);
   },
 };
 

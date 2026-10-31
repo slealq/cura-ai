@@ -115,6 +115,13 @@ class ImageListResponse(BaseModel):
 
 
 # Cluster schemas
+class ClusterPreviewImage(BaseModel):
+    id: int
+    thumbnail_url: str
+    width: int | None
+    height: int | None
+
+
 class ClusterResponse(BaseModel):
     """Cluster response schema."""
 
@@ -130,6 +137,8 @@ class ClusterResponse(BaseModel):
     is_pinned: bool
     is_archived: bool
     cover_thumbnail_url: str | None = None
+    preview_images: list[ClusterPreviewImage] = Field(default_factory=list)
+    is_unclustered: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -137,9 +146,17 @@ class ClusterResponse(BaseModel):
         from_attributes = True
 
 
+class ClusterOverview(BaseModel):
+    clusters: int = 0
+    grouped: int = 0
+    unclustered: ClusterResponse | None = None
+    largest: list[ClusterResponse] = Field(default_factory=list)
+
+
 class ClusterListResponse(BaseModel):
     """Paginated cluster list response."""
 
+    overview: ClusterOverview = Field(default_factory=ClusterOverview)
     items: list[ClusterResponse]
     total: int
     skip: int
