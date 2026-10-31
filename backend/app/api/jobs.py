@@ -78,6 +78,9 @@ async def list_jobs(
         query = query.filter(Job.status == status)
     if image_id:
         query = query.filter(Job.image_id == image_id)
+    else:
+        # Per-image batch children are shown through their parent job.
+        query = query.filter(Job.parameters['parent_job_id'].as_integer().is_(None))
 
     total = query.count()
     jobs = query.order_by(Job.created_at.desc()).offset(skip).limit(limit).all()
