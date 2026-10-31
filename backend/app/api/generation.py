@@ -1166,7 +1166,7 @@ async def get_generated_image(gen_id: int, db: Session = Depends(get_db), curren
 
 
 @router.get("/images/{gen_id}/file")
-async def serve_generated_image(gen_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_token_param)):
+async def serve_generated_image(gen_id: int, resolve: bool = False, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_token_param)):
     """Serve generated image file."""
     from app.services.storage import get_storage_service
 
@@ -1177,7 +1177,7 @@ async def serve_generated_image(gen_id: int, db: Session = Depends(get_db), curr
 
     storage = get_storage_service()
     response = storage.get_file_response_with_filename(
-        "generated", gen.object_key, gen.mime_type or "image/png",
+        "generated", gen.object_key, gen.mime_type or "image/png", resolve=resolve,
         download_filename=gen.object_key,
     )
     if response is None:
@@ -1186,12 +1186,12 @@ async def serve_generated_image(gen_id: int, db: Session = Depends(get_db), curr
 
 
 @router.get("/thumbnails/{filename}")
-async def serve_generated_thumbnail(filename: str, current_user: User = Depends(get_current_user_from_token_param)):
+async def serve_generated_thumbnail(filename: str, resolve: bool = False, current_user: User = Depends(get_current_user_from_token_param)):
     """Serve generated image thumbnail."""
     from app.services.storage import get_storage_service
 
     storage = get_storage_service()
-    response = storage.get_file_response("generated_thumbnails", filename, "image/jpeg")
+    response = storage.get_file_response("generated_thumbnails", filename, "image/jpeg", resolve=resolve)
     if response is None:
         raise HTTPException(status_code=404, detail="Thumbnail not found")
     return response
@@ -1472,7 +1472,7 @@ async def delete_evaluation(eval_id: int, db: Session = Depends(get_db), current
 
 
 @router.get("/evaluations/{eval_id}/pairs/{pair_id}/generated-file")
-async def serve_eval_generated_image(eval_id: int, pair_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_token_param)):
+async def serve_eval_generated_image(eval_id: int, pair_id: int, resolve: bool = False, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_token_param)):
     """Serve generated image file from an evaluation pair."""
     from app.models.lora_evaluation import EvaluationPair
     from app.services.storage import get_storage_service
@@ -1486,7 +1486,7 @@ async def serve_eval_generated_image(eval_id: int, pair_id: int, db: Session = D
 
     storage = get_storage_service()
     response = storage.get_file_response_with_filename(
-        "generated", pair.generated_object_key, "image/png",
+        "generated", pair.generated_object_key, "image/png", resolve=resolve,
         download_filename=pair.generated_object_key,
     )
     if response is None:

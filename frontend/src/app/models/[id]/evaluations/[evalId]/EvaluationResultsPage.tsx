@@ -1,5 +1,7 @@
 'use client';
 
+import LibraryImage from '@/components/LibraryImage';
+
 import { useState } from 'react';
 import { useParams, usePathname } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -106,7 +108,7 @@ function PairCard({
                   className="aspect-square bg-muted rounded-lg overflow-hidden cursor-pointer relative group"
                   onClick={() => originalFullUrl && setLightboxImage(originalFullUrl)}
                 >
-                  <img src={originalThumb} alt="Original" className="w-full h-full object-cover" />
+                  <LibraryImage src={originalThumb} alt="Original" className="w-full h-full object-cover" />
                   <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
                     <Maximize2 className="h-5 w-5 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
                   </div>
@@ -132,7 +134,7 @@ function PairCard({
                   generationApi.getEvalGeneratedImageUrl(evalId, pair.id)
                 )}
               >
-                <img src={generatedThumb} alt="Generated" className="w-full h-full object-cover" />
+                <LibraryImage src={generatedThumb} alt="Generated" className="w-full h-full object-cover" />
                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
                   <Maximize2 className="h-5 w-5 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>
@@ -232,7 +234,7 @@ function PairCard({
           className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center cursor-pointer"
           onClick={() => setLightboxImage(null)}
         >
-          <img
+          <LibraryImage
             src={lightboxImage}
             alt="Full size"
             className="max-w-[90vw] max-h-[90vh] object-contain"

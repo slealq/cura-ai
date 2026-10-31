@@ -1,5 +1,7 @@
 'use client';
 
+import LibraryImage from '@/components/LibraryImage';
+
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { X, ExternalLink, RefreshCw, FolderOpen, Zap, ChevronDown, ChevronUp, Clock } from 'lucide-react';
@@ -337,7 +339,7 @@ export default function ImageDrawer({ image, onClose, images, onNavigate, onTool
     }
   };
 
-  const imageUrl = imagesApi.getImageUrl(liveImage.object_key);
+  const imageUrl = liveImage.image_url || imagesApi.getImageUrl(liveImage.object_key);
   const tags = liveImage.metadata?.tags || [];
 
   return (
@@ -361,7 +363,7 @@ export default function ImageDrawer({ image, onClose, images, onNavigate, onTool
         {images && (
           <div className="relative flex min-w-0 flex-1 flex-col bg-chrome p-4 max-md:hidden">
             <div className="flex min-h-0 flex-1 items-center justify-center">
-              <img
+              <LibraryImage
                 src={imageUrl}
                 alt={image.original_filename || ''}
                 className="max-h-[calc(100vh-120px)] max-w-full object-contain"
@@ -386,7 +388,7 @@ export default function ImageDrawer({ image, onClose, images, onNavigate, onTool
                     item.id === image.id ? 'border-selection' : 'border-transparent'
                   )}
                 >
-                  <img src={thumbnail(item)} alt="" className="h-12 w-12 rounded object-cover" />
+                  <LibraryImage src={thumbnail(item)} alt="" className="h-12 w-12 rounded object-cover" />
                 </button>
               ))}
               <button
@@ -492,7 +494,7 @@ export default function ImageDrawer({ image, onClose, images, onNavigate, onTool
                 )}
                 {/* Image */}
                 <div className={cn('rounded-lg overflow-hidden bg-muted', images && 'md:hidden')}>
-                  <img src={imageUrl} alt={liveImage.original_filename || ''} className="w-full h-auto" />
+                  <LibraryImage src={imageUrl} alt={liveImage.original_filename || ''} className="w-full h-auto" />
                 </div>
 
                 {/* Pipeline Status */}
@@ -737,7 +739,7 @@ export default function ImageDrawer({ image, onClose, images, onNavigate, onTool
                             aria-label={`View similar image ${img.id}`}
                             onClick={() => onNavigate(img)}
                           >
-                            <img
+                            <LibraryImage
                               src={thumbnail(img)}
                               alt={img.original_filename || ''}
                               className="aspect-square w-full rounded object-cover"

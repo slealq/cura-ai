@@ -533,6 +533,7 @@ async def delete_result(
 @router.get("/sources/{object_key:path}")
 async def serve_vision_source(
     object_key: str,
+    resolve: bool = False,
     current_user: User = Depends(get_current_user_from_token_param),
 ):
     """Serve an uploaded vision source image (for thumbnail display in results)."""
@@ -543,7 +544,7 @@ async def serve_vision_source(
     mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif"}
     media_type = mime_map.get(ext, "image/jpeg")
 
-    response = storage.get_file_response("generated", object_key, media_type)
+    response = storage.get_file_response("generated", object_key, media_type, resolve=resolve)
     if response is None:
         raise HTTPException(status_code=404, detail="Source image not found")
     return response

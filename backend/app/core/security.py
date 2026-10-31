@@ -14,6 +14,7 @@ from app.db.base import get_db
 logger = logging.getLogger(__name__)
 
 bearer_scheme = HTTPBearer()
+optional_bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def hash_password(password: str) -> str:
@@ -105,11 +106,13 @@ def get_current_user(
 
 def get_current_user_from_token_param(
     token: str | None = None,
+    credentials: HTTPAuthorizationCredentials | None = Depends(optional_bearer_scheme),
     db: Session = Depends(get_db),
 ):
     """FastAPI dependency for file-serving endpoints where token is passed as query param."""
     from app.models.user import User
 
+    token = credentials.credentials if credentials else token
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

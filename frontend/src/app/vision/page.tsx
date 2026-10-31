@@ -1,5 +1,7 @@
 'use client';
 
+import LibraryImage from '@/components/LibraryImage';
+
 import { Suspense, useState, useCallback, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { visionApi, settingsApi, billingApi, imagesApi, authUrl } from '@/lib/api';
@@ -319,7 +321,7 @@ function VisionPageInner() {
               <div className="relative group w-40 h-40">
                 <div className="w-full h-full rounded-lg border border-border overflow-hidden bg-muted/30">
                   {source.previewUrl ? (
-                    <img src={source.previewUrl} alt="" className="w-full h-full object-cover" />
+                    <LibraryImage src={source.previewUrl} alt="" className="w-full h-full object-cover" />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center">
                       <ImageIcon className="h-8 w-8 text-muted-foreground" />
@@ -669,7 +671,7 @@ function VisionPageInner() {
                     onClick={() => setLightboxUrl(authUrl(result.source_full_url || result.source_thumbnail_url!))}
                     className="shrink-0"
                   >
-                    <img
+                    <LibraryImage
                       src={authUrl(result.source_thumbnail_url)}
                       alt=""
                       className="h-64 max-w-96 rounded object-contain border border-border hover:ring-2 hover:ring-primary/50 transition-shadow cursor-pointer"
@@ -731,7 +733,7 @@ function VisionPageInner() {
           >
             <X className="h-6 w-6" />
           </button>
-          <img
+          <LibraryImage
             src={lightboxUrl}
             alt=""
             className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg"

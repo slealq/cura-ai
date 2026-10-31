@@ -116,18 +116,8 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Track refresh state to avoid multiple simultaneous refreshes
-let isRefreshing = false;
-let refreshSubscribers: ((token: string) => void)[] = [];
-
-function onTokenRefreshed(token: string) {
-  refreshSubscribers.forEach((cb) => cb(token));
-  refreshSubscribers = [];
-}
-
-function addRefreshSubscriber(cb: (token: string) => void) {
-  refreshSubscribers.push(cb);
-}
+// All image and JSON requests share one refresh, including failure propagation.
+let refreshPromise: Promise<string> | null = null;
 
 // Slow request threshold (ms)
 const SLOW_REQUEST_THRESHOLD = 2000;
@@ -173,44 +163,28 @@ api.interceptors.response.use(
     ) {
       originalRequest._retry = true;
 
-      if (!isRefreshing) {
-        isRefreshing = true;
-        const refreshToken = localStorage.getItem('refresh_token');
-
-        if (refreshToken) {
-          try {
-            const { data } = await axios.post<TokenResponse>(`${apiBaseURL}/auth/refresh`, {
-              refresh_token: refreshToken,
-            });
-            localStorage.setItem('access_token', data.access_token);
-            localStorage.setItem('refresh_token', data.refresh_token);
-            isRefreshing = false;
-            onTokenRefreshed(data.access_token);
-
-            originalRequest.headers.Authorization = `Bearer ${data.access_token}`;
-            return api(originalRequest);
-          } catch {
-            isRefreshing = false;
-            refreshSubscribers = [];
-            localStorage.removeItem('access_token');
-            localStorage.removeItem('refresh_token');
-            window.location.href = '/login';
-            return Promise.reject(error);
-          }
-        } else {
-          isRefreshing = false;
-          window.location.href = '/login';
-          return Promise.reject(error);
-        }
+      if (!refreshPromise) {
+        refreshPromise = (async () => {
+          const refreshToken = localStorage.getItem('refresh_token');
+          if (!refreshToken) throw new Error('Session expired');
+          const { data } = await axios.post<TokenResponse>(`${apiBaseURL}/auth/refresh`, {
+            refresh_token: refreshToken,
+          });
+          localStorage.setItem('access_token', data.access_token);
+          localStorage.setItem('refresh_token', data.refresh_token);
+          return data.access_token;
+        })().finally(() => { refreshPromise = null; });
       }
-
-      // If already refreshing, queue this request
-      return new Promise((resolve) => {
-        addRefreshSubscriber((token: string) => {
-          originalRequest.headers.Authorization = `Bearer ${token}`;
-          resolve(api(originalRequest));
-        });
-      });
+      try {
+        const token = await refreshPromise;
+        originalRequest.headers.Authorization = `Bearer ${token}`;
+        return api(originalRequest);
+      } catch (refreshError) {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
+        window.location.href = '/login';
+        return Promise.reject(refreshError);
+      }
     }
 
     // Handle 402 Insufficient Credits
@@ -238,6 +212,29 @@ export function authUrl(url: string): string {
   const fullUrl = url.startsWith('/') ? `${base}${url}` : url;
   const sep = fullUrl.includes('?') ? '&' : '?';
   return `${fullUrl}${sep}token=${token}`;
+}
+
+// Resolve through the existing authenticated route, then let <img> hit Blob
+// Storage directly. Cache per user, never per access token (which rotates).
+const imageUrls = new Map<string, { url: string; expires: number }>();
+export async function resolveImageUrl(source: string, retry = false): Promise<string> {
+  const url = new URL(source, window.location.origin);
+  const apiOrigin = new URL(process.env.NEXT_PUBLIC_API_URL || window.location.origin).origin;
+  if (!url.pathname.startsWith('/api/') || ![apiOrigin, window.location.origin].includes(url.origin)) return source;
+  const user = localStorage.getItem('access_token')?.split('.')[1] || '';
+  // Decode only for cache partitioning; authorization is always checked server-side.
+  let userId = user;
+  try { userId = JSON.parse(atob(user.replace(/-/g, '+').replace(/_/g, '/'))).sub; } catch { /* malformed tokens go to auth */ }
+  const key = `${userId}:${url.pathname}`;
+  const cached = imageUrls.get(key);
+  if (!retry && cached && cached.expires > Date.now()) return cached.url;
+  const { data } = await api.get<{ url: string | null }>(url.pathname.slice(4), { params: { resolve: true }, timeout: 15_000 });
+  const result = data.url || authUrl(url.pathname);
+  // Covers are overwritten in place; all other image filenames identify content.
+  const ttl = url.pathname.includes('/covers/') ? 240_000 : 3_000_000;
+  if (imageUrls.size > 2000) imageUrls.clear();
+  imageUrls.set(key, { url: result, expires: Date.now() + ttl });
+  return result;
 }
 
 // Images API

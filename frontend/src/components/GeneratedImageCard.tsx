@@ -1,5 +1,7 @@
 'use client';
 
+import LibraryImage from '@/components/LibraryImage';
+
 import { Loader2, AlertCircle, X, Zap, Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { GeneratedImage } from '@/types';
@@ -48,7 +50,7 @@ export default function GeneratedImageCard({
       {/* Image / Placeholder */}
       <div className="aspect-square bg-muted/30 relative">
         {image.status === 'completed' && thumbnailSrc ? (
-          <img
+          <LibraryImage
             src={thumbnailSrc}
             alt={image.prompt.slice(0, 80)}
             className="w-full h-full object-cover"

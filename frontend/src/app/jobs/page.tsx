@@ -1,5 +1,7 @@
 'use client';
 
+import LibraryImage from '@/components/LibraryImage';
+
 import { useModelCatalog } from '@/hooks/useModelCatalog';
 
 import { useState, useRef, useEffect } from 'react';
@@ -251,7 +253,7 @@ function BatchImagesPill({ job }: { job: Job }) {
                   className="flex items-center gap-2 hover:bg-muted rounded p-1 transition-colors"
                 >
                   {img.thumbnail ? (
-                    <img
+                    <LibraryImage
                       src={imagesApi.getThumbnailUrl(img.thumbnail)}
                       alt=""
                       className="h-8 w-8 rounded object-cover flex-shrink-0"

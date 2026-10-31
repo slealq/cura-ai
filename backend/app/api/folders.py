@@ -130,11 +130,12 @@ async def list_folders(
 @router.get("/covers/{filename}")
 async def serve_folder_cover(
     filename: str,
+    resolve: bool = False,
     current_user: User = Depends(get_current_user_from_token_param),
 ):
     """Serve a folder cover composite image (local storage only)."""
     storage = get_storage_service()
-    response = storage.get_file_response("folder_covers", filename)
+    response = storage.get_file_response("folder_covers", filename, resolve=resolve)
     if response is None:
         raise HTTPException(status_code=404, detail="Cover not found")
     return response
