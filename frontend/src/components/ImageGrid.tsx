@@ -131,6 +131,8 @@ function Tile({
         : NOT_DESCRIBED.has(image.status)
           ? { text: 'Not described', cls: 'text-warning' }
           : null;
+  const description = image.metadata?.description_long;
+  const tags = image.metadata?.tags?.slice(0, 4) ?? [];
 
   return (
     <div
@@ -185,6 +187,20 @@ function Tile({
         <span className="pointer-events-none absolute bottom-2 left-2 rounded bg-black/45 px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wider text-white backdrop-blur">
           {image.source}
         </span>
+      )}
+      {(description || tags.length > 0) && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 hidden bg-gradient-to-t from-black/85 via-black/60 to-transparent px-2.5 pb-2.5 pt-8 text-white opacity-0 transition-opacity group-hover:opacity-100 md:block">
+          {description && <p className="line-clamp-3 text-xs leading-snug">{description}</p>}
+          {tags.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap gap-1 overflow-hidden">
+              {tags.map((tag) => (
+                <span key={tag} className="max-w-full truncate rounded bg-white/20 px-1.5 py-0.5 text-[10.5px]">
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
       )}
       {flag && (
         <span
