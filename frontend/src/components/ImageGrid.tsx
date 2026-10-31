@@ -15,16 +15,8 @@ import DescribeAllDialog from '@/components/DescribeAllDialog';
 import { cn } from '@/lib/utils';
 import type { Image, ImageListResponse } from '@/types';
 
-type FilterKey = 'failed' | 'not_described' | 'not_clustered';
 type SourceKey = 'upload' | 'generated' | 'edited';
 type Density = 'S' | 'M' | 'L';
-
-const STATUS_FILTERS: { key: FilterKey | null; label: string }[] = [
-  { key: null, label: 'Any status' },
-  { key: 'failed', label: 'Failed' },
-  { key: 'not_described', label: 'Not described' },
-  { key: 'not_clustered', label: 'Not clustered' },
-];
 
 const SOURCE_FILTERS: { key: SourceKey | null; label: string }[] = [
   { key: null, label: 'All' },
@@ -326,7 +318,6 @@ function ImageGridContent({
 
   const inspectorVisible = wide && !inspectorHidden;
   const [openImage, setOpenImage] = useState<Image | null>(null);
-  const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [density, setDensity] = useState<Density>('M');
@@ -377,24 +368,11 @@ function ImageGridContent({
     if (!imageIdParam) hasOpenedLinked.current = null;
   }, [imageIdParam]);
 
-  const filterParams: FetchParams = (() => {
-    switch (activeFilter) {
-      case 'failed':
-        return { status: 'failed' };
-      case 'not_described':
-        return { max_status: 'tagged' };
-      case 'not_clustered':
-        return { max_status: 'embedded' };
-      default:
-        return {};
-    }
-  })();
-
   const { data, isLoading, isError, error, refetch, fetchNextPage, hasNextPage, isFetchingNextPage } =
     useInfiniteQuery({
-      queryKey: [queryKeyPrefix, activeFilter, source],
+      queryKey: [queryKeyPrefix, source],
       queryFn: ({ pageParam }) =>
-        fetchImages({ ...filterParams, ...(source ? { source } : {}), skip: pageParam, limit: PAGE_SIZE }),
+        fetchImages({ ...(source ? { source } : {}), skip: pageParam, limit: PAGE_SIZE }),
       initialPageParam: 0,
       getNextPageParam: (last, pages) => {
         const loaded = pages.reduce((n, p) => n + p.items.length, 0);
@@ -515,33 +493,7 @@ function ImageGridContent({
           {showSourceFilter && (
             <Segmented label="Source" options={SOURCE_FILTERS} value={source} onChange={changeSource} />
           )}
-          <Segmented
-            label="Status"
-            options={STATUS_FILTERS}
-            value={activeFilter}
-            onChange={(v) => {
-              setActiveFilter(v);
-              clearSelection();
-            }}
-          />
           <div className="ml-auto flex items-center gap-1.5">
-            {!folderId && activeFilter === 'failed' && total > 0 && (
-              <button
-                disabled={hasBatchRunning}
-                onClick={() => {
-                  const notice = toast.loading('Starting reprocess', {
-                    action: { label: 'View Jobs', onClick: () => router.push('/jobs') },
-                  });
-                  void jobsApi.reprocessFailed().then(() => {
-                    toast.success('Reprocessing failed images', { id: notice });
-                    queryClient.invalidateQueries({ queryKey: ['jobs'] });
-                  }).catch(() => toast.error('Failed to start reprocess', { id: notice }));
-                }}
-                className="h-7 rounded-md px-2.5 text-[12.5px] font-medium text-muted-foreground hover:bg-accent disabled:opacity-50"
-              >
-                Reprocess failed
-              </button>
-            )}
             {folderId && (
               <button
                 onClick={() => setShowDescribeAll(true)}
@@ -595,8 +547,8 @@ function ImageGridContent({
           <div className="flex h-64 flex-col items-center justify-center gap-1 text-center">
             <p className="font-medium">No images here</p>
             <p className="text-sm text-muted-foreground">
-              {activeFilter || source
-                ? 'Nothing matches these filters. Try a different source or status.'
+              {source
+                ? 'Nothing matches this filter. Try a different source.'
                 : 'Upload images or create some to start your library.'}
             </p>
           </div>
