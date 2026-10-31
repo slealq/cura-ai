@@ -326,6 +326,25 @@ export default function Inspector({
                 </div>
               ))}
             <p className="text-xs text-muted-foreground">Health covers the whole library.</p>
+            {stats && stats.failed > 0 && (
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <span className="text-danger">{stats.failed} failed</span>
+                <button
+                  onClick={() => {
+                    const notice = toast.loading('Starting reprocess', {
+                      action: { label: 'View Jobs', onClick: () => router.push('/jobs') },
+                    });
+                    void jobsApi.reprocessFailed().then(() => {
+                      toast.success('Reprocessing failed images', { id: notice });
+                      client.invalidateQueries({ queryKey: ['jobs'] });
+                    }).catch(() => toast.error('Failed to start reprocess', { id: notice }));
+                  }}
+                  className="rounded-md px-2 py-1 font-medium text-muted-foreground hover:bg-accent"
+                >
+                  Reprocess failed
+                </button>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-2">
               {(['Create', 'Edit', 'Ask Vision', 'Describe', 'Train model', 'Recluster library', 'Add to folder', ...(folderId ? ['Remove from folder'] : []), 'Delete'] as InspectorTool[]).map((t) => (
                 <button
