@@ -10,6 +10,7 @@ from app.models import Image, ImageStatus, Job, JobStatus, JobType
 from app.models.generated_image import GeneratedImage, GenerationStatus
 from app.models.user import User
 from app.schemas import BatchJobImageInfo, BatchReprocessRequest, JobListResponse, JobResponse
+from app.services.job_recovery import finish_job, reap_stale_jobs
 from app.workers.dispatch import dispatch
 from app.workers.tasks import (
     cluster_all_images,
@@ -25,12 +26,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
-def _check_no_active_batch(db: Session) -> None:
-    """Raise 409 if a BATCH_REPROCESS job is already RUNNING or PENDING."""
+def _check_no_active_batch(db: Session, user_id: int) -> None:
+    """Recover zombies, then reject overlapping batches for this user."""
+    reap_stale_jobs(db, user_id)
     active = (
         db.query(Job)
         .filter(
-            Job.job_type == JobType.BATCH_REPROCESS,
+            Job.user_id == user_id,
+            Job.job_type.in_([JobType.BATCH_REPROCESS, JobType.BATCH_DESCRIBE]),
             Job.status.in_([JobStatus.PENDING, JobStatus.RUNNING]),
         )
         .first()
@@ -66,6 +69,7 @@ async def list_jobs(
     current_user: User = Depends(get_current_user),
 ):
     """List processing jobs with optional filters."""
+    reap_stale_jobs(db, current_user.id)
     query = db.query(Job).filter(Job.user_id == current_user.id)
 
     if job_type:
@@ -100,7 +104,7 @@ async def get_job(job_id: int, db: Session = Depends(get_db), current_user: User
 @router.post("/{job_id}/cancel")
 async def cancel_job(job_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Cancel a running or pending job."""
-    job = db.query(Job).filter(Job.id == job_id, Job.user_id == current_user.id).first()
+    job = db.query(Job).filter(Job.id == job_id, Job.user_id == current_user.id).with_for_update(of=Job).first()
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -108,30 +112,16 @@ async def cancel_job(job_id: int, db: Session = Depends(get_db), current_user: U
     if job.status in [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]:
         raise HTTPException(status_code=400, detail="Job cannot be cancelled")
 
-    # Revoke Celery task (prevents re-delivery of pending tasks).
-    # For running generation tasks, the actual cancellation happens via
-    # the cancel_check callback that polls Job.status in the DB.
-    if job.celery_task_id:
-        from app.workers.celery_app import celery_app
-        celery_app.control.revoke(job.celery_task_id)
-
-    job.status = JobStatus.CANCELLED
-
-    # Clean up associated generated images that are still pending/generating
-    if job.job_type in (JobType.GENERATE_IMAGE, JobType.BATCH_GENERATE):
-        db.query(GeneratedImage).filter(
-            GeneratedImage.job_id == job_id,
-            GeneratedImage.status.in_([GenerationStatus.PENDING, GenerationStatus.GENERATING]),
-        ).update(
-            {
-                GeneratedImage.status: GenerationStatus.FAILED,
-                GeneratedImage.error_message: "Cancelled by user",
-            },
-            synchronize_session="fetch",
-        )
+    finish_job(db, job, JobStatus.CANCELLED, "Cancelled by user")
 
     db.commit()
 
+    if job.celery_task_id:
+        try:
+            from app.workers.celery_app import celery_app
+            celery_app.control.revoke(job.celery_task_id)
+        except Exception:
+            logger.warning("Job %s cancelled; broker revoke failed", job_id, exc_info=True)
     return {"status": "cancelled", "job_id": job_id}
 
 
@@ -228,7 +218,7 @@ async def trigger_batch_embed(db: Session = Depends(get_db), current_user: User 
 @router.post("/pipeline/reprocess-all")
 async def trigger_reprocess_all(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Reprocess ALL images from scratch."""
-    _check_no_active_batch(db)
+    _check_no_active_batch(db, current_user.id)
     images = db.query(Image).filter(Image.user_id == current_user.id).all()
 
     if not images:
@@ -240,6 +230,7 @@ async def trigger_reprocess_all(db: Session = Depends(get_db), current_user: Use
         job_type=JobType.BATCH_REPROCESS,
         status=JobStatus.PENDING,
         total_items=len(image_ids),
+        result={"image_ids": image_ids},
         user_id=current_user.id,
     )
     db.add(job)
@@ -261,7 +252,7 @@ async def trigger_reprocess_all(db: Session = Depends(get_db), current_user: Use
 @router.post("/pipeline/reprocess-failed")
 async def trigger_reprocess_failed(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Reprocess only FAILED images."""
-    _check_no_active_batch(db)
+    _check_no_active_batch(db, current_user.id)
     images = db.query(Image).filter(Image.status == ImageStatus.FAILED, Image.user_id == current_user.id).all()
 
     if not images:
@@ -273,6 +264,7 @@ async def trigger_reprocess_failed(db: Session = Depends(get_db), current_user: 
         job_type=JobType.BATCH_REPROCESS,
         status=JobStatus.PENDING,
         total_items=len(image_ids),
+        result={"image_ids": image_ids},
         user_id=current_user.id,
     )
     db.add(job)
@@ -296,8 +288,8 @@ async def trigger_reprocess_selected(
     request: BatchReprocessRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
 ):
     """Reprocess specific images by ID."""
-    _check_no_active_batch(db)
-    images = db.query(Image).filter(Image.id.in_(request.image_ids)).all()
+    _check_no_active_batch(db, current_user.id)
+    images = db.query(Image).filter(Image.id.in_(request.image_ids), Image.user_id == current_user.id).all()
     found_ids = {img.id for img in images}
     missing = set(request.image_ids) - found_ids
 
@@ -310,6 +302,7 @@ async def trigger_reprocess_selected(
         job_type=JobType.BATCH_REPROCESS,
         status=JobStatus.PENDING,
         total_items=len(image_ids),
+        result={"image_ids": image_ids},
         user_id=current_user.id,
     )
     db.add(job)
@@ -389,7 +382,7 @@ async def retry_job(job_id: int, db: Session = Depends(get_db), current_user: Us
         task = dispatch(describe_image, job.image_id, user_id, job_id=new_job.id)
     elif job.job_type == JobType.EMBED and job.image_id:
         task = dispatch(embed_image, job.image_id, user_id, job_id=new_job.id)
-    elif job.job_type == JobType.FULL_PIPELINE and job.image_id:
+    elif job.job_type in (JobType.FULL_PIPELINE, JobType.REPROCESS) and job.image_id:
         task = dispatch(process_image_pipeline, job.image_id, user_id, job_id=new_job.id)
     elif job.job_type == JobType.CLUSTER:
         task = dispatch(cluster_all_images, user_id, job_id=new_job.id)

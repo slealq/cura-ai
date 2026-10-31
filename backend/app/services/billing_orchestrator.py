@@ -82,6 +82,11 @@ class BillingOrchestrator:
         call is skipped — the caller is responsible for holding a
         pipeline-level reservation instead.
         """
+        if job_id:
+            from app.models import Job, JobStatus
+            job = self.db.query(Job).filter(Job.id == job_id).with_for_update(of=Job).populate_existing().first()
+            if job and job.status in (JobStatus.CANCELLED, JobStatus.FAILED):
+                raise RuntimeError("Job was cancelled or its worker lease expired")
         # Check existing by idempotency_key
         if idempotency_key:
             existing = (
@@ -264,9 +269,12 @@ class BillingOrchestrator:
         Creates a UsageRecord, optionally debits balance, and updates
         the decision status.
         """
-        decision = self.db.query(CostDecision).filter(CostDecision.id == decision_id).first()
+        decision = self.db.query(CostDecision).filter(CostDecision.id == decision_id).with_for_update().populate_existing().first()
         if not decision:
             raise ValueError(f"CostDecision {decision_id} not found")
+
+        if decision.status in (DecisionStatus.CANCELLED.value, DecisionStatus.FAILED.value):
+            raise RuntimeError("Billing decision was cancelled or failed; reservation already released")
 
         # --- Idempotency: return existing UsageRecord if already recorded ---
         existing_record = (
@@ -437,8 +445,8 @@ class BillingOrchestrator:
 
     def fail_decision(self, decision_id: int, error_message: str) -> None:
         """Mark a decision as failed and release any reservation."""
-        decision = self.db.query(CostDecision).filter(CostDecision.id == decision_id).first()
-        if decision:
+        decision = self.db.query(CostDecision).filter(CostDecision.id == decision_id).with_for_update().populate_existing().first()
+        if decision and decision.status == DecisionStatus.PENDING.value:
             reserved = decision.reserved_sparks or 0
             if reserved > 0:
                 svc = BillingService(self.db, self.user_id)
@@ -463,8 +471,8 @@ class BillingOrchestrator:
 
     def cancel_decision(self, decision_id: int) -> None:
         """Mark a decision as cancelled and release any reservation."""
-        decision = self.db.query(CostDecision).filter(CostDecision.id == decision_id).first()
-        if decision:
+        decision = self.db.query(CostDecision).filter(CostDecision.id == decision_id).with_for_update().populate_existing().first()
+        if decision and decision.status == DecisionStatus.PENDING.value:
             reserved = decision.reserved_sparks or 0
             if reserved > 0:
                 svc = BillingService(self.db, self.user_id)

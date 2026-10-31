@@ -498,6 +498,23 @@ function ImageGridContent({
             }}
           />
           <div className="ml-auto flex items-center gap-1.5">
+            {!folderId && activeFilter === 'failed' && total > 0 && (
+              <button
+                disabled={hasBatchRunning}
+                onClick={() => {
+                  const notice = toast.loading('Starting reprocess', {
+                    action: { label: 'View Jobs', onClick: () => router.push('/jobs') },
+                  });
+                  void jobsApi.reprocessFailed().then(() => {
+                    toast.success('Reprocessing failed images', { id: notice });
+                    queryClient.invalidateQueries({ queryKey: ['jobs'] });
+                  }).catch(() => toast.error('Failed to start reprocess', { id: notice }));
+                }}
+                className="h-7 rounded-md px-2.5 text-[12.5px] font-medium text-muted-foreground hover:bg-accent disabled:opacity-50"
+              >
+                Reprocess failed
+              </button>
+            )}
             {folderId && (
               <button
                 onClick={() => setShowDescribeAll(true)}

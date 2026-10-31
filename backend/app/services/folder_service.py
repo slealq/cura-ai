@@ -212,7 +212,13 @@ class FolderService:
         elif max_status:
             max_rank = STATUS_ORDER.get(max_status, 6)
             eligible = [s for s, rank in STATUS_ORDER.items() if rank <= max_rank]
-            query = query.filter(Image.status.in_(eligible))
+            # Failed is not an ordered stage. Include failures only when the
+            # requested next stage is actually missing from persisted metadata.
+            from app.models import ImageMetadata
+            missing = (~Image.image_metadata.has(ImageMetadata.description_long.isnot(None)))
+            if max_status == ImageStatus.EMBEDDED:
+                missing = Image.status == ImageStatus.FAILED
+            query = query.filter(Image.status.in_(eligible) | ((Image.status == ImageStatus.FAILED) & missing))
         return query.order_by(FolderImage.added_at.desc()).offset(skip).limit(limit).all()
 
     def count_folder_images(
@@ -236,7 +242,13 @@ class FolderService:
         elif max_status:
             max_rank = STATUS_ORDER.get(max_status, 6)
             eligible = [s for s, rank in STATUS_ORDER.items() if rank <= max_rank]
-            query = query.filter(Image.status.in_(eligible))
+            # Failed is not an ordered stage. Include failures only when the
+            # requested next stage is actually missing from persisted metadata.
+            from app.models import ImageMetadata
+            missing = (~Image.image_metadata.has(ImageMetadata.description_long.isnot(None)))
+            if max_status == ImageStatus.EMBEDDED:
+                missing = Image.status == ImageStatus.FAILED
+            query = query.filter(Image.status.in_(eligible) | ((Image.status == ImageStatus.FAILED) & missing))
         return query.scalar() or 0
 
     def get_folder_image_ids(self, folder_id: int) -> list[int]:

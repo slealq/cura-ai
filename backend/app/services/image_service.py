@@ -233,7 +233,13 @@ class ImageService:
         elif max_status:
             max_rank = STATUS_ORDER.get(max_status, 6)
             eligible = [s for s, rank in STATUS_ORDER.items() if rank <= max_rank]
-            query = query.filter(Image.status.in_(eligible))
+            # Failed is not an ordered stage. Include failures only when the
+            # requested next stage is actually missing from persisted metadata.
+            from app.models import ImageMetadata
+            missing = (~Image.image_metadata.has(ImageMetadata.description_long.isnot(None)))
+            if max_status == ImageStatus.EMBEDDED:
+                missing = Image.status == ImageStatus.FAILED
+            query = query.filter(Image.status.in_(eligible) | ((Image.status == ImageStatus.FAILED) & missing))
         if source:
             query = query.filter(Image.source == source)
         if in_folder is not None:
@@ -273,9 +279,12 @@ class ImageService:
         image = self.db.query(Image).filter(Image.id == image_id, Image.user_id == self.user_id).first()
         if image:
             image.status = status
-            if error_message:
-                image.error_message = error_message
+            if status == ImageStatus.FAILED:
+                from app.services.pipeline_errors import readable_error
+                image.error_message = readable_error(error_message)
                 image.retry_count += 1
+            else:
+                image.error_message = None
             self.db.commit()
             self.db.refresh(image)
         return image
@@ -367,7 +376,13 @@ class ImageService:
         elif max_status:
             max_rank = STATUS_ORDER.get(max_status, 6)
             eligible = [s for s, rank in STATUS_ORDER.items() if rank <= max_rank]
-            query = query.filter(Image.status.in_(eligible))
+            # Failed is not an ordered stage. Include failures only when the
+            # requested next stage is actually missing from persisted metadata.
+            from app.models import ImageMetadata
+            missing = (~Image.image_metadata.has(ImageMetadata.description_long.isnot(None)))
+            if max_status == ImageStatus.EMBEDDED:
+                missing = Image.status == ImageStatus.FAILED
+            query = query.filter(Image.status.in_(eligible) | ((Image.status == ImageStatus.FAILED) & missing))
         if in_folder is not None:
             folder_subq = self.db.query(FolderImage.image_id).distinct().subquery()
             if in_folder:

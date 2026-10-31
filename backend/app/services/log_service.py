@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db.base import SessionLocal
 from app.models.pipeline_log import LogCategory, LogLevel, PipelineLog
+from app.services.pipeline_errors import readable_error, safe_details
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +109,7 @@ def write_log(
             user_id=effective_user_id,
             level=level,
             category=category,
-            message=message,
+            message=readable_error(message),
             image_id=effective_image_id,
             job_id=job_id,
             task_name=task_name,
@@ -119,7 +120,7 @@ def write_log(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             success=success,
-            extra=extra,
+            extra=safe_details(extra),
             trace_id=get_trace_id(),
         )
         db.add(entry)
@@ -127,7 +128,7 @@ def write_log(
 
         # Bridge to Sentry Logs with structured attributes
         _emit_sentry_log(
-            level, message, entry.id, category, task_name, provider, model,
+            level, entry.message, entry.id, category, task_name, provider, model,
             operation, duration_ms, input_tokens, output_tokens, success,
             effective_user_id, job_id, effective_image_id,
         )

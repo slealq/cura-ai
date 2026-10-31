@@ -25,7 +25,6 @@ from app.services.billing_context import (
 )
 from app.services.billing_decorator import billable
 from app.services.billing_service import (
-    BillingService,
     InsufficientBalanceError,
     ZeroCostEstimateError,
     finalize_job_billing,
@@ -34,6 +33,7 @@ from app.services.cluster_service import get_cluster_service
 from app.services.clustering import get_clustering_service
 from app.services.image_service import get_image_service
 from app.services.log_service import write_log
+from app.services.pipeline_errors import readable_error
 from app.services.settings_service import (
     compose_description_prompt,
     compose_tag_prompt,
@@ -50,14 +50,8 @@ _thread_local = threading.local()
 
 
 def _unwrap_error(e: Exception) -> str:
-    """Extract a readable error message, unwrapping RetryError if needed."""
-    # tenacity wraps the real exception in RetryError
-    if hasattr(e, 'last_attempt'):
-        try:
-            e.last_attempt.result()
-        except Exception as inner:
-            return str(inner)
-    return str(e)
+    """Extract a bounded error without inline image payloads."""
+    return readable_error(e)
 
 
 def get_db() -> Session:
@@ -114,8 +108,10 @@ def _update_job_status(db: Session, job_id: int | None, status: JobStatus, **kwa
     """Helper to update job status fields."""
     if not job_id:
         return
-    job = db.query(Job).filter(Job.id == job_id).first()
+    job = db.query(Job).filter(Job.id == job_id).populate_existing().first()
     if not job:
+        return
+    if job.status in (JobStatus.CANCELLED, JobStatus.FAILED):
         return
     job.status = status
     if status == JobStatus.RUNNING:
@@ -188,7 +184,7 @@ def _assign_folder_on_completion(db: Session, job: Job):
             folder_service.generate_cover_composite(folder_id)
             logger.info(f"Deferred folder assignment: added {len(all_upload_ids)} images to folder {folder_id} for job {job.id}")
     except Exception as e:
-        logger.error(f"Failed deferred folder assignment for job {job.id}: {e}")
+        logger.error(f"Failed deferred folder assignment for job {job.id}: {_unwrap_error(e)}")
         try:
             db.rollback()
         except Exception:
@@ -277,7 +273,7 @@ def _finish_ingest_job_item(db: Session, job_id: int | None, *, failed: bool):
         # Deferred folder assignment — only after all images are ingested
         _assign_folder_on_completion(db, job)
     except Exception as e:
-        logger.error(f"Failed to finalize ingest job {job_id}: {e}")
+        logger.error(f"Failed to finalize ingest job {job_id}: {_unwrap_error(e)}")
 
 
 @celery_app.task(bind=True)
@@ -341,6 +337,8 @@ def process_ingest(self, image_id: int, user_id: int, job_id: int | None = None,
         return {"status": "success", "image_id": image_id, "width": width, "height": height}
 
     except Exception as e:
+        # A failed SQL transaction must be rolled back before recording failure.
+        db.rollback()
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
         logger.error(f"Failed to process ingest for image {image_id}: {err_msg}")
@@ -571,12 +569,16 @@ def tag_image(
         return {"status": "success", "image_id": image_id, "tags": result.tags}
 
     except InsufficientBalanceError:
+        image_service.update_status(image_id, ImageStatus.FAILED, "Insufficient credits")
         _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
         return {"status": "error", "message": "Insufficient credits"}
     except ZeroCostEstimateError as e:
-        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
-        return {"status": "error", "message": f"Billing config error: {e}"}
+        image_service.update_status(image_id, ImageStatus.FAILED, f"Billing config error: {_unwrap_error(e)}")
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {_unwrap_error(e)}")
+        return {"status": "error", "message": f"Billing config error: {_unwrap_error(e)}"}
     except Exception as e:
+        # A failed SQL transaction must be rolled back before recording failure.
+        db.rollback()
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
         logger.error(f"Failed to tag image {image_id}: {err_msg}")
@@ -663,12 +665,16 @@ def describe_image(
         return {"status": "success", "image_id": image_id}
 
     except InsufficientBalanceError:
+        image_service.update_status(image_id, ImageStatus.FAILED, "Insufficient credits")
         _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
         return {"status": "error", "message": "Insufficient credits"}
     except ZeroCostEstimateError as e:
-        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
-        return {"status": "error", "message": f"Billing config error: {e}"}
+        image_service.update_status(image_id, ImageStatus.FAILED, f"Billing config error: {_unwrap_error(e)}")
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {_unwrap_error(e)}")
+        return {"status": "error", "message": f"Billing config error: {_unwrap_error(e)}"}
     except Exception as e:
+        # A failed SQL transaction must be rolled back before recording failure.
+        db.rollback()
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
         logger.error(f"Failed to describe image {image_id}: {err_msg}")
@@ -745,15 +751,19 @@ def embed_image(self, image_id: int, user_id: int, job_id: int | None = None, tr
         return {"status": "success", "image_id": image_id, "dimensions": result.dimensions}
 
     except InsufficientBalanceError:
+        image_service.update_status(image_id, ImageStatus.FAILED, "Insufficient credits")
         _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
         return {"status": "error", "message": "Insufficient credits"}
     except ZeroCostEstimateError as e:
-        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
-        return {"status": "error", "message": f"Billing config error: {e}"}
+        image_service.update_status(image_id, ImageStatus.FAILED, f"Billing config error: {_unwrap_error(e)}")
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {_unwrap_error(e)}")
+        return {"status": "error", "message": f"Billing config error: {_unwrap_error(e)}"}
     except Exception as e:
+        # A failed SQL transaction must be rolled back before recording failure.
+        db.rollback()
         elapsed = (time.monotonic() - task_start) * 1000
-        logger.error(f"Failed to embed image {image_id}: {e}")
-        write_log(category=LogCategory.TASK, message=f"Task embed_image failed for image {image_id}: {e}",
+        logger.error(f"Failed to embed image {image_id}: {_unwrap_error(e)}")
+        write_log(category=LogCategory.TASK, message=f"Task embed_image failed for image {image_id}: {_unwrap_error(e)}",
                   level=LogLevel.ERROR, task_name="embed_image", image_id=image_id, job_id=job_id,
                   duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)}, user_id=user_id)
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=_unwrap_error(e))
@@ -830,7 +840,7 @@ def tag_and_describe_image(
         }
 
     except Exception as e:
-        logger.error(f"Failed to process image {image_id}: {e}")
+        logger.error(f"Failed to process image {image_id}: {_unwrap_error(e)}")
         image_service.update_status(image_id, ImageStatus.FAILED, _unwrap_error(e))
         raise
     finally:
@@ -869,6 +879,7 @@ def cluster_all_images(self, user_id: int, job_id: int | None = None, trace_id: 
 
         if len(images) < 2:
             logger.warning("Not enough images for clustering")
+            _update_job_status(db, job_id, JobStatus.COMPLETED, result={"skipped": "Not enough images or embeddings"})
             return {"status": "skipped", "message": "Not enough images for clustering"}
 
         # Build embeddings matrix
@@ -881,6 +892,7 @@ def cluster_all_images(self, user_id: int, job_id: int | None = None, trace_id: 
                 image_ids.append(image.id)
 
         if len(embeddings) < 2:
+            _update_job_status(db, job_id, JobStatus.COMPLETED, result={"skipped": "Not enough images or embeddings"})
             return {"status": "skipped", "message": "Not enough embeddings for clustering"}
 
         embeddings_array = np.array(embeddings)
@@ -943,16 +955,18 @@ def cluster_all_images(self, user_id: int, job_id: int | None = None, trace_id: 
         }
 
     except Exception as e:
+        # A failed SQL transaction must be rolled back before recording failure.
+        db.rollback()
         elapsed = (time.monotonic() - task_start) * 1000
-        logger.error(f"Clustering failed: {e}")
-        write_log(category=LogCategory.TASK, message=f"Task cluster_all_images failed: {e}",
+        logger.error(f"Clustering failed: {_unwrap_error(e)}")
+        write_log(category=LogCategory.TASK, message=f"Task cluster_all_images failed: {_unwrap_error(e)}",
                   level=LogLevel.ERROR, task_name="cluster_all_images", job_id=job_id,
                   duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)}, user_id=user_id)
         if job_id:
             job = db.query(Job).filter(Job.id == job_id).first()
             if job:
                 job.status = JobStatus.FAILED
-                job.error_message = str(e)
+                job.error_message = _unwrap_error(e)
                 db.commit()
         raise
     finally:
@@ -1037,9 +1051,11 @@ def summarize_cluster(self, cluster_id: int, user_id: int, job_id: int | None = 
         }
 
     except Exception as e:
+        # A failed SQL transaction must be rolled back before recording failure.
+        db.rollback()
         elapsed = (time.monotonic() - task_start) * 1000
-        logger.error(f"Failed to summarize cluster {cluster_id}: {e}")
-        write_log(category=LogCategory.TASK, message=f"Task summarize_cluster failed for cluster {cluster_id}: {e}",
+        logger.error(f"Failed to summarize cluster {cluster_id}: {_unwrap_error(e)}")
+        write_log(category=LogCategory.TASK, message=f"Task summarize_cluster failed for cluster {cluster_id}: {_unwrap_error(e)}",
                   level=LogLevel.ERROR, task_name="summarize_cluster",
                   duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)}, user_id=user_id)
         raise
@@ -1094,7 +1110,7 @@ def summarize_clusters(self, cluster_ids: list[int], user_id: int, job_id: int |
             job = db.query(Job).filter(Job.id == job_id).first()
             if job:
                 job.status = JobStatus.FAILED
-                job.error_message = str(e)
+                job.error_message = _unwrap_error(e)
                 db.commit()
         raise
     finally:
@@ -1128,6 +1144,7 @@ def process_image_pipeline(
         set_billing_deferred(True)
     db = get_db()
     image_filename = None
+    image_service = get_image_service(db, user_id)
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
 
@@ -1159,75 +1176,10 @@ def process_image_pipeline(
         tagger = get_tagger(model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_tag)
         trace_id = get_trace_id()
 
-        # --- Pipeline-level reservation ---
-        # Compute total estimated sparks (tag + describe + embed) and reserve
-        # once upfront, so the user sees a single combined deduction.
+        # Each operation owns a persisted CostDecision reservation. A worker
+        # restart must never lose an in-memory pipeline-wide reservation.
         describer = get_describer(model=model, db=db, user_id=user_id, temperature=temperature, max_tokens_override=max_tokens_describe)
         embedder = get_embedder(db=db, user_id=user_id)
-
-        from app.services.cost_calculator import (
-            estimate_operation_tokens,
-            resolve_catalog_model,
-        )
-        from app.services.cost_calculator import (
-            estimate_sparks as _estimate_sparks,
-        )
-
-        pipeline_reserved = 0
-        try:
-            _tag_prov, _tag_model, _tag_op = resolve_catalog_model(
-                "fal", tagger.get_model_name(), "tag",
-            )
-            _desc_prov, _desc_model, _desc_op = resolve_catalog_model(
-                "fal", describer.get_model_name(), "describe",
-            )
-            _emb_prov, _emb_model, _emb_op = resolve_catalog_model(
-                "openai", embedder.get_model_name(), "embed",
-            )
-
-            tag_in, tag_out = estimate_operation_tokens(
-                _tag_prov, _tag_model, _tag_op,
-                image_width=image.width, image_height=image.height,
-                prompt_text=tag_prompt,
-            )
-            desc_in, desc_out = estimate_operation_tokens(
-                _desc_prov, _desc_model, _desc_op,
-                image_width=image.width, image_height=image.height,
-                prompt_text=description_prompt,
-            )
-            emb_in, emb_out = estimate_operation_tokens(
-                _emb_prov, _emb_model, _emb_op,
-            )
-
-            import math as _math
-
-            tag_sparks, _ = _estimate_sparks(db, _tag_prov, _tag_model, _tag_op, tag_in, tag_out)
-            desc_sparks, _ = _estimate_sparks(db, _desc_prov, _desc_model, _desc_op, desc_in, desc_out)
-            emb_sparks, _ = _estimate_sparks(db, _emb_prov, _emb_model, _emb_op, emb_in, emb_out)
-
-            total_est_dec = (tag_sparks or 0) + (desc_sparks or 0) + (emb_sparks or 0)
-            total_est = int(_math.ceil(total_est_dec))
-            if total_est > 0:
-                svc = BillingService(db, user_id)
-                if not svc.reserve_sparks(total_est):
-                    raise InsufficientBalanceError(
-                        f"User {user_id} has insufficient credits "
-                        f"(need ~{total_est} sparks for pipeline)"
-                    )
-                pipeline_reserved = total_est
-                logger.info(
-                    "PIPELINE_RESERVE | user=%s image=%s total=%d (tag=%s desc=%s emb=%s)",
-                    user_id, image_id, total_est, tag_sparks, desc_sparks, emb_sparks,
-                )
-        except InsufficientBalanceError:
-            raise
-        except Exception as est_err:
-            # If estimation fails, fall back to per-operation reservations
-            logger.warning(
-                "PIPELINE_RESERVE failed, falling back to per-op: %s", est_err,
-            )
-
-        _skip_res = pipeline_reserved > 0
 
         with billable(
             db, user_id, operation="tag",
@@ -1236,7 +1188,6 @@ def process_image_pipeline(
             image_id=image_id, job_id=job_id,
             image_width=image.width, image_height=image.height,
             prompt_text=tag_prompt,
-            skip_reservation=_skip_res,
         ) as b_tag:
             if b_tag.skipped:
                 logger.info("Duplicate tag detected for image %s, skipping", image_id)
@@ -1247,6 +1198,13 @@ def process_image_pipeline(
                 tag_result = b_tag.call(run_async, tagger.tag_image(image_data, image.mime_type, tag_prompt))
                 tagging_duration_ms = round((time.monotonic() - tag_start) * 1000)
 
+        # Preserve successful stages even if a later provider fails.
+        image_service.save_metadata(
+            image_id=image_id, tags=tag_result.tags, tagging_model=tag_result.model,
+            tagging_prompt_version=tag_result.prompt_version, tag_prompt_text=tag_prompt,
+            tagged_at=datetime.utcnow(), tagging_duration_ms=tagging_duration_ms,
+        )
+
         # Describe
         with billable(
             db, user_id, operation="describe",
@@ -1255,7 +1213,6 @@ def process_image_pipeline(
             image_id=image_id, job_id=job_id,
             image_width=image.width, image_height=image.height,
             prompt_text=description_prompt,
-            skip_reservation=_skip_res,
         ) as b_desc:
             if b_desc.skipped:
                 logger.info("Duplicate describe detected for image %s, skipping", image_id)
@@ -1265,6 +1222,12 @@ def process_image_pipeline(
                 desc_start = time.monotonic()
                 description_result = b_desc.call(run_async, describer.describe_image(image_data, image.mime_type, description_prompt))
                 caption_duration_ms = round((time.monotonic() - desc_start) * 1000)
+
+        image_service.save_metadata(
+            image_id=image_id, description_long=description_result.description,
+            caption_model=description_result.model, description_prompt_text=description_prompt,
+            described_at=datetime.utcnow(), caption_duration_ms=caption_duration_ms,
+        )
 
         # Build text for embedding
         text_parts = []
@@ -1281,7 +1244,6 @@ def process_image_pipeline(
             image_id=image_id, job_id=job_id,
             tags=tag_result.tags,
             description=description_result.description,
-            skip_reservation=_skip_res,
         ) as b_embed:
             if b_embed.skipped:
                 logger.info("Duplicate embed detected for image %s, skipping", image_id)
@@ -1328,12 +1290,16 @@ def process_image_pipeline(
         }
 
     except InsufficientBalanceError:
+        image_service.update_status(image_id, ImageStatus.FAILED, "Insufficient credits")
         _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
         return {"status": "error", "message": "Insufficient credits"}
     except ZeroCostEstimateError as e:
-        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
-        return {"status": "error", "message": f"Billing config error: {e}"}
+        image_service.update_status(image_id, ImageStatus.FAILED, f"Billing config error: {_unwrap_error(e)}")
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {_unwrap_error(e)}")
+        return {"status": "error", "message": f"Billing config error: {_unwrap_error(e)}"}
     except Exception as e:
+        # A failed SQL transaction must be rolled back before recording failure.
+        db.rollback()
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
         logger.error(f"Pipeline failed for image {image_id}: {err_msg}")
@@ -1344,15 +1310,6 @@ def process_image_pipeline(
         image_service.update_status(image_id, ImageStatus.FAILED, _unwrap_error(e))
         raise
     finally:
-        # Release pipeline-level reservation before finalizing
-        if pipeline_reserved > 0:
-            try:
-                svc = BillingService(db, user_id)
-                svc.release_reservation(pipeline_reserved)
-                logger.info("PIPELINE_RELEASE | user=%s image=%s released=%d", user_id, image_id, pipeline_reserved)
-            except Exception:
-                logger.warning("Failed to release pipeline reservation", exc_info=True)
-
         # Finalize billing: aggregate deferred usage records into one debit
         if job_id:
             try:
@@ -1408,7 +1365,7 @@ def run_full_pipeline(self, job_id: int, user_id: int, trace_id: str | None = No
                 dispatch(process_image_pipeline, image.id, user_id)
                 processed += 1
             except Exception as e:
-                logger.error(f"Failed to queue image {image.id}: {e}")
+                logger.error(f"Failed to queue image {image.id}: {_unwrap_error(e)}")
                 failed += 1
 
             if job:
@@ -1438,16 +1395,18 @@ def run_full_pipeline(self, job_id: int, user_id: int, trace_id: str | None = No
         }
 
     except Exception as e:
+        # A failed SQL transaction must be rolled back before recording failure.
+        db.rollback()
         elapsed = (time.monotonic() - task_start) * 1000
-        logger.error(f"Full pipeline failed: {e}")
-        write_log(category=LogCategory.TASK, message=f"Task run_full_pipeline failed: {e}",
+        logger.error(f"Full pipeline failed: {_unwrap_error(e)}")
+        write_log(category=LogCategory.TASK, message=f"Task run_full_pipeline failed: {_unwrap_error(e)}",
                   level=LogLevel.ERROR, task_name="run_full_pipeline", job_id=job_id,
                   duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)}, user_id=user_id)
         if job_id:
             job = db.query(Job).filter(Job.id == job_id).first()
             if job:
                 job.status = JobStatus.FAILED
-                job.error_message = str(e)
+                job.error_message = _unwrap_error(e)
                 db.commit()
         raise
     finally:
@@ -1473,7 +1432,7 @@ def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int], t
         job = db.query(Job).filter(Job.id == job_id).first()
 
         # Check if this job was already cancelled (e.g. user cancelled while we were re-delivered)
-        if job and job.status == JobStatus.CANCELLED:
+        if job and job.status in (JobStatus.CANCELLED, JobStatus.FAILED):
             logger.info(f"Batch reprocess job {job_id} already cancelled, skipping")
             return {"status": "cancelled", "total": len(image_ids)}
 
@@ -1501,10 +1460,11 @@ def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int], t
             for image_id in image_ids:
                 try:
                     image_service.update_status(image_id, ImageStatus.INGESTED)
-                    dispatch(process_image_pipeline, image_id, user_id)
+                    _dispatch_pipeline_child(db, job, image_id, user_id)
                     queued += 1
                 except Exception as e:
-                    logger.error(f"Failed to queue reprocess for image {image_id}: {e}")
+                    logger.error(f"Failed to queue reprocess for image {image_id}: {_unwrap_error(e)}")
+                    image_service.update_status(image_id, ImageStatus.FAILED, _unwrap_error(e))
 
             # Mark dispatched BEFORE polling so re-delivery skips Phase 1
             if job:
@@ -1518,7 +1478,7 @@ def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int], t
             # Re-check if job was cancelled during polling
             db.expire_all()
             job = db.query(Job).filter(Job.id == job_id).first()
-            if job and job.status == JobStatus.CANCELLED:
+            if job and job.status in (JobStatus.CANCELLED, JobStatus.FAILED):
                 logger.info(f"Batch reprocess job {job_id} cancelled during polling")
                 return {"status": "cancelled", "total": len(image_ids)}
 
@@ -1576,15 +1536,17 @@ def run_batch_reprocess(self, job_id: int, user_id: int, image_ids: list[int], t
         return {"status": "success", "total": len(image_ids), "succeeded": succeeded, "failed": failed_count}
 
     except Exception as e:
+        # A failed SQL transaction must be rolled back before recording failure.
+        db.rollback()
         elapsed = (time.monotonic() - task_start) * 1000
-        logger.error(f"Batch reprocess failed: {e}")
-        write_log(category=LogCategory.TASK, message=f"Task run_batch_reprocess failed: {e}",
+        logger.error(f"Batch reprocess failed: {_unwrap_error(e)}")
+        write_log(category=LogCategory.TASK, message=f"Task run_batch_reprocess failed: {_unwrap_error(e)}",
                   level=LogLevel.ERROR, task_name="run_batch_reprocess", job_id=job_id,
                   duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)}, user_id=user_id)
         job = db.query(Job).filter(Job.id == job_id).first()
         if job:
             job.status = JobStatus.FAILED
-            job.error_message = str(e)
+            job.error_message = _unwrap_error(e)
             db.commit()
         raise
     finally:
@@ -1614,7 +1576,7 @@ def run_batch_describe(
     try:
         job = db.query(Job).filter(Job.id == job_id).first()
 
-        if job and job.status == JobStatus.CANCELLED:
+        if job and job.status in (JobStatus.CANCELLED, JobStatus.FAILED):
             logger.info(f"Batch describe job {job_id} already cancelled, skipping")
             return {"status": "cancelled", "total": len(image_ids)}
 
@@ -1639,16 +1601,16 @@ def run_batch_describe(
             for image_id in image_ids:
                 try:
                     image_service.update_status(image_id, ImageStatus.INGESTED)
-                    dispatch(
-                        process_image_pipeline,
-                        image_id, user_id, tag_prompt, description_prompt,
+                    _dispatch_pipeline_child(
+                        db, job, image_id, user_id, tag_prompt, description_prompt,
                         model=model,
                         temperature=temperature, max_tokens_tag=max_tokens_tag,
                         max_tokens_describe=max_tokens_describe,
                     )
                     queued += 1
                 except Exception as e:
-                    logger.error(f"Failed to queue describe for image {image_id}: {e}")
+                    logger.error(f"Failed to queue describe for image {image_id}: {_unwrap_error(e)}")
+                    image_service.update_status(image_id, ImageStatus.FAILED, _unwrap_error(e))
 
             if job:
                 job.result = {"image_ids": image_ids, "dispatched": True, "queued": queued}
@@ -1660,7 +1622,7 @@ def run_batch_describe(
         while True:
             db.expire_all()
             job = db.query(Job).filter(Job.id == job_id).first()
-            if job and job.status == JobStatus.CANCELLED:
+            if job and job.status in (JobStatus.CANCELLED, JobStatus.FAILED):
                 logger.info(f"Batch describe job {job_id} cancelled during polling")
                 return {"status": "cancelled", "total": len(image_ids)}
 
@@ -1718,15 +1680,17 @@ def run_batch_describe(
         return {"status": "success", "total": len(image_ids), "succeeded": succeeded, "failed": failed_count}
 
     except Exception as e:
+        # A failed SQL transaction must be rolled back before recording failure.
+        db.rollback()
         elapsed = (time.monotonic() - task_start) * 1000
-        logger.error(f"Batch describe failed: {e}")
-        write_log(category=LogCategory.TASK, message=f"Task run_batch_describe failed: {e}",
+        logger.error(f"Batch describe failed: {_unwrap_error(e)}")
+        write_log(category=LogCategory.TASK, message=f"Task run_batch_describe failed: {_unwrap_error(e)}",
                   level=LogLevel.ERROR, task_name="run_batch_describe", job_id=job_id,
                   duration_ms=round(elapsed, 1), extra={"error": _unwrap_error(e)}, user_id=user_id)
         job = db.query(Job).filter(Job.id == job_id).first()
         if job:
             job.status = JobStatus.FAILED
-            job.error_message = str(e)
+            job.error_message = _unwrap_error(e)
             db.commit()
         raise
     finally:
@@ -1781,6 +1745,8 @@ def delete_folder_with_images(self, folder_id: int, user_id: int, job_id: int, t
         return {"status": "success", "images_deleted": result["images_deleted"]}
 
     except Exception as e:
+        # A failed SQL transaction must be rolled back before recording failure.
+        db.rollback()
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
         logger.error(f"Failed to delete folder {folder_id}: {err_msg}")
@@ -1909,6 +1875,7 @@ def fail_stuck_generation_jobs():
                     ),
                 ),
             )
+            .with_for_update(of=Job, skip_locked=True)
             .all()
         )
         for job in stuck_jobs:
@@ -1949,6 +1916,8 @@ def fail_stuck_generation_jobs():
                     CostDecision.status == DecisionStatus.PENDING.value,
                     CostDecision.reserved_sparks > 0,
                 )
+                .with_for_update()
+                .populate_existing()
                 .all()
             )
             for decision in pending_decisions:
@@ -2030,7 +1999,7 @@ def monitor_queue_health():
                 queue_depths[queue_name] = r.llen(queue_name)
             r.close()
         except Exception as e:
-            logger.warning(f"Failed to read queue depths from Redis: {e}")
+            logger.warning(f"Failed to read queue depths from Redis: {_unwrap_error(e)}")
 
         # Oldest pending job age
         oldest_pending_age_s = None
@@ -2044,7 +2013,7 @@ def monitor_queue_health():
             if oldest_pending and oldest_pending.created_at:
                 oldest_pending_age_s = (datetime.utcnow() - oldest_pending.created_at).total_seconds()
         except Exception as e:
-            logger.warning(f"Failed to query oldest pending job: {e}")
+            logger.warning(f"Failed to query oldest pending job: {_unwrap_error(e)}")
 
         # Completion rate (last hour)
         completion_rate = None
@@ -2065,7 +2034,7 @@ def monitor_queue_health():
             total = completed + failed
             completion_rate = round(completed / total, 3) if total > 0 else None
         except Exception as e:
-            logger.warning(f"Failed to compute completion rate: {e}")
+            logger.warning(f"Failed to compute completion rate: {_unwrap_error(e)}")
 
         logger.info(
             "Queue health check",
@@ -2292,3 +2261,24 @@ def reconcile_payments():
         db.rollback()
     finally:
         db.close()
+
+
+def _dispatch_pipeline_child(db, parent, image_id, user_id, *args, **kwargs):
+    """Persist batch child ownership before sending its task."""
+    from app.models import JobType
+
+    child = Job(user_id=user_id, image_id=image_id, job_type=JobType.REPROCESS,
+                status=JobStatus.PENDING, total_items=1,
+                parameters={"parent_job_id": parent.id})
+    db.add(child)
+    db.commit()
+    try:
+        task = dispatch(process_image_pipeline, image_id, user_id, *args, job_id=child.id, **kwargs)
+        child.celery_task_id = task.id
+        db.commit()
+    except Exception as error:
+        child.status = JobStatus.FAILED
+        child.error_message = _unwrap_error(error)
+        child.completed_at = datetime.utcnow()
+        db.commit()
+        raise

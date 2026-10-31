@@ -2,7 +2,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -11,6 +11,7 @@ from app.db.base import get_db
 from app.models.pipeline_log import LogCategory, LogLevel, PipelineLog
 from app.models.user import User
 from app.services.log_service import cleanup_old_logs, query_logs
+from app.services.pipeline_errors import readable_error, safe_details
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/logs", tags=["logs"])
@@ -33,6 +34,16 @@ class LogEntryResponse(BaseModel):
     success: bool | None
     extra: dict | None
     created_at: str
+
+    @field_validator("message")
+    @classmethod
+    def safe_message(cls, value):
+        return readable_error(value)
+
+    @field_validator("extra")
+    @classmethod
+    def safe_extra(cls, value):
+        return safe_details(value)
 
     class Config:
         from_attributes = True

@@ -36,6 +36,7 @@ from app.services.generation_service import get_generation_service
 from app.services.image_service import get_image_service
 from app.services.log_service import write_log
 from app.services.model_catalog import DEFAULT_EDIT_MODEL
+from app.services.pipeline_errors import readable_error
 from app.workers.celery_app import celery_app
 from app.workers.dispatch import dispatch
 from app.workers.tasks import run_async as _run_async
@@ -52,8 +53,10 @@ def _update_job_status(db: Session, job_id: int | None, status: JobStatus, **kwa
     """Helper to update job status fields."""
     if not job_id:
         return
-    job = db.query(Job).filter(Job.id == job_id).first()
+    job = db.query(Job).filter(Job.id == job_id).populate_existing().first()
     if not job:
+        return
+    if job.status in (JobStatus.CANCELLED, JobStatus.FAILED):
         return
     job.status = status
     if status == JobStatus.RUNNING:
@@ -72,13 +75,8 @@ def _update_job_status(db: Session, job_id: int | None, status: JobStatus, **kwa
 
 
 def _unwrap_error(e: Exception) -> str:
-    """Extract a readable error message."""
-    if hasattr(e, 'last_attempt'):
-        try:
-            e.last_attempt.result()
-        except Exception as inner:
-            return str(inner)
-    return str(e)
+    """Extract a bounded error without inline image payloads."""
+    return readable_error(e)
 
 
 def _init_task_context(user_id, job_id=None, trace_id=None, session_id=None):
@@ -545,11 +543,13 @@ def train_lora(self, lora_model_id: int, job_id: int | None = None, user_id: int
         gen_service.update_lora_status(lora_model_id, LoraModelStatus.FAILED, "Insufficient credits")
         return {"status": "error", "message": "Insufficient credits"}
     except ZeroCostEstimateError as e:
-        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {_unwrap_error(e)}")
         gen_service = get_generation_service(db, user_id)
-        gen_service.update_lora_status(lora_model_id, LoraModelStatus.FAILED, f"Billing config error: {e}")
-        return {"status": "error", "message": f"Billing config error: {e}"}
+        gen_service.update_lora_status(lora_model_id, LoraModelStatus.FAILED, f"Billing config error: {_unwrap_error(e)}")
+        return {"status": "error", "message": f"Billing config error: {_unwrap_error(e)}"}
     except Exception as e:
+        # A failed SQL transaction must be rolled back before recording failure.
+        db.rollback()
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
         if _train_billing_ctx is not None:
@@ -715,13 +715,13 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
             db.commit()
         return {"status": "error", "message": "Insufficient credits"}
     except ZeroCostEstimateError as e:
-        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {_unwrap_error(e)}")
         gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
         if gen:
             gen.status = GenerationStatus.FAILED
-            gen.error_message = f"Billing config error: {e}"
+            gen.error_message = f"Billing config error: {_unwrap_error(e)}"
             db.commit()
-        return {"status": "error", "message": f"Billing config error: {e}"}
+        return {"status": "error", "message": f"Billing config error: {_unwrap_error(e)}"}
     except GenerationCancelledError:
         elapsed = (time.monotonic() - task_start) * 1000
         logger.info(f"Generation cancelled for generated_image {generated_image_id}")
@@ -743,6 +743,8 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
             db.commit()
         return {"status": "cancelled", "generated_image_id": generated_image_id}
     except Exception as e:
+        # A failed SQL transaction must be rolled back before recording failure.
+        db.rollback()
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
         logger.error(f"Failed to generate image {generated_image_id}: {err_msg}")
@@ -884,6 +886,8 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
         return {"status": "success", "total": len(generated_image_ids), "succeeded": succeeded, "failed": failed_count}
 
     except Exception as e:
+        # A failed SQL transaction must be rolled back before recording failure.
+        db.rollback()
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
         logger.error(f"Batch generate failed: {err_msg}")
@@ -1076,13 +1080,13 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
             db.commit()
         return {"status": "error", "message": "Insufficient credits"}
     except ZeroCostEstimateError as e:
-        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {_unwrap_error(e)}")
         gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
         if gen:
             gen.status = GenerationStatus.FAILED
-            gen.error_message = f"Billing config error: {e}"
+            gen.error_message = f"Billing config error: {_unwrap_error(e)}"
             db.commit()
-        return {"status": "error", "message": f"Billing config error: {e}"}
+        return {"status": "error", "message": f"Billing config error: {_unwrap_error(e)}"}
     except GenerationCancelledError:
         elapsed = (time.monotonic() - task_start) * 1000
         logger.info(f"Edit cancelled for generated_image {generated_image_id}")
@@ -1103,6 +1107,8 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
             db.commit()
         return {"status": "cancelled", "generated_image_id": generated_image_id}
     except Exception as e:
+        # A failed SQL transaction must be rolled back before recording failure.
+        db.rollback()
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
         logger.error(f"Failed to edit image {generated_image_id}: {err_msg}")
@@ -1226,6 +1232,8 @@ def batch_edit(self, generated_image_ids: list[int], job_id: int | None = None, 
         return {"status": "success", "total": len(generated_image_ids), "succeeded": succeeded, "failed": failed_count}
 
     except Exception as e:
+        # A failed SQL transaction must be rolled back before recording failure.
+        db.rollback()
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
         logger.error(f"Batch edit failed: {err_msg}")
@@ -1507,7 +1515,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                             )
                             embedding_sim = _normalize_embedding_similarity(raw_sim)
                     except Exception as e:
-                        logger.warning(f"Embedding similarity failed for pair {pair.id}: {e}")
+                        logger.warning(f"Embedding similarity failed for pair {pair.id}: {_unwrap_error(e)}")
 
                 # Vision AI evaluation
                 if evaluator and "vision_eval" in metrics_enabled:
@@ -1535,7 +1543,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                                     "detail_preservation": eval_result.detail_preservation,
                                 }
                     except Exception as e:
-                        logger.warning(f"Vision eval failed for pair {pair.id}: {e}")
+                        logger.warning(f"Vision eval failed for pair {pair.id}: {_unwrap_error(e)}")
 
                 # Compute combined pair_score
                 scores = []
@@ -1767,7 +1775,7 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
                         ),
                     )
             except Exception as e:
-                logger.warning(f"Assessment summary generation failed: {e}")
+                logger.warning(f"Assessment summary generation failed: {_unwrap_error(e)}")
                 # Fallback: concatenate
                 assessments = [p.vision_assessment for p in completed if p.vision_assessment]
                 assessment_summary = " | ".join(assessments) if assessments else None
@@ -1827,11 +1835,13 @@ def evaluate_lora(self, evaluation_id: int, job_id: int | None = None, user_id: 
         eval_service.update_evaluation_status(evaluation_id, EvaluationStatus.FAILED, error_message="Insufficient credits")
         return {"status": "error", "message": "Insufficient credits"}
     except ZeroCostEstimateError as e:
-        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {e}")
+        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {_unwrap_error(e)}")
         eval_service = get_evaluation_service(db, user_id)
-        eval_service.update_evaluation_status(evaluation_id, EvaluationStatus.FAILED, error_message=f"Billing config error: {e}")
-        return {"status": "error", "message": f"Billing config error: {e}"}
+        eval_service.update_evaluation_status(evaluation_id, EvaluationStatus.FAILED, error_message=f"Billing config error: {_unwrap_error(e)}")
+        return {"status": "error", "message": f"Billing config error: {_unwrap_error(e)}"}
     except Exception as e:
+        # A failed SQL transaction must be rolled back before recording failure.
+        db.rollback()
         elapsed = (time.monotonic() - task_start) * 1000
         err_msg = _unwrap_error(e)
         logger.error(f"Failed to evaluate LoRA (evaluation {evaluation_id}): {err_msg}")
