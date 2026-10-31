@@ -2,7 +2,9 @@
 from datetime import datetime
 from typing import Any  # noqa: F401
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, field_validator
+
+from app.services.pipeline_errors import readable_error
 
 
 # Image schemas
@@ -66,6 +68,7 @@ class ImageResponse(BaseModel):
     file_size: int | None
     mime_type: str | None
     status: str
+    error_message: str | None = None
     thumbnail_uri_small: str | None
     thumbnail_uri_medium: str | None
     thumbnail_uri_large: str | None
@@ -91,6 +94,11 @@ class ImageResponse(BaseModel):
         if storage.storage_backend == "azure":
             return storage._generate_sas_url(f"images/{self.object_key}")
         return f"/api/images/files/{self.object_key}"
+
+    @field_validator("error_message")
+    @classmethod
+    def safe_error_message(cls, value):
+        return readable_error(value) if value is not None else None
 
     class Config:
         from_attributes = True
@@ -177,6 +185,11 @@ class JobResponse(BaseModel):
     image_filename: str | None = None
     image_thumbnail: str | None = None
     charged_cost: float | None = None
+
+    @field_validator("error_message")
+    @classmethod
+    def safe_error_message(cls, value):
+        return readable_error(value) if value is not None else None
 
     class Config:
         from_attributes = True

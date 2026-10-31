@@ -80,3 +80,17 @@ __all__ = [
     "UserRole",
     "VisionResult",
 ]
+
+
+# Apply at assignment so every worker/service stores bounded, readable failures.
+from sqlalchemy import event as _event  # noqa: E402
+
+from app.services.pipeline_errors import readable_error as _readable_error  # noqa: E402
+
+
+def _sanitize_error(target, value, oldvalue, initiator):
+    return _readable_error(value) if value is not None else None
+
+
+for _model in (Image, Job, GeneratedImage, CostDecision, LoraModel, LoraEvaluation, EvaluationPair):
+    _event.listen(_model.error_message, "set", _sanitize_error, retval=True)

@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
 )
+from sqlalchemy.dialects.postgresql import ENUM as PG_ENUM
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -32,6 +33,28 @@ class ClusteringMethod(str, enum.Enum):
     GRAPH = "graph"
 
 
+class _LegacyMethodValues:
+    """Read legacy lowercase values while retaining the native enum/write format."""
+
+    def _object_value_for_elem(self, elem):
+        if isinstance(elem, str) and elem.upper() in ClusteringMethod.__members__:
+            elem = elem.upper()
+        return super()._object_value_for_elem(elem)
+
+
+class _LegacyPostgresEnum(_LegacyMethodValues, PG_ENUM):
+    pass
+
+
+class LegacyClusteringEnum(_LegacyMethodValues, Enum):
+    def adapt(self, cls, **kw):
+        # PostgreSQL substitutes its native ENUM implementation at execution
+        # time; preserve compatible decoding in that implementation as well.
+        if cls is PG_ENUM:
+            cls = _LegacyPostgresEnum
+        return super().adapt(cls, **kw)
+
+
 class Cluster(Base):
     """Cluster model representing a group of similar design images."""
 
@@ -41,7 +64,7 @@ class Cluster(Base):
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
 
     # Clustering metadata
-    method: Mapped[ClusteringMethod] = mapped_column(Enum(ClusteringMethod), nullable=False)
+    method: Mapped[ClusteringMethod] = mapped_column(LegacyClusteringEnum(ClusteringMethod), nullable=False)
     run_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
 
     # Cluster properties

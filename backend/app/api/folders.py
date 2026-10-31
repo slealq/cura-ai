@@ -314,7 +314,10 @@ async def describe_folder(
     current_user: User = Depends(get_current_user),
 ):
     """Describe all images in a folder with custom prompts and model."""
+    from app.api.jobs import _check_no_active_batch
+
     require_language_model(request.model)
+    _check_no_active_batch(db, current_user.id)
     folder_service = get_folder_service(db, current_user.id)
     folder = folder_service.get_folder(folder_id)
     if not folder:

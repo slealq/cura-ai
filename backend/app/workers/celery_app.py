@@ -24,6 +24,7 @@ _backend_ssl = {"ssl_cert_reqs": ssl.CERT_REQUIRED} if settings.celery_result_ba
 
 celery_app = Celery(
     "design_pipeline",
+    task_cls="app.workers.job_task:JobTask",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
     include=[
@@ -302,3 +303,16 @@ def log_stuck_training_jobs(sender, **kwargs):
         logger.error(f"Failed to check stuck training jobs on startup: {e}")
     finally:
         db.close()
+
+
+@worker_ready.connect
+def recover_expired_jobs(sender, **kwargs):
+    """Recover lost tasks on restart, including deployments without Beat."""
+    from app.db.base import SessionLocal
+    from app.services.job_recovery import reap_stale_jobs
+
+    try:
+        with SessionLocal() as db:
+            reap_stale_jobs(db)
+    except Exception:
+        logger.warning("Startup job recovery failed", exc_info=True)

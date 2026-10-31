@@ -49,6 +49,8 @@ def test_cluster_method_enum_binds_and_deserializes_member_names():
 
     assert enum_type.bind_processor(dialect)(ClusteringMethod.HDBSCAN) == "HDBSCAN"
     assert enum_type.result_processor(dialect, None)("HDBSCAN") is ClusteringMethod.HDBSCAN
+    assert enum_type.result_processor(dialect, None)("hdbscan") is ClusteringMethod.HDBSCAN
+    assert enum_type.dialect_impl(dialect).result_processor(dialect, None)("hdbscan") is ClusteringMethod.HDBSCAN
     assert ClusteringMethod["HDBSCAN"] is ClusteringMethod.HDBSCAN
     with pytest.raises(ValueError):
         ClusteringMethod("HDBSCAN")

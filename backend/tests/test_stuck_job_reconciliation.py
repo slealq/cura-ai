@@ -17,6 +17,8 @@ from app.workers import tasks as tasks_module
 def _query_returning(rows):
     query = Mock()
     query.filter.return_value = query
+    query.with_for_update.return_value = query
+    query.populate_existing.return_value = query
     query.all.return_value = rows
     return query
 
