@@ -31,6 +31,7 @@ export interface ProcessingCostResponse {
 
 export interface Image {
   thumbnail_url?: string | null;
+  thumbnail_urls?: Record<string, string>;
   image_url?: string;
   error_message?: string | null;
   id: number;

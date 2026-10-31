@@ -1,6 +1,6 @@
 'use client';
 
-import LibraryImage from '@/components/LibraryImage';
+import LibraryThumbnail from '@/components/LibraryThumbnail';
 
 import type { Image } from '@/types';
 import { imagesApi } from '@/lib/api';
@@ -49,8 +49,8 @@ export default function ImageCard({
       )}
     >
       {thumbnailUrl ? (
-        <LibraryImage
-          src={thumbnailUrl}
+        <LibraryThumbnail
+          image={image}
           alt={image.original_filename || ''}
           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
         />
