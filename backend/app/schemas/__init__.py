@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Any  # noqa: F401
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 # Image schemas
@@ -72,6 +72,25 @@ class ImageResponse(BaseModel):
     created_at: datetime
     ingested_at: datetime | None
     metadata: ImageMetadataResponse | None = Field(default=None, validation_alias="image_metadata")
+
+    @computed_field
+    @property
+    def thumbnail_url(self) -> str | None:
+        from app.services.storage import get_storage_service
+
+        return get_storage_service().generate_thumbnail_sas_url(
+            self.thumbnail_uri_medium or self.thumbnail_uri_small
+        )
+
+    @computed_field
+    @property
+    def image_url(self) -> str:
+        from app.services.storage import get_storage_service
+
+        storage = get_storage_service()
+        if storage.storage_backend == "azure":
+            return storage._generate_sas_url(f"images/{self.object_key}")
+        return f"/api/images/files/{self.object_key}"
 
     class Config:
         from_attributes = True

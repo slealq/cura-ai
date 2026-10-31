@@ -1,5 +1,7 @@
 'use client';
 
+import LibraryImage from '@/components/LibraryImage';
+
 import type { Image } from '@/types';
 import { imagesApi } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -25,9 +27,9 @@ export default function ImageCard({
   onSelect,
   score,
 }: ImageCardProps) {
-  const thumbnailUrl = image.thumbnail_uri_medium
+  const thumbnailUrl = image.thumbnail_url || (image.thumbnail_uri_medium
     ? imagesApi.getThumbnailUrl(image.thumbnail_uri_medium.split('/').pop()!)
-    : null;
+    : null);
 
   const handleClick = () => {
     if (selectable && onSelect) {
@@ -47,7 +49,7 @@ export default function ImageCard({
       )}
     >
       {thumbnailUrl ? (
-        <img
+        <LibraryImage
           src={thumbnailUrl}
           alt={image.original_filename || ''}
           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"

@@ -1,5 +1,7 @@
 'use client';
 
+import LibraryImage from '@/components/LibraryImage';
+
 import Link from 'next/link';
 import { Pin, Image as ImageIcon } from 'lucide-react';
 import type { Cluster } from '@/types';
@@ -26,7 +28,7 @@ export default function ClusterCard({ cluster }: ClusterCardProps) {
         {/* Cover Image */}
         <div className="aspect-video bg-muted relative">
           {coverSrc ? (
-            <img
+            <LibraryImage
               src={coverSrc}
               alt=""
               loading="lazy"

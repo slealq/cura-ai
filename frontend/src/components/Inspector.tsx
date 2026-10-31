@@ -1,5 +1,7 @@
 'use client';
 
+import LibraryImage from '@/components/LibraryImage';
+
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -32,6 +34,7 @@ export type InspectorTool =
   | 'Delete'
   | 'Create';
 export const thumbnail = (image: Image) => {
+  if (image.thumbnail_url) return image.thumbnail_url;
   const uri = image.thumbnail_uri_small || image.thumbnail_uri_medium;
   return uri ? imagesApi.getThumbnailUrl(uri.split('/').pop()!) : imagesApi.getImageUrl(image.object_key);
 };
@@ -333,7 +336,7 @@ export default function Inspector({
         {!!images.length && (
           <div className="flex items-center gap-1">
             {images.slice(0, 6).map((image) => (
-              <img
+              <LibraryImage
                 key={image.id}
                 src={thumbnail(image)}
                 alt="Selected image"

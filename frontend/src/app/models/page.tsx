@@ -1,5 +1,7 @@
 'use client';
 
+import LibraryImage from '@/components/LibraryImage';
+
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { generationApi, jobsApi } from '@/lib/api';
@@ -274,7 +276,7 @@ function LoraModelCard({
         <div className="flex h-24 bg-muted/30">
           {previews.map((img) => (
             <div key={img.id} className="flex-1 min-w-0 relative">
-              <img
+              <LibraryImage
                 src={imagesApi.getThumbnailUrl(img.thumbnail_uri_small!.split('/').pop()!)}
                 alt=""
                 className="absolute inset-0 w-full h-full object-cover"
@@ -654,7 +656,7 @@ export default function ModelsPage() {
                         .filter((p) => p.thumbnail_uri_small)
                         .map((img) => (
                           <div key={img.id} className="w-16 h-16 rounded-lg overflow-hidden bg-muted">
-                            <img
+                            <LibraryImage
                               src={imagesApi.getThumbnailUrl(img.thumbnail_uri_small!.split('/').pop()!)}
                               alt=""
                               className="w-full h-full object-cover"

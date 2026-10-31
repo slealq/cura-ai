@@ -1,5 +1,7 @@
 'use client';
 
+import LibraryImage from '@/components/LibraryImage';
+
 import Link from 'next/link';
 import { Suspense, useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
@@ -119,7 +121,7 @@ function Tile({
   onToggle: () => void;
 }) {
   const thumb = image.thumbnail_uri_medium || image.thumbnail_uri_small;
-  const src = thumb ? imagesApi.getThumbnailUrl(thumb.split('/').pop()!) : null;
+  const src = image.thumbnail_url || (thumb ? imagesApi.getThumbnailUrl(thumb.split('/').pop()!) : null);
   const ratio = image.width && image.height ? image.width / image.height : 1;
   const flag =
     image.status === 'failed'
@@ -145,7 +147,7 @@ function Tile({
       >
         {src ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img
+          <LibraryImage
             src={src}
             alt=""
             loading="lazy"

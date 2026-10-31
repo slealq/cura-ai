@@ -1,5 +1,7 @@
 'use client';
 
+import LibraryImage from '@/components/LibraryImage';
+
 import { useState, useEffect, useRef, useMemo, Suspense } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { generationApi, settingsApi, billingApi } from '@/lib/api';
@@ -814,7 +816,7 @@ function GeneratePageInner() {
               </div>
               <div className="p-4 space-y-4">
                 {selectedImage.status === 'completed' && selectedImage.object_key ? (
-                  <img
+                  <LibraryImage
                     src={generationApi.getImageUrl(selectedImage.id)}
                     alt={selectedImage.prompt}
                     className="max-w-full mx-auto rounded-lg"

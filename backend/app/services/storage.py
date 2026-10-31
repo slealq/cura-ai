@@ -223,7 +223,7 @@ class StorageService:
 
     # --- File response methods (for serving endpoints) ---
 
-    def get_file_response(self, subdir: str, filename: str, media_type: str = "image/jpeg"):
+    def get_file_response(self, subdir: str, filename: str, media_type: str = "image/jpeg", resolve: bool = False):
         """
         Return an appropriate response for serving a file.
 
@@ -238,18 +238,26 @@ class StorageService:
             sas_url = self._generate_sas_url(blob_path)
             if sas_url is None:
                 return None
-            return RedirectResponse(url=sas_url, status_code=302)
+            if resolve:
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse({"url": sas_url}, headers={"Cache-Control": "private, no-store"})
+            return RedirectResponse(url=sas_url, status_code=302, headers={"Cache-Control": "private, max-age=300"})
         else:
             from fastapi.responses import FileResponse
 
             file_path = self.local_path / subdir / filename
             if not file_path.exists():
                 return None
-            return FileResponse(str(file_path), media_type=media_type)
+            if resolve:
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse({"url": None}, headers={"Cache-Control": "private, no-store"})
+            return FileResponse(str(file_path), media_type=media_type, headers={"Cache-Control": "private, max-age=300"})
 
     def get_file_response_with_filename(
         self, subdir: str, filename: str, media_type: str = "image/jpeg",
-        download_filename: str | None = None,
+        download_filename: str | None = None, resolve: bool = False,
     ):
         """
         Like get_file_response but allows setting a download filename.
@@ -264,30 +272,36 @@ class StorageService:
             sas_url = self._generate_sas_url(blob_path, content_disposition=download_filename)
             if sas_url is None:
                 return None
-            return RedirectResponse(url=sas_url, status_code=302)
+            if resolve:
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse({"url": sas_url}, headers={"Cache-Control": "private, no-store"})
+            return RedirectResponse(url=sas_url, status_code=302, headers={"Cache-Control": "private, max-age=300"})
         else:
             from fastapi.responses import FileResponse
 
             file_path = self.local_path / subdir / filename
             if not file_path.exists():
                 return None
+            if resolve:
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse({"url": None}, headers={"Cache-Control": "private, no-store"})
             return FileResponse(
-                str(file_path), media_type=media_type, filename=download_filename
+                str(file_path), media_type=media_type, filename=download_filename,
+                headers={"Cache-Control": "private, max-age=300"},
             )
 
     def _generate_sas_url(
-        self, blob_path: str, expiry_minutes: int = 30,
+        self, blob_path: str,
         content_disposition: str | None = None,
     ) -> str | None:
         """Generate a time-limited read-only SAS URL for a blob."""
         from azure.storage.blob import BlobSasPermissions, generate_blob_sas
 
-        # Check blob exists
+        # Signing is local HMAC work. Let the final GET report missing blobs;
+        # a synchronous HEAD here blocks the async serving route for every image.
         blob_client = self._container_client.get_blob_client(blob_path)
-        try:
-            blob_client.get_blob_properties()
-        except Exception:
-            return None
 
         # Extract account name and key from connection string
         account_name = self._blob_service_client.account_name
@@ -304,7 +318,15 @@ class StorageService:
             blob_name=blob_path,
             account_key=account_key,
             permission=BlobSasPermissions(read=True),
-            expiry=datetime.now(timezone.utc) + timedelta(minutes=expiry_minutes),
+            # Stable for an hour, valid for 1–2 hours. Cache lifetime stays
+            # below the minimum remaining validity (including clock skew).
+            expiry=datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+            + timedelta(hours=2),
+            cache_control=(
+                "private, max-age=300"
+                if blob_path.startswith(("folder_covers/", "cluster_covers/"))
+                else "private, max-age=3300, immutable"
+            ),
             content_disposition=f'inline; filename="{content_disposition}"' if content_disposition else None,
         )
 
@@ -324,27 +346,7 @@ class StorageService:
             return None
 
         if self.storage_backend == "azure":
-            from azure.storage.blob import BlobSasPermissions, generate_blob_sas
-
-            blob_path = f"thumbnails/{filename}"
-            account_name = self._blob_service_client.account_name
-            account_key = None
-            for part in self._azure_connection_string.split(";"):
-                if part.startswith("AccountKey="):
-                    account_key = part[len("AccountKey="):]
-                    break
-
-            sas_token = generate_blob_sas(
-                account_name=account_name,
-                container_name=self._azure_container_name,
-                blob_name=blob_path,
-                account_key=account_key,
-                permission=BlobSasPermissions(read=True),
-                expiry=datetime.now(timezone.utc) + timedelta(minutes=30),
-            )
-
-            blob_url = f"https://{account_name}.blob.core.windows.net/{self._azure_container_name}/{blob_path}"
-            return f"{blob_url}?{sas_token}"
+            return self._generate_sas_url(f"thumbnails/{filename}")
         else:
             return f"/api/images/thumbnails/{filename}"
 
@@ -618,27 +620,7 @@ class StorageService:
             return None
 
         if self.storage_backend == "azure":
-            from azure.storage.blob import BlobSasPermissions, generate_blob_sas
-
-            blob_path = f"{subdir}/{filename}"
-            account_name = self._blob_service_client.account_name
-            account_key = None
-            for part in self._azure_connection_string.split(";"):
-                if part.startswith("AccountKey="):
-                    account_key = part[len("AccountKey="):]
-                    break
-
-            sas_token = generate_blob_sas(
-                account_name=account_name,
-                container_name=self._azure_container_name,
-                blob_name=blob_path,
-                account_key=account_key,
-                permission=BlobSasPermissions(read=True),
-                expiry=datetime.now(timezone.utc) + timedelta(minutes=30),
-            )
-
-            blob_url = f"https://{account_name}.blob.core.windows.net/{self._azure_container_name}/{blob_path}"
-            return f"{blob_url}?{sas_token}"
+            return self._generate_sas_url(f"{subdir}/{filename}")
         else:
             return f"{api_prefix}/{filename}"
 

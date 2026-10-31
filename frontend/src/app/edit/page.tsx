@@ -1,5 +1,7 @@
 'use client';
 
+import LibraryImage from '@/components/LibraryImage';
+
 import { Suspense, useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { editApi, settingsApi, billingApi } from '@/lib/api';
@@ -343,7 +345,7 @@ function EditPageInner() {
               <div key={idx} className="relative group w-32 h-32">
                 <div className="w-full h-full rounded-lg border border-border overflow-hidden bg-muted/30">
                   {src.previewUrl ? (
-                    <img src={src.previewUrl} alt="" className="w-full h-full object-cover" />
+                    <LibraryImage src={src.previewUrl} alt="" className="w-full h-full object-cover" />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center">
                       <ImageIcon className="h-8 w-8 text-muted-foreground" />
@@ -845,7 +847,7 @@ function EditPageInner() {
               </div>
               <div className="p-4 space-y-4">
                 {selectedImage.status === 'completed' && selectedImage.object_key ? (
-                  <img
+                  <LibraryImage
                     src={editApi.getImageUrl(selectedImage.id)}
                     alt={selectedImage.prompt}
                     className="max-w-full mx-auto rounded-lg"

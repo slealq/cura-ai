@@ -91,6 +91,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      disable: true
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=1
 
   # Celery worker for clustering (separate queue)
@@ -119,6 +121,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      disable: true
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2 -Q clustering
 
   # Celery worker for generation (separate queue)
@@ -145,6 +149,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      disable: true
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2 -Q generation
 
   # Celery Beat for scheduled tasks (optional)
@@ -160,6 +166,8 @@ services:
       CELERY_RESULT_BACKEND: redis://redis:6379/2
     depends_on:
       - redis
+    healthcheck:
+      disable: true
     command: celery -A app.workers.celery_app beat --loglevel=info
     profiles:
       - scheduled

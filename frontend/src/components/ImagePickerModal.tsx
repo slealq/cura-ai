@@ -1,5 +1,7 @@
 'use client';
 
+import LibraryImage from '@/components/LibraryImage';
+
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { imagesApi, foldersApi, clustersApi, generationApi, authUrl } from '@/lib/api';
@@ -157,7 +159,7 @@ export default function ImagePickerModal({
               )}
             >
               {thumbnailSrc ? (
-                <img src={thumbnailSrc} alt="" className="w-full h-full object-cover" loading="lazy" />
+                <LibraryImage src={thumbnailSrc} alt="" className="w-full h-full object-cover" loading="lazy" />
               ) : (
                 <div className="w-full h-full bg-muted/30" />
               )}
@@ -299,7 +301,7 @@ export default function ImagePickerModal({
                             >
                               <div className="aspect-square bg-muted/30 relative">
                                 {folder.cover_thumbnail_url ? (
-                                  <img
+                                  <LibraryImage
                                     src={getCoverUrl(folder.cover_thumbnail_url)!}
                                     alt=""
                                     className="w-full h-full object-cover"
@@ -334,7 +336,7 @@ export default function ImagePickerModal({
                             >
                               <div className="aspect-square bg-muted/30 relative">
                                 {cluster.cover_thumbnail_url ? (
-                                  <img
+                                  <LibraryImage
                                     src={getCoverUrl(cluster.cover_thumbnail_url)!}
                                     alt=""
                                     className="w-full h-full object-cover"
@@ -392,7 +394,7 @@ export default function ImagePickerModal({
                           )}
                         >
                           {thumbnailSrc ? (
-                            <img src={thumbnailSrc} alt="" className="w-full h-full object-cover" loading="lazy" />
+                            <LibraryImage src={thumbnailSrc} alt="" className="w-full h-full object-cover" loading="lazy" />
                           ) : img.status === 'completed' ? (
                             <div className="w-full h-full bg-muted/30" />
                           ) : (
