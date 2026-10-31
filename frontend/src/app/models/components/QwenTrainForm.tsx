@@ -187,7 +187,7 @@ export default function QwenTrainForm({
         </p>
       </div>
 
-      <div className="flex gap-2 justify-end pt-2">
+      <div className="mobile-modal-actions flex gap-2 justify-end pt-2">
         <button
           onClick={onCancel}
           className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors"

@@ -201,7 +201,7 @@ export default function ImagePickerModal({
       <div className="fixed inset-0 bg-black/70 z-50" onClick={onClose} />
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div
-          className="bg-card rounded-xl shadow-xl max-w-4xl w-full max-h-[85vh] flex flex-col"
+          className="mobile-modal bg-card rounded-xl shadow-xl max-w-4xl w-full max-h-[85vh] flex flex-col"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
@@ -438,7 +438,7 @@ export default function ImagePickerModal({
           </div>
 
           {/* Footer */}
-          <div className="flex justify-end gap-3 p-4 border-t border-border">
+          <div className="mobile-modal-actions flex justify-end gap-3 p-4 border-t border-border">
             <button
               onClick={onClose}
               className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors"

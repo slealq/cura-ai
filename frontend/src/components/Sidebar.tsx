@@ -170,7 +170,7 @@ export default function Sidebar() {
   return (
     <aside
       className={cn(
-        'flex shrink-0 flex-col border-r border-border bg-chrome transition-[width] duration-150',
+        'hidden md:flex shrink-0 flex-col border-r border-border bg-chrome transition-[width] duration-150',
         collapsed ? 'w-[60px]' : 'w-[232px]'
       )}
       aria-label="Navigation"

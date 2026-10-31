@@ -154,7 +154,7 @@ export default function DescribeAllDialog({ folderId, imageCount, onClose, onSta
       <div className="fixed inset-0 bg-black/50 z-50" onClick={onClose} />
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div
-          className="bg-card rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4 max-h-[85vh] overflow-y-auto"
+          className="mobile-modal bg-card rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4 max-h-[85vh] overflow-y-auto"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="flex items-center justify-between">
@@ -393,7 +393,7 @@ export default function DescribeAllDialog({ folderId, imageCount, onClose, onSta
           )}
 
           {/* Footer */}
-          <div className="flex items-center gap-2 justify-end pt-2 border-t border-border">
+          <div className="mobile-modal-actions flex items-center gap-2 justify-end pt-2 border-t border-border">
             {mode === 'manual' && costPerImage !== null && costPerImage > 0 && (
               <span className="inline-flex items-center gap-0.5 text-xs text-amber-600 dark:text-amber-400 mr-auto" title={`~${Math.round(costPerImage)} sparks per image (tag + describe + embed)`}>
                 <Zap className="h-3 w-3" />

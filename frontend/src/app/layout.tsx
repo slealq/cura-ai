@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { AxiosError } from 'axios';
 import { Toaster, toast } from 'sonner';
+import MobileNavigation from '@/components/MobileNavigation';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
 import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
@@ -58,11 +59,12 @@ function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <>
       <SentryUserSync />
-      <div className="flex h-screen">
+      <div className="app-shell flex h-screen">
         <Sidebar />
+        <MobileNavigation />
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           <Header />
-          <main className="flex-1 overflow-auto px-5 py-5">{children}</main>
+          <main className="app-main flex-1 overflow-auto px-5 py-5">{children}</main>
         </div>
       </div>
       <Toaster position="bottom-right" richColors theme={resolvedTheme} />
@@ -161,6 +163,12 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <head>
         <title>SightLab</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+        <meta name="theme-color" content="#141415" media="(prefers-color-scheme: dark)" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-title" content="SightLab" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
         <meta name="description" content="SightLab — AI-powered image intelligence, tagging, and generation" />
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />

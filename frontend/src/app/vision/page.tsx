@@ -665,7 +665,7 @@ function VisionPageInner() {
                 </div>
               </div>
 
-              <div className="flex gap-3">
+              <div className="flex gap-3 max-md:flex-col">
                 {result.source_thumbnail_url && (
                   <button
                     onClick={() => setLightboxUrl(authUrl(result.source_full_url || result.source_thumbnail_url!))}
@@ -678,7 +678,7 @@ function VisionPageInner() {
                     />
                   </button>
                 )}
-                <div className="flex-1 space-y-3">
+                <div className="flex-1 space-y-3 max-md:min-w-0 max-md:break-words">
                   {result.mode === 'tag' && result.result_tags && (
                     <div className="flex flex-wrap gap-1.5">
                       {result.result_tags.map((tag, i) => (

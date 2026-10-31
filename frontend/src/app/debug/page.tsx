@@ -89,7 +89,7 @@ export default function DebugPage() {
 
 
       {/* Filters */}
-      <div className="flex gap-3 items-center">
+      <div className="flex gap-3 items-center max-md:flex-wrap">
         <select
           value={category}
           onChange={(e) => {
@@ -120,13 +120,13 @@ export default function DebugPage() {
           <option value="debug">Debug</option>
         </select>
 
-        <form onSubmit={handleSearch} className="flex-1 flex gap-2">
+        <form onSubmit={handleSearch} className="flex-1 flex gap-2 max-md:min-w-0 max-md:basis-full">
           <input
             type="text"
             placeholder="Search messages..."
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
-            className="flex-1 px-3 py-2 border border-border rounded-lg text-sm"
+            className="flex-1 max-md:min-w-0 px-3 py-2 border border-border rounded-lg text-sm"
           />
           <button
             type="submit"

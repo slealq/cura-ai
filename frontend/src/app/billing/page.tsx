@@ -535,7 +535,7 @@ export default function BillingPage() {
                 <div className="px-4 py-3 border-b">
                   <p className="text-sm font-medium">By Operation</p>
                 </div>
-                <table className="w-full text-sm">
+                <table className="mobile-cards w-full text-sm">
                   <thead>
                     <tr className="border-b bg-muted/50">
                       <th className="text-left px-4 py-2 font-medium">Operation</th>
@@ -547,10 +547,10 @@ export default function BillingPage() {
                   <tbody>
                     {usage.by_operation_detail.map((row) => (
                       <tr key={operationName(row.operation)} className="border-b last:border-0">
-                        <td className="px-4 py-2">{operationName(row.operation)}</td>
-                        <td className="px-4 py-2 text-right font-mono">{row.count.toLocaleString()}</td>
-                        <td className="px-4 py-2 text-right font-mono">{formatNumber(row.total_sparks)}</td>
-                        <td className="px-4 py-2 text-right font-mono text-muted-foreground">{formatNumber(row.avg_sparks)}</td>
+                        <td data-label="Operation" className="px-4 py-2">{operationName(row.operation)}</td>
+                        <td data-label="Count" className="px-4 py-2 text-right font-mono">{row.count.toLocaleString()}</td>
+                        <td data-label="Total sparks" className="px-4 py-2 text-right font-mono">{formatNumber(row.total_sparks)}</td>
+                        <td data-label="Avg sparks" className="px-4 py-2 text-right font-mono text-muted-foreground">{formatNumber(row.avg_sparks)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -569,7 +569,7 @@ export default function BillingPage() {
         ) : transactions && transactions.items.length > 0 ? (
           <>
             <div className="bg-background border rounded-lg overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="mobile-cards w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/50">
                     <th className="text-left px-4 py-3 font-medium">Date</th>
@@ -581,9 +581,9 @@ export default function BillingPage() {
                 <tbody>
                   {transactions.items.map((txn: BalanceTransaction) => (
                     <tr key={txn.id} className="border-b last:border-0">
-                      <td className="px-4 py-3 text-muted-foreground">{formatDateCompact(txn.created_at)}</td>
-                      <td className="px-4 py-3 text-muted-foreground truncate max-w-[300px]">{transactionDescription(txn.description)}</td>
-                      <td className={cn(
+                      <td data-label="Date" className="px-4 py-3 text-muted-foreground">{formatDateCompact(txn.created_at)}</td>
+                      <td data-label="Description" className="px-4 py-3 text-muted-foreground truncate max-w-[300px]">{transactionDescription(txn.description)}</td>
+                      <td data-label="Amount" className={cn(
                         'text-right px-4 py-3 font-mono whitespace-nowrap',
                         txn.amount > 0 ? 'text-success' : 'text-danger'
                       )}>
@@ -634,7 +634,7 @@ export default function BillingPage() {
           <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
         ) : purchases && purchases.items.length > 0 ? (
           <div className="bg-background border rounded-lg overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="mobile-cards w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/50">
                   <th className="text-left px-4 py-3 font-medium">Date</th>
@@ -647,11 +647,11 @@ export default function BillingPage() {
               <tbody>
                 {purchases.items.map((p: Purchase) => (
                   <tr key={p.id} className="border-b last:border-0">
-                    <td className="px-4 py-3 text-muted-foreground">{formatDateCompact(p.created_at)}</td>
-                    <td className="px-4 py-3 font-medium">{p.pack_name}</td>
-                    <td className="px-4 py-3 text-right font-mono">{formatNumber(p.sparks_amount)}</td>
-                    <td className="px-4 py-3 text-right font-mono">{formatPrice(p.amount_cents, p.currency)}</td>
-                    <td className="px-4 py-3 text-center">
+                    <td data-label="Date" className="px-4 py-3 text-muted-foreground">{formatDateCompact(p.created_at)}</td>
+                    <td data-label="Pack" className="px-4 py-3 font-medium">{p.pack_name}</td>
+                    <td data-label="Sparks" className="px-4 py-3 text-right font-mono">{formatNumber(p.sparks_amount)}</td>
+                    <td data-label="Amount" className="px-4 py-3 text-right font-mono">{formatPrice(p.amount_cents, p.currency)}</td>
+                    <td data-label="Status" className="px-4 py-3 text-center">
                       <span className={cn(
                         'inline-flex px-2 py-0.5 rounded-full text-xs font-medium',
                         p.status === 'completed'

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import SightLabLogo from './SightLabLogo';
 import { Activity, Search, Zap } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { billingApi, jobsApi } from '@/lib/api';
@@ -94,7 +95,7 @@ function ActivityMenu() {
         {running.length > 0 ? `${running.length} running` : 'Activity'}
       </button>
       {open && (
-        <div className="absolute right-0 top-10 z-50 w-[360px] rounded-lg border border-border bg-card p-1.5 shadow-[0_16px_40px_-12px_rgb(0_0_0/0.25)]">
+        <div className="activity-popover absolute right-0 top-10 z-50 w-[360px] rounded-lg border border-border bg-card p-1.5 shadow-[0_16px_40px_-12px_rgb(0_0_0/0.25)]">
           <p className="px-2 pb-1 pt-1.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
             Activity
           </p>
@@ -146,7 +147,7 @@ function BalanceChip() {
     >
       <Zap className={cn('h-3.5 w-3.5', low ? 'text-danger' : 'text-amber-500')} />
       {formatNumber(available, 0)}
-      {low && <span className="font-sans text-[12px]">· Top up</span>}
+      {low && <span className="font-sans text-[12px] max-md:hidden">· Top up</span>}
     </Link>
   );
 }
@@ -163,8 +164,10 @@ export default function Header() {
   };
 
   return (
-    <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-border bg-background px-4">
-      <form onSubmit={handleSearch} className="w-full max-w-md" role="search">
+    <header className="app-header flex h-[52px] shrink-0 items-center gap-3 border-b border-border bg-background px-4">
+      <Link href="/images" aria-label="SightLab library" className="hidden max-md:flex items-center"><SightLabLogo /></Link>
+      <Link href="/search" aria-label="Search" className="hidden max-md:flex items-center justify-center"><Search size={20} /></Link>
+      <form onSubmit={handleSearch} className="w-full max-w-md max-md:hidden" role="search">
         <label className="flex h-8 items-center gap-2 rounded-lg border border-border bg-muted px-2.5 text-muted-foreground focus-within:border-selection focus-within:ring-2 focus-within:ring-selection/20">
           <Search className="h-4 w-4 shrink-0" />
           <input

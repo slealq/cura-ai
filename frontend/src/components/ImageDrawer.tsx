@@ -28,6 +28,8 @@ interface ImageDrawerProps {
 
 export default function ImageDrawer({ image, onClose, images, onNavigate, onTool }: ImageDrawerProps) {
   const [tab, setTab] = useState('Details');
+  const [mobileDetails, setMobileDetails] = useState(false);
+  const touchStart = useRef({ x: 0, y: 0 });
   const index = images?.findIndex((i) => i.id === image.id) ?? -1;
   const navigate = useCallback(
     (delta: number) => {
@@ -350,18 +352,26 @@ export default function ImageDrawer({ image, onClose, images, onNavigate, onTool
       {/* Drawer */}
       <div
         ref={viewerRef}
+        onTouchStart={e => { touchStart.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; }}
+        onTouchEnd={e => {
+          if (window.innerWidth >= 768 || (e.target as HTMLElement).closest('[data-viewer-info]')) return;
+          const dx = e.changedTouches[0].clientX - touchStart.current.x;
+          const dy = e.changedTouches[0].clientY - touchStart.current.y;
+          if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)) navigate(dx < 0 ? 1 : -1);
+          else if (dy > 90 && Math.abs(dy) > Math.abs(dx)) onClose();
+        }}
 
         role={images ? 'dialog' : undefined}
         aria-modal={images ? true : undefined}
         aria-label={images ? 'Image viewer' : undefined}
         className={
           images
-            ? 'fixed inset-0 z-50 flex bg-background'
+            ? 'image-viewer fixed inset-0 z-50 flex bg-background'
             : 'fixed inset-y-0 right-0 w-full max-w-xl bg-card shadow-xl z-50 overflow-y-auto'
         }
       >
         {images && (
-          <div className="relative flex min-w-0 flex-1 flex-col bg-chrome p-4 max-md:hidden">
+          <div className="relative flex min-w-0 flex-1 flex-col viewer-canvas bg-chrome p-4">
             <div className="flex min-h-0 flex-1 items-center justify-center">
               <LibraryImage
                 src={imageUrl}
@@ -402,11 +412,18 @@ export default function ImageDrawer({ image, onClose, images, onNavigate, onTool
             </div>
           </div>
         )}
+        {images && <div className="viewer-mobile-controls hidden max-md:flex absolute inset-x-0 top-0 z-10 items-center justify-between p-3">
+          <button aria-label="Close image" onClick={onClose} className="rounded-full bg-background p-3"><X /></button>
+          <button onClick={() => setMobileDetails(true)} className="rounded-full bg-background px-4 py-3">Details / Tags / Description</button>
+        </div>}
         <div
+          data-viewer-info
+          data-open={mobileDetails}
           className={
-            images ? 'flex w-[380px] max-w-full shrink-0 flex-col border-l border-border max-md:w-full' : ''
+            images ? 'viewer-info flex w-[380px] max-w-full shrink-0 flex-col border-l border-border max-md:w-full' : ''
           }
         >
+          {images && <button className="hidden max-md:block border-b border-border p-2" onClick={() => setMobileDetails(false)}>Close details</button>}
           {/* Header */}
           <div className="sticky top-0 bg-card border-b border-border px-6 py-4 flex items-center justify-between">
             <h2 className="font-semibold truncate">{liveImage.original_filename || liveImage.object_key}</h2>
@@ -788,7 +805,7 @@ export default function ImageDrawer({ image, onClose, images, onNavigate, onTool
           <div className="fixed inset-0 bg-black/50 z-50" onClick={() => setShowDescribeDialog(false)} />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div
-              className="bg-card rounded-xl shadow-xl max-w-2xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto"
+              className="mobile-modal bg-card rounded-xl shadow-xl max-w-2xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
               <h3 className="text-lg font-semibold">Describe Image</h3>
