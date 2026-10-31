@@ -2,10 +2,12 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import {
   Activity,
+  Pencil,
+  Eye,
   Box,
   Bug,
   ChevronsLeft,
@@ -91,6 +93,7 @@ function GroupLabel({ children, href, collapsed }: { children: string; href?: st
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const tool = useSearchParams().get("tool");
   const router = useRouter();
   const queryClient = useQueryClient();
   const { user, logout } = useAuth();
@@ -223,7 +226,7 @@ export default function Sidebar() {
       <nav className="min-h-0 flex-1 overflow-y-auto px-2">
         <GroupLabel collapsed={collapsed}>Library</GroupLabel>
         <div className="space-y-px">
-          <NavItem href="/images" icon={ImageIcon} label="All images" active={isActive('/images', true)} collapsed={collapsed} />
+          <NavItem href="/images" icon={ImageIcon} label="All images" active={isActive('/images', true) && !tool} collapsed={collapsed} />
           <NavItem href="/clusters" icon={LayoutGrid} label="Clusters" active={isActive('/clusters', true)} collapsed={collapsed} />
         </div>
 
@@ -311,6 +314,9 @@ export default function Sidebar() {
 
         <GroupLabel collapsed={collapsed}>Tools</GroupLabel>
         <div className="space-y-px pb-3">
+          <NavItem href="/images?tool=Create" icon={Sparkles} label="Create" active={pathname === '/images' && tool === 'Create'} collapsed={collapsed} />
+          <NavItem href="/images?tool=Edit" icon={Pencil} label="Edit" active={pathname === '/images' && tool === 'Edit'} collapsed={collapsed} />
+          <NavItem href="/images?tool=Ask%20Vision" icon={Eye} label="Vision" active={pathname === '/images' && tool === 'Ask Vision'} collapsed={collapsed} />
           <NavItem href="/models" icon={Box} label="Models" active={isActive('/models')} collapsed={collapsed} />
         </div>
       </nav>

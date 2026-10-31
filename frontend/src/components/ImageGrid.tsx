@@ -289,13 +289,15 @@ function ImageGridContent({
     return () => media.removeEventListener('change', update);
   }, []);
   useEffect(() => {
-    if (entryTool !== 'Create') return;
-    setTool('Create');
+    if (!['Create', 'Edit', 'Ask Vision'].includes(entryTool || '')) {
+      setTool(null);
+      return;
+    }
+    setTool(entryTool as InspectorTool);
+    setToolImages(null);
     setMobileInspector(true);
-    const next = new URLSearchParams(searchParams.toString());
-    next.delete('tool');
-    router.replace(next.size ? `${pathname}?${next}` : pathname, { scroll: false });
-  }, [entryTool, pathname, router, searchParams]);
+  }, [entryTool]);
+
   const inspectorVisible = wide && !inspectorHidden;
   const [openImage, setOpenImage] = useState<Image | null>(null);
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null);
@@ -685,7 +687,12 @@ function ImageGridContent({
             tool={tool}
             onTool={(next) => {
               setTool(next);
-              if (!next) setToolImages(null);
+              if (!next) {
+                setToolImages(null);
+                const params = new URLSearchParams(searchParams.toString());
+                params.delete('tool');
+                router.replace(params.size ? `${pathname}?${params}` : pathname, { scroll: false });
+              }
             }}
             onClear={() => {
               clearSelection();
