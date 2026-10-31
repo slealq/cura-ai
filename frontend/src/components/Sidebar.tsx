@@ -314,9 +314,9 @@ export default function Sidebar() {
 
         <GroupLabel collapsed={collapsed}>Tools</GroupLabel>
         <div className="space-y-px pb-3">
-          <NavItem href="/images?tool=Create" icon={Sparkles} label="Create" active={pathname === '/images' && tool === 'Create'} collapsed={collapsed} />
-          <NavItem href="/images?tool=Edit" icon={Pencil} label="Edit" active={pathname === '/images' && tool === 'Edit'} collapsed={collapsed} />
-          <NavItem href="/images?tool=Ask%20Vision" icon={Eye} label="Vision" active={pathname === '/images' && tool === 'Ask Vision'} collapsed={collapsed} />
+          <NavItem href="/images?tool=Create" icon={Sparkles} label="Create" active={(pathname === '/images' && tool === 'Create') || isActive('/generate')} collapsed={collapsed} />
+          <NavItem href="/images?tool=Edit" icon={Pencil} label="Edit" active={(pathname === '/images' && tool === 'Edit') || isActive('/edit')} collapsed={collapsed} />
+          <NavItem href="/images?tool=Ask%20Vision" icon={Eye} label="Vision" active={(pathname === '/images' && tool === 'Ask Vision') || isActive('/vision')} collapsed={collapsed} />
           <NavItem href="/models" icon={Box} label="Models" active={isActive('/models')} collapsed={collapsed} />
         </div>
       </nav>

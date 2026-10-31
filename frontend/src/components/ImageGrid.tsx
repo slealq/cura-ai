@@ -678,6 +678,9 @@ function ImageGridContent({
                     setMobileInspector(false);
                     setTool(null);
                     setToolImages(null);
+                    const params = new URLSearchParams(searchParams.toString());
+                    params.delete('tool');
+                    router.replace(params.size ? `${pathname}?${params}` : pathname, { scroll: false });
                   }
                 : undefined
             }
