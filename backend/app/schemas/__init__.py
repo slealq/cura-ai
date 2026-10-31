@@ -87,6 +87,21 @@ class ImageResponse(BaseModel):
 
     @computed_field
     @property
+    def thumbnail_urls(self) -> dict[str, str]:
+        """Sign existing variants locally; never probe storage per image."""
+        from app.services.storage import get_storage_service
+
+        storage = get_storage_service()
+        return {
+            size: storage.generate_thumbnail_sas_url(uri)
+            for size, uri in (("200", self.thumbnail_uri_small),
+                              ("400", self.thumbnail_uri_medium),
+                              ("800", self.thumbnail_uri_large))
+            if uri
+        }
+
+    @computed_field
+    @property
     def image_url(self) -> str:
         from app.services.storage import get_storage_service
 

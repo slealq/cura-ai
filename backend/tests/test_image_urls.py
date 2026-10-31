@@ -80,9 +80,11 @@ def test_image_response_includes_direct_urls(monkeypatch, storage):
     monkeypatch.setattr(module, 'get_storage_service', lambda: storage)
     response = ImageResponse.model_construct(
         object_key='a.png', thumbnail_uri_medium='azure://images/thumbnails/a_400.png',
-        thumbnail_uri_small=None,
+        thumbnail_uri_small=None, thumbnail_uri_large="azure://images/thumbnails/a_800.png",
     )
     assert urlsplit(response.thumbnail_url).path == '/images/thumbnails/a_400.png'
+    assert set(response.thumbnail_urls) == {'400', '800'}
+    assert urlsplit(response.thumbnail_urls['800']).path == '/images/thumbnails/a_800.png'
     assert urlsplit(response.image_url).path == '/images/images/a.png'
 
 

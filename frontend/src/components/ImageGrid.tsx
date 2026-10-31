@@ -1,6 +1,6 @@
 'use client';
 
-import LibraryImage from '@/components/LibraryImage';
+import LibraryThumbnail from '@/components/LibraryThumbnail';
 
 import Link from 'next/link';
 import { Suspense, useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
@@ -144,8 +144,8 @@ function Tile({
       >
         {src ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <LibraryImage
-            src={src}
+          <LibraryThumbnail
+            image={image}
             alt=""
             loading="lazy"
             style={{ aspectRatio: ratio }}

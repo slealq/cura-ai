@@ -26,7 +26,7 @@ export default function ClusterStrip({ cluster, selected, onSelect }: { cluster:
     sum += (image.width || 1) / (image.height || 1);
     return true;
   });
-  const height = mobile ? 138 : Math.min(180, (width - Math.max(images.length - 1, 0) * 2) / Math.max(sum, 1));
+  const height = mobile ? 138 : (width - Math.max(images.length - 1, 0) * 2) / Math.max(sum, 1);
   const href = `/clusters/${cluster.id}`;
   const firstBullet = clusterBullets(cluster)[0];
   const summary = firstBullet?.match(/^.*?[.!?](?=\s|$)/)?.[0] || firstBullet;
@@ -42,7 +42,7 @@ export default function ClusterStrip({ cluster, selected, onSelect }: { cluster:
     </button>
     <div ref={ref} className="relative min-w-0 self-center overflow-hidden rounded-md bg-muted">
       <Link href={href} tabIndex={-1} aria-hidden="true" className="flex w-full gap-0.5 overflow-x-auto" style={{ height }}>
-        {images.map(image => <LibraryImage key={image.id} src={image.thumbnail_url} alt="" loading="lazy" className="h-full shrink-0 object-contain" style={{ width: height * (image.width || 1) / (image.height || 1), flexGrow: mobile ? 0 : 1 }} />)}
+        {images.map(image => <LibraryImage key={image.id} src={image.thumbnail_url} alt="" loading="lazy" className="h-full shrink-0 object-contain" style={{ width: height * (image.width || 1) / (image.height || 1), flexGrow: 0 }} />)}
         {!images.length && <span className="m-auto text-xs text-muted-foreground">Previews are being prepared</span>}
       </Link>
       <span className="pointer-events-none absolute bottom-0 right-0 rounded-tl-md bg-primary px-2 py-1 font-mono text-[11px] text-primary-foreground">{cluster.size.toLocaleString()} images</span>
