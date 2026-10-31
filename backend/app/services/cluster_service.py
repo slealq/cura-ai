@@ -4,7 +4,7 @@ from io import BytesIO
 
 import numpy as np
 from PIL import Image as PILImage
-from sqlalchemy import String, cast
+from sqlalchemy import String, cast, func
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import (
@@ -42,7 +42,7 @@ class ClusterService:
         run_id: str | None = None,
         include_archived: bool = False,
         skip: int = 0,
-        limit: int = 100,
+        limit: int | None = 100,
     ) -> list[Cluster]:
         """Get paginated list of clusters."""
         query = (
@@ -100,7 +100,7 @@ class ClusterService:
 
         return invalid_cluster_ids
 
-    def get_latest_clusters(self, limit: int = 100) -> list[Cluster]:
+    def get_latest_clusters(self, limit: int | None = 100, include_archived: bool = False) -> list[Cluster]:
         """Get clusters from the most recent clustering run."""
         # Get the latest run_id
         latest_run = (
@@ -113,7 +113,39 @@ class ClusterService:
         if not latest_run:
             return []
 
-        return self.get_clusters(run_id=latest_run[0], limit=limit)
+        return self.get_clusters(run_id=latest_run[0], limit=limit, include_archived=include_archived)
+
+    def get_preview_images(self, clusters: list[Cluster]) -> dict[int, list[dict]]:
+        """Two bounded bulk queries; representatives must still be active members."""
+        if not clusters:
+            return {}
+        ids = [c.id for c in clusters]
+        reps = {i for c in clusters for i in c.representative_image_ids}
+        base = self.db.query(
+            ClusterMembership.cluster_id, Image.id, Image.width, Image.height,
+            Image.thumbnail_uri_medium, Image.thumbnail_uri_small,
+        ).join(Image, Image.id == ClusterMembership.image_id).filter(
+            ClusterMembership.cluster_id.in_(ids),
+            ClusterMembership.is_excluded.is_(False), Image.user_id == self.user_id,
+            (Image.thumbnail_uri_medium.isnot(None) | Image.thumbnail_uri_small.isnot(None)),
+        )
+        representatives = base.filter(Image.id.in_(reps)).all() if reps else []
+        ranked = base.add_columns(func.row_number().over(
+            partition_by=ClusterMembership.cluster_id, order_by=Image.id,
+        ).label("rank")).subquery()
+        members = self.db.query(ranked).filter(ranked.c.rank <= 8).all()
+        storage = get_storage_service()
+        result = {}
+        for cluster in clusters:
+            candidates = {r.id: r for r in [*members, *representatives] if r.cluster_id == cluster.id}
+            ordered = [i for i in dict.fromkeys([*cluster.representative_image_ids, *sorted(candidates)]) if i in candidates][:8]
+            result[cluster.id] = [
+                dict(id=i, width=candidates[i].width, height=candidates[i].height,
+                     thumbnail_url=storage.generate_thumbnail_sas_url(
+                         candidates[i].thumbnail_uri_medium or candidates[i].thumbnail_uri_small))
+                for i in ordered
+            ]
+        return result
 
     def get_cluster_images(
         self,
@@ -322,7 +354,7 @@ class ClusterService:
             display_name=new_name,
             representative_image_ids=rep_ids,
             cover_image_id=rep_ids[0] if rep_ids else None,
-            common_tags={},
+            common_tags=[],
         )
 
         self.db.add(merged_cluster)

@@ -10,14 +10,17 @@ import ModelSelector from '@/components/ModelSelector';
 import { useModelCatalog } from '@/hooks/useModelCatalog';
 import QwenTrainForm, { type QwenTrainData } from './QwenTrainForm';
 
+import type { Cluster } from '@/types';
+
 type BaseModel = 'flux-2' | 'qwen-image-2512';
 
 interface TrainLoraModalProps {
+  sourceClusters?: Cluster[];
   open: boolean;
   onClose: () => void;
 }
 
-export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
+export default function TrainLoraModal({ open, onClose, sourceClusters }: TrainLoraModalProps) {
   useEffect(() => {
     if (!open) return;
     const dismiss = (event: KeyboardEvent) => {
@@ -49,13 +52,13 @@ export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
   const { data: foldersData } = useQuery({
     queryKey: ['folders'],
     queryFn: () => foldersApi.list({ limit: 200 }),
-    enabled: open,
+    enabled: open && !sourceClusters,
   });
 
   const { data: clustersData } = useQuery({
     queryKey: ['clusters'],
     queryFn: () => clustersApi.list({ limit: 200 }),
-    enabled: open,
+    enabled: open && !sourceClusters,
   });
 
   // Fetch training costs
@@ -99,13 +102,23 @@ export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
 
   const handleQwenSubmit = (data: QwenTrainData) => {
     trackFunnelStep('training', 'config_saved', { baseModel, source: data.folder_id ? 'folder' : 'cluster' });
-    trainMutation.mutate(data);
+    if (sourceClusters?.length) {
+      onClose();
+      toast.success(`Submitting ${sourceClusters.length} training job(s)`, { action: { label: 'View Jobs', onClick: () => { window.location.href = '/jobs'; } } });
+      void (async () => {
+        for (const cluster of sourceClusters) {
+          await generationApi.trainLora({ ...data, folder_id: undefined, cluster_id: cluster.id,
+            name: sourceClusters.length > 1 ? `${data.name} — ${cluster.display_name || cluster.summary_title || cluster.id}` : data.name });
+        }
+        await queryClient.invalidateQueries({ queryKey: ['lora-models'] });
+      })().catch((error: Error) => toast.error(`Training submission failed: ${error.message}`));
+    } else trainMutation.mutate(data);
   };
 
   if (!open) return null;
 
   const folders = foldersData?.items || [];
-  const clusterItems = clustersData?.items || [];
+  const clusterItems = sourceClusters || clustersData?.items || [];
   const defaultSteps = trainConfig?.steps ?? (baseModel === 'qwen-image-2512' ? 2000 : 1000);
   const defaultLearningRate = trainConfig?.learning_rate ?? 0.0005;
 
@@ -131,6 +144,7 @@ export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
             </button>
           </div>
 
+          {sourceClusters && <p className="text-sm text-muted-foreground">{sourceClusters.length > 1 ? `Trains one model per cluster (${sourceClusters.length} jobs). The cost shown below is per model.` : `Train from ${sourceClusters[0]?.display_name || sourceClusters[0]?.summary_title || 'this cluster'}.`}</p>}
           {/* Base Model */}
           <div>
             <ModelSelector
@@ -150,6 +164,7 @@ export default function TrainLoraModal({ open, onClose }: TrainLoraModalProps) {
 
           <QwenTrainForm
             key={baseModel}
+            initialClusterId={sourceClusters?.[0]?.id}
             baseModel={baseModel}
             defaultSteps={baseModel === 'qwen-image-2512' ? Math.max(defaultSteps, 2000) : defaultSteps}
             defaultLearningRate={defaultLearningRate}

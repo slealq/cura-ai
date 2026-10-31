@@ -6,6 +6,7 @@ import type { Folder, Cluster } from '@/types';
 export type SourceType = 'folder' | 'cluster';
 
 interface SharedTrainFieldsProps {
+  lockedClusters?: boolean;
   name: string;
   onNameChange: (v: string) => void;
   sourceType: SourceType;
@@ -19,6 +20,7 @@ interface SharedTrainFieldsProps {
 }
 
 export default function SharedTrainFields({
+  lockedClusters = false,
   name,
   onNameChange,
   sourceType,
@@ -44,7 +46,7 @@ export default function SharedTrainFields({
       </div>
 
       {/* Source Type Toggle */}
-      <div>
+      {lockedClusters ? <p className="text-sm text-muted-foreground">Source: {clusters.map(c => c.display_name || c.summary_title || `Cluster ${c.id}`).join(', ')}</p> : <div>
         <label className="block text-sm font-medium mb-1">Source *</label>
         <div className="flex rounded-lg border border-border overflow-hidden mb-2">
           <button
@@ -104,7 +106,7 @@ export default function SharedTrainFields({
             ))}
           </select>
         )}
-      </div>
+      </div>}
     </>
   );
 }

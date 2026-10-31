@@ -52,7 +52,11 @@ export default function Inspector({
   hasBatchRunning,
   onDispatched,
   onDismiss,
+  clusterId,
+  overview,
 }: {
+  clusterId?: number;
+  overview?: React.ReactNode;
   title: string;
   total: number;
   images: Image[];
@@ -301,7 +305,8 @@ export default function Inspector({
         )}
       </header>
       <div className="flex-1 space-y-5 overflow-y-auto p-4 text-sm">
-        {!tool && !images.length && (
+        {!tool && !images.length && overview}
+        {!tool && !images.length && !overview && (
           <>
             <p className="text-muted-foreground">{total} images in this view</p>
             <h3 className="font-medium">Library health</h3>
@@ -530,6 +535,15 @@ export default function Inspector({
             )}
           </>
         )}
+        {!tool && clusterId && images.length > 0 && (
+          <button className="w-full rounded-md border border-border p-2 text-left" onClick={() => {
+            onClear();
+            void Promise.all(images.map(image => clustersApi.excludeImage(clusterId, image.id)))
+              .then(() => { toast.success('Images excluded from cluster'); return client.invalidateQueries(); })
+              .catch((error: Error) => toast.error(error.message));
+          }}>Exclude selected from cluster</button>
+        )}
+
       </div>
       {tool && (
         <footer className="sticky bottom-0 space-y-3 border-t border-border bg-background p-4">

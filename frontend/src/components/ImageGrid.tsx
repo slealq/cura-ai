@@ -53,6 +53,8 @@ interface ImageGridProps {
   queryKeyPrefix: string;
   fetchImages: (params: FetchParams) => Promise<ImageListResponse>;
   folderId?: number;
+  clusterId?: number;
+  inspectorOverview?: ReactNode;
   /** Show the All / Uploads / Generated / Edited filter (needs `source` support in fetchImages). */
   showSourceFilter?: boolean;
   /** Extra controls rendered next to the title, e.g. folder actions. */
@@ -285,6 +287,8 @@ function ImageGridContent({
   queryKeyPrefix,
   fetchImages,
   folderId,
+  clusterId,
+  inspectorOverview,
   showSourceFilter = false,
   headerActions,
   subtitle,
@@ -748,6 +752,8 @@ function ImageGridContent({
               setToolImages(null);
             }}
             folderId={folderId}
+            clusterId={clusterId}
+            overview={inspectorOverview}
             hasBatchRunning={hasBatchRunning}
             onDispatched={() => {
               setMobileInspector(false);

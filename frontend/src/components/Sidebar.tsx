@@ -41,7 +41,6 @@ const ENV_BADGE: Record<string, { label: string; className: string } | null> = {
 };
 
 const SIDEBAR_FOLDER_LIMIT = 8;
-const SIDEBAR_CLUSTER_LIMIT = 6;
 const COLLAPSED_KEY = 'sidebar-collapsed';
 
 function NavItem({
@@ -127,7 +126,16 @@ export default function Sidebar() {
 
   const { data: clusterData } = useQuery({
     queryKey: ['clusters', 'sidebar'],
-    queryFn: () => clustersApi.list({ limit: 50 }),
+    queryFn: async () => {
+      const first = await clustersApi.list({ limit: 200 });
+      const items = [...first.items];
+      while (items.length < first.total) {
+        const page = await clustersApi.list({ skip: items.length, limit: 200 });
+        if (!page.items.length) break;
+        items.push(...page.items);
+      }
+      return { ...first, items };
+    },
     enabled: !!user,
   });
 
@@ -145,7 +153,10 @@ export default function Sidebar() {
   }, [folderData]);
 
   const clusters = useMemo(
-    () => (clusterData?.items ?? []).filter((c) => !c.is_archived),
+    () => {
+      const items = (clusterData?.items ?? []).filter(c => !c.is_archived && !c.is_unclustered && c.summary_title !== 'Unclustered Images');
+      return [...items.filter(c => c.is_pinned), ...items.filter(c => !c.is_pinned).sort((a, b) => b.size - a.size).slice(0, 5)];
+    },
     [clusterData]
   );
 
@@ -297,17 +308,18 @@ export default function Sidebar() {
           <>
             <GroupLabel href="/clusters" collapsed={collapsed}>Clusters</GroupLabel>
             <div className="space-y-px">
-              {clusters.slice(0, SIDEBAR_CLUSTER_LIMIT).map((c) => (
+              {clusters.map((c) => (
                 <NavItem
                   key={c.id}
                   href={`/clusters/${c.id}`}
                   icon={LayoutGrid}
-                  label={c.display_name || c.summary_title || `Cluster ${c.id}`}
+                  label={`${c.is_pinned ? 'Pinned · ' : ''}${c.display_name || c.summary_title || `Cluster ${c.id}`}`}
                   count={c.size}
                   active={isActive(`/clusters/${c.id}`)}
                   collapsed={collapsed}
                 />
               ))}
+              <NavItem href="/clusters" icon={LayoutGrid} label="All clusters" active={isActive('/clusters', true)} collapsed={collapsed} />
             </div>
           </>
         )}

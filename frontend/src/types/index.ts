@@ -59,7 +59,13 @@ export interface ImageListResponse {
   limit: number;
 }
 
+export interface ClusterPreviewImage {
+  id: number; thumbnail_url: string; width: number | null; height: number | null;
+}
+
 export interface Cluster {
+  preview_images: ClusterPreviewImage[];
+  is_unclustered: boolean;
   id: number;
   method: string;
   run_id: string;
@@ -77,6 +83,7 @@ export interface Cluster {
 }
 
 export interface ClusterListResponse {
+  overview: { clusters: number; grouped: number; unclustered: Cluster | null; largest: Cluster[] };
   items: Cluster[];
   total: number;
   skip: number;

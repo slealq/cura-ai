@@ -16,6 +16,7 @@ from app.schemas import (
     ClusterDetailResponse,
     ClusterListResponse,
     ClusterMergeRequest,
+    ClusterPreviewImage,
     ClusterRenameRequest,
     ClusterResponse,
     ImageResponse,
@@ -35,6 +36,8 @@ router = APIRouter(prefix="/clusters", tags=["clusters"])
 @router.get("", response_model=ClusterListResponse)
 async def list_clusters(
     include_archived: bool = False,
+    search: str = "",
+    sort: str = Query("size", pattern="^(size|name)$"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -42,21 +45,44 @@ async def list_clusters(
 ):
     """List all clusters from the latest clustering run."""
     cluster_service = get_cluster_service(db, current_user.id)
-    clusters = cluster_service.get_latest_clusters(limit=limit)
+    clusters = cluster_service.get_latest_clusters(limit=None, include_archived=include_archived)
 
     if not include_archived:
         clusters = [c for c in clusters if not c.is_archived]
 
+    real = [c for c in clusters if c.summary_title != "Unclustered Images"]
+    noise = next((c for c in clusters if c.summary_title == "Unclustered Images"), None)
+    overview = dict(
+        clusters=len(real), grouped=sum(c.size for c in real),
+        unclustered=ClusterResponse.model_validate(noise) if noise else None,
+        largest=[ClusterResponse.model_validate(c) for c in sorted(real, key=lambda c: -c.size)[:5]],
+    )
+    if search:
+        term = search.casefold()
+        clusters = [c for c in clusters if term in " ".join([
+            c.display_name or "", c.summary_title or "", c.summary_description or "", *c.common_tags,
+        ]).casefold()]
+    clusters.sort(key=lambda c: (
+        not c.is_pinned,
+        (c.display_name or c.summary_title or f"Cluster {c.id}").casefold() if sort == "name" else -c.size,
+        c.id,
+    ))
+    total = len(clusters)
+    clusters = clusters[skip:skip + limit]
+    previews = cluster_service.get_preview_images(clusters)
     storage = get_storage_service()
     items = []
     for c in clusters:
         resp = ClusterResponse.model_validate(c)
         resp.cover_thumbnail_url = storage.generate_cluster_cover_sas_url(c.cover_thumbnail_uri)
+        resp.is_unclustered = c.summary_title == "Unclustered Images"
+        resp.preview_images = [ClusterPreviewImage.model_validate(image) for image in previews.get(c.id, [])]
         items.append(resp)
 
     return ClusterListResponse(
         items=items,
-        total=len(clusters),
+        overview=overview,
+        total=total,
         skip=skip,
         limit=limit,
     )
@@ -183,6 +209,7 @@ async def merge_clusters(request: ClusterMergeRequest, db: Session = Depends(get
             request.cluster_ids,
             new_name=request.new_name,
         )
+        dispatch(summarize_cluster, merged.id, current_user.id)
         return ClusterResponse.model_validate(merged)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -293,7 +320,7 @@ async def export_cluster(
     cluster_id: int,
     format: str = Query("json", pattern="^(json|zip)$"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_from_token_param),
 ):
     """Export cluster data as JSON or ZIP (with images)."""
     cluster_service = get_cluster_service(db, current_user.id)
