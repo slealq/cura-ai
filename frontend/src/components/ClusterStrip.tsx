@@ -28,11 +28,13 @@ export default function ClusterStrip({ cluster, selected, onSelect }: { cluster:
   });
   const height = mobile ? 138 : Math.min(180, (width - Math.max(images.length - 1, 0) * 2) / Math.max(sum, 1));
   const href = `/clusters/${cluster.id}`;
+  const firstBullet = clusterBullets(cluster)[0];
+  const summary = firstBullet?.match(/^.*?[.!?](?=\s|$)/)?.[0] || firstBullet;
   return <article onClick={e => { if (!(e.target as HTMLElement).closest('a, button')) router.push(href); }} className={cn('group relative grid min-w-0 gap-3.5 border-b border-border py-3 md:grid-cols-[230px_minmax(0,1fr)]', selected && 'bg-selection-soft')}>
     <Link href={href} className="min-w-0 pl-14 md:pl-8">
       <h2 className="text-sm font-semibold leading-snug">{clusterTitle(cluster)}</h2>
       {cluster.is_pinned && <span className="text-[11px] font-medium text-muted-foreground">Pinned</span>}
-      <p className="mt-1 line-clamp-3 text-[12.5px] text-muted-foreground">{clusterBullets(cluster)[0] || 'Summarizing cluster…'}</p>
+      <p className="mt-1 line-clamp-3 text-[12.5px] text-muted-foreground">{summary || 'Summarizing cluster…'}</p>
       <div className="mt-1.5 flex flex-wrap gap-1">{cluster.common_tags.slice(0, 3).map(tag => <span key={tag} className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">{tag}</span>)}</div>
     </Link>
     <button aria-label={`${selected ? 'Deselect' : 'Select'} ${clusterTitle(cluster)}`} aria-pressed={selected} onClick={onSelect} className={cn('absolute left-1 top-4 grid h-[22px] w-[22px] place-items-center rounded-full border border-input focus-visible:ring-2 focus-visible:ring-ring', selected && 'border-selection bg-selection text-primary-foreground')}>
