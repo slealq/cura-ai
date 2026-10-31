@@ -76,7 +76,7 @@ jobs:
 
       - name: Run standalone tests
         working-directory: backend
-        run: pytest tests/test_image_urls.py tests/test_fal_generator.py tests/test_fal_editor.py tests/test_dispatch.py tests/test_cost_calculator.py tests/test_no_retry_decorators.py tests/test_model_registry_drift.py tests/test_cluster_service_enum_guard.py tests/test_clustering_small_n.py tests/test_model_catalog_schema.py tests/test_model_catalog_billing_drift.py tests/test_model_catalog_settings.py tests/test_fal_language_routing.py tests/test_removed_models_rejected.py tests/test_migration_055.py tests/test_library_generated_images.py tests/test_generated_image_deletion.py tests/test_empty_cluster_cleanup.py tests/test_stuck_job_reconciliation.py tests/test_pipeline_recovery.py tests/test_discord_job_alerts.py -v
+        run: python -m pytest tests/test_image_urls.py tests/test_fal_generator.py tests/test_fal_editor.py tests/test_dispatch.py tests/test_cost_calculator.py tests/test_no_retry_decorators.py tests/test_model_registry_drift.py tests/test_cluster_service_enum_guard.py tests/test_clustering_small_n.py tests/test_model_catalog_schema.py tests/test_model_catalog_billing_drift.py tests/test_model_catalog_settings.py tests/test_fal_language_routing.py tests/test_removed_models_rejected.py tests/test_migration_055.py tests/test_library_generated_images.py tests/test_generated_image_deletion.py tests/test_empty_cluster_cleanup.py tests/test_stuck_job_reconciliation.py tests/test_pipeline_recovery.py tests/test_discord_job_alerts.py -v
 
   frontend:
     name: Frontend Lint & Build
