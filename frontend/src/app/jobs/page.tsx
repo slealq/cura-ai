@@ -125,16 +125,16 @@ export default function JobsPage() {
           : isError ? <div className="rounded-lg border border-border p-5"><p>Could not load jobs.</p><button onClick={() => refetch()} className="mt-2 text-sm underline">Try again</button></div>
           : jobs.items.length === 0 ? <div className="grid h-64 place-items-center text-sm text-muted-foreground">No jobs in this view</div>
           : <div className="overflow-x-auto rounded-lg border border-border">
-            <table className="w-full text-left text-[13px]">
+            <table className="mobile-cards w-full text-left text-[13px]">
               <thead className="bg-chrome text-xs text-muted-foreground"><tr>{['Job', 'Status', 'Progress', 'Result / error', 'Cost', 'Started'].map(label => <th key={label} className="px-3 py-2 font-medium">{label}</th>)}</tr></thead>
               <tbody className="divide-y divide-border">
                 {jobs.items.map(job => <tr key={job.id} onClick={() => { setSelectedId(job.id); setShowResults(false); }} className={cn('cursor-pointer hover:bg-accent', selectedId === job.id && 'bg-selection-soft')}>
-                  <td className="px-3 py-2"><button onClick={event => { event.stopPropagation(); setSelectedId(job.id); setShowResults(false); }} className="text-left hover:underline" aria-label={`Inspect job ${job.id}`}><span className="font-mono text-xs text-muted-foreground">#{job.id}</span> <span className="capitalize">{jobTypeLabel(job.job_type)}</span></button></td>
-                  <td className="whitespace-nowrap px-3 py-2"><JobStatus status={job.status} /></td>
-                  <td className="min-w-[130px] px-3 py-2"><JobProgress job={job} /></td>
-                  <td className="max-w-[220px] truncate px-3 py-2 text-muted-foreground" title={job.error_message || job.image_filename || undefined}>{job.error_message ? <span className="text-danger">{job.error_message}</span> : job.image_filename || (job.status === 'completed' ? 'View results' : '—')}</td>
-                  <td className="px-3 py-2"><JobCost job={job} /></td>
-                  <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">{job.started_at ? formatDate(job.started_at) : 'Queued'}</td>
+                  <td data-label="Job" className="px-3 py-2"><button onClick={event => { event.stopPropagation(); setSelectedId(job.id); setShowResults(false); }} className="text-left hover:underline" aria-label={`Inspect job ${job.id}`}><span className="font-mono text-xs text-muted-foreground">#{job.id}</span> <span className="capitalize">{jobTypeLabel(job.job_type)}</span></button></td>
+                  <td data-label="Status" className="whitespace-nowrap px-3 py-2"><JobStatus status={job.status} /></td>
+                  <td data-label="Progress" className="min-w-[130px] px-3 py-2"><JobProgress job={job} /></td>
+                  <td data-label="Result / error" className="max-w-[220px] truncate px-3 py-2 text-muted-foreground" title={job.error_message || job.image_filename || undefined}>{job.error_message ? <span className="text-danger">{job.error_message}</span> : job.image_filename || (job.status === 'completed' ? 'View results' : '—')}</td>
+                  <td data-label="Cost" className="px-3 py-2"><JobCost job={job} /></td>
+                  <td data-label="Started" className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">{job.started_at ? formatDate(job.started_at) : 'Queued'}</td>
                 </tr>)}
               </tbody>
             </table>

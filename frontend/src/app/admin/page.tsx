@@ -321,10 +321,10 @@ export default function AdminPage() {
   }, [catalog]);
 
   return (
-    <div className="p-6 space-y-8 max-w-7xl mx-auto">
+    <div className="admin-workbench p-6 space-y-8 max-w-7xl mx-auto">
       <div>
         <h1 className="text-2xl font-bold">Admin</h1>
-        <div className="flex gap-1 bg-muted rounded-lg p-1 mt-4 w-fit">
+        <div className="admin-tabs flex gap-1 bg-muted rounded-lg p-1 mt-4 w-fit">
           {([
             { key: 'usage', label: 'Usage & Billing' },
             { key: 'payments', label: 'Payments' },
@@ -1187,7 +1187,7 @@ export default function AdminPage() {
         {/* Single entry form dialog (for per-call entries and new entries) */}
         {showCatalogForm && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowCatalogForm(false)}>
-            <div className="bg-card border rounded-lg p-6 w-[480px] space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="mobile-modal bg-card border rounded-lg p-6 w-[480px] space-y-4" onClick={(e) => e.stopPropagation()}>
               <h3 className="font-semibold">{editingEntry ? 'Edit Catalog Entry' : 'New Catalog Entry'}</h3>
               <div className="grid grid-cols-3 gap-3">
                 <div>
@@ -1299,7 +1299,7 @@ export default function AdminPage() {
         {/* Model edit dialog (for token-based models) */}
         {editingModel && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setEditingModel(null)}>
-            <div className="bg-card border rounded-lg p-6 w-[520px] space-y-4 max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="mobile-modal bg-card border rounded-lg p-6 w-[520px] space-y-4 max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
               <h3 className="font-semibold">
                 Edit {editingModel.model}
                 <span className="text-sm font-normal text-muted-foreground ml-2">{editingModel.provider}</span>

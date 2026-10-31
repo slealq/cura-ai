@@ -51,7 +51,7 @@ export default function AddToFolderDialog({
       <div className="fixed inset-0 bg-black/50 z-50" onClick={onClose} />
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div
-          className="bg-card rounded-xl shadow-xl max-w-md w-full p-6 space-y-4"
+          className="mobile-modal bg-card rounded-xl shadow-xl max-w-md w-full p-6 space-y-4"
           onClick={(e) => e.stopPropagation()}
         >
           <h3 className="text-lg font-semibold">Add to Folder</h3>
@@ -102,7 +102,7 @@ export default function AddToFolderDialog({
             </div>
           )}
 
-          <div className="flex gap-2 justify-end">
+          <div className="mobile-modal-actions flex gap-2 justify-end">
             <button
               onClick={onClose}
               className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors"

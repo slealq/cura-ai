@@ -167,3 +167,57 @@ input[type="range"]::-moz-range-track {
 ::-webkit-scrollbar-thumb:hover {
   @apply bg-muted-foreground/50;
 }
+
+/* Phone workbench. Desktop geometry and density are intentionally unchanged. */
+@media (max-width: 767px) {
+  .app-shell { height: 100dvh; }
+  .app-header { height: calc(56px + env(safe-area-inset-top)); padding-top: env(safe-area-inset-top); padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); gap: 8px; }
+  .app-main { padding: 16px max(12px, env(safe-area-inset-right)) calc(150px + env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
+  .mobile-tabs { position: fixed; inset: auto 0 0; z-index: 40; display: grid; grid-template-columns: repeat(4, 1fr); padding: 6px max(8px, env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); border-top: 1px solid hsl(var(--border)); background: hsl(var(--background)); }
+  .mobile-tabs > * { min-height: 52px; }
+  .mobile-tabs [aria-current="page"] { color: hsl(var(--selection)); }
+  .mobile-sheet { padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+  select { height: 44px; appearance: none; padding-right: 24px; }
+  button, a, summary, select { min-height: 44px; min-width: 44px; }
+  input:not([type="checkbox"]):not([type="radio"]), textarea, select { font-size: 16px !important; }
+  .activity-popover { position: fixed; top: calc(56px + env(safe-area-inset-top)); left: 12px; right: 12px; width: auto; }
+  .library-filters { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
+  .library-filters > * { flex-shrink: 0; }
+  .selection-actions { bottom: calc(76px + env(safe-area-inset-bottom)); }
+  .library-inspector.fixed, aside[aria-label="Model inspector"], aside[aria-label="Job inspector"]:not(.hidden) { top: auto; bottom: 0; height: 85dvh; max-height: 85dvh; border-radius: 20px 20px 0 0; border-top: 1px solid hsl(var(--border)); z-index: 50; padding-bottom: env(safe-area-inset-bottom); box-shadow: 0 -20px 80px hsl(var(--foreground) / .2); }
+  .library-inspector.fixed { overflow: hidden; }
+  input:not([type="range"]):not([type="checkbox"]):not([type="radio"]) { min-height: 44px; }
+  .library-inspector aside { min-height: 0; }
+  .library-inspector header { touch-action: pan-x; }
+  .image-viewer { height: 100dvh; }
+  .viewer-canvas { padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); touch-action: pan-y; }
+  .viewer-canvas > div:last-child { display: none; }
+  .viewer-canvas img { max-height: 100dvh; width: 100%; }
+  .viewer-mobile-controls { padding-top: calc(12px + env(safe-area-inset-top)); }
+  .viewer-info { display: none; }
+  .viewer-info[data-open="true"] { display: flex; position: absolute; inset: auto 0 0; height: 80dvh; border-radius: 20px 20px 0 0; background: hsl(var(--background)); z-index: 20; padding-bottom: env(safe-area-inset-bottom); }
+  .tile-select { width: 44px; height: 44px; opacity: 0; pointer-events: none; }
+  .library-tile[data-selecting="true"] .tile-select { opacity: 1; pointer-events: auto; }
+  .app-main .group .transition-opacity:not(.tile-select):not(svg) { opacity: 1; }
+  .app-main :is(h1, h2, h3, p, dd) { overflow-wrap: anywhere; }
+  .app-main pre { max-width: 100%; }
+  .app-main table { display: block; max-width: 100%; overflow-x: auto; }
+  .app-main table.mobile-cards thead { display: none; }
+  .app-main table.mobile-cards tbody { display: block; }
+  .app-main table.mobile-cards tr { display: flex; flex-wrap: wrap; padding: 8px; border-bottom: 1px solid hsl(var(--border)); }
+  .app-main table.mobile-cards td { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; text-align: right; min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+  .app-main table.mobile-cards td::before { content: attr(data-label); color: hsl(var(--muted-foreground)); font-family: inherit; text-align: left; flex-shrink: 0; }
+  .app-main [role="dialog"] { max-height: 95dvh; max-width: 100%; }
+  .app-main [role="dialog"] footer { position: sticky; bottom: 0; background: hsl(var(--background)); }
+}
+
+@media (max-width: 767px) {
+  .admin-workbench { padding: 0; }
+  .admin-tabs { width: 100%; overflow-x: auto; }
+  .admin-tabs > button { flex-shrink: 0; white-space: nowrap; }
+  .admin-workbench table { display: table; min-width: 640px; }
+  .admin-workbench :has(> table) { max-width: 100%; overflow-x: auto; }
+  .mobile-modal { max-width: calc(100vw - 24px); max-height: calc(100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); overflow-y: auto; }
+  .mobile-modal-actions { position: sticky; bottom: 0; padding-block: 12px; background: hsl(var(--card)); z-index: 1; }
+  .mobile-cards td > * { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+}

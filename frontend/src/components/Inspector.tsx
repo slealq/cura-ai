@@ -1,5 +1,6 @@
 'use client';
 
+import { useMobileSheet } from '@/hooks/useMobileSheet';
 import LibraryImage from '@/components/LibraryImage';
 
 import Link from 'next/link';
@@ -63,6 +64,8 @@ export default function Inspector({
   onDispatched: () => void;
   onDismiss?: () => void;
 }) {
+  const sheet = useMobileSheet(!!onDismiss, () => onDismiss?.());
+  const [swipeY, setSwipeY] = useState(0);
   const router = useRouter();
   const client = useQueryClient();
   const { data: catalog } = useModelCatalog();
@@ -273,10 +276,13 @@ export default function Inspector({
               : undefined;
   return (
     <aside
+      ref={sheet}
+      role={onDismiss ? 'dialog' : undefined}
+      aria-modal={onDismiss ? true : undefined}
       aria-label="Inspector"
       className="flex h-full min-h-[500px] w-full flex-col border-l border-border bg-background"
     >
-      <header className="flex items-center justify-between border-b border-border p-4">
+      <header onTouchStart={e => setSwipeY(e.touches[0].clientY)} onTouchEnd={e => { if (e.changedTouches[0].clientY - swipeY > 80 && window.innerWidth < 768) onDismiss?.(); }} className="flex items-center justify-between border-b border-border p-4">
         <h2 className="flex items-center gap-2 font-medium">
           <Sparkles className="h-4 w-4" />
           {tool || (images.length ? `${images.length} selected` : title)}

@@ -134,8 +134,9 @@ function Tile({
 
   return (
     <div
+      data-selecting={selecting}
       className={cn(
-        'group relative h-full overflow-hidden rounded-md bg-muted',
+        'library-tile group relative h-full overflow-hidden rounded-md bg-muted',
         selected && 'outline outline-[3px] -outline-offset-[3px] outline-selection'
       )}
     >
@@ -172,7 +173,7 @@ function Tile({
         aria-label={selected ? 'Deselect' : 'Select'}
         aria-pressed={selected}
         className={cn(
-          'absolute left-2 top-2 grid h-[22px] w-[22px] place-items-center rounded-full border-[1.5px] text-white transition-opacity',
+          'tile-select absolute left-2 top-2 grid h-[22px] w-[22px] place-items-center rounded-full border-[1.5px] text-white transition-opacity',
           selected ? 'border-selection bg-selection opacity-100' : 'border-white/95 bg-black/20',
           !selected &&
             (selecting ? 'opacity-100' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100')
@@ -218,7 +219,14 @@ function AppendOnlyGrid({ images, density, children }: {
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  const count = Math.max(1, Math.floor((width + 8) / (COLUMN_WIDTH[density] + 8)));
+  const [phone, setPhone] = useState(false);
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 767px)');
+    const update = () => setPhone(media.matches);
+    update(); media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+  const count = phone ? ({ S: 3, M: 2, L: 1 }[density]) : Math.max(1, Math.floor((width + 8) / (COLUMN_WIDTH[density] + 8)));
   const tileWidth = (width - (count - 1) * 8) / count;
   let current = layout.current;
   if (current.count !== count || current.density !== density ||
@@ -303,6 +311,7 @@ function ImageGridContent({
   const inspectorVisible = wide && !inspectorHidden;
   const [openImage, setOpenImage] = useState<Image | null>(null);
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null);
+  const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [density, setDensity] = useState<Density>('M');
   const [showDescribeAll, setShowDescribeAll] = useState(false);
@@ -408,6 +417,7 @@ function ImageGridContent({
 
   const clearSelection = () => {
     setSelectedIds(new Set());
+    setSelectMode(false);
     setToolImages(null);
   };
 
@@ -420,7 +430,7 @@ function ImageGridContent({
     });
 
   const allLoadedSelected = images.length > 0 && images.every((img) => selectedIds.has(img.id));
-  const selecting = selectedIds.size > 0;
+  const selecting = selectMode || selectedIds.size > 0;
 
   useEffect(() => {
     if (!selecting) return;
@@ -484,7 +494,8 @@ function ImageGridContent({
           </div>
         )}
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="library-filters flex flex-wrap items-center gap-2">
+          <button className="hidden max-md:block rounded-md border border-border px-3 text-sm" aria-pressed={selectMode} onClick={() => { setSelectMode(!selectMode); setSelectedIds(new Set()); }}>{selectMode ? 'Done' : 'Select'}</button>
           {showSourceFilter && (
             <Segmented label="Source" options={SOURCE_FILTERS} value={source} onChange={changeSource} />
           )}
@@ -598,7 +609,7 @@ function ImageGridContent({
           <div
             role="toolbar"
             aria-label="Selection actions"
-            className="fixed bottom-5 left-1/2 z-40 flex max-w-[calc(100vw-24px)] -translate-x-1/2 overflow-x-auto items-center gap-0.5 whitespace-nowrap rounded-xl bg-primary p-1.5 text-primary-foreground shadow-[0_18px_40px_-12px_rgb(0_0_0/0.45)]"
+            className="selection-actions fixed bottom-5 left-1/2 z-40 flex max-w-[calc(100vw-24px)] -translate-x-1/2 overflow-x-auto items-center gap-0.5 whitespace-nowrap rounded-xl bg-primary p-1.5 text-primary-foreground shadow-[0_18px_40px_-12px_rgb(0_0_0/0.45)]"
           >
             <button onClick={clearSelection} className={cn(dockButton, 'px-2')} aria-label="Clear selection">
               <X className="h-4 w-4" />
@@ -686,7 +697,7 @@ function ImageGridContent({
       {(inspectorVisible || tool || mobileInspector) && (
         <div
           className={cn(
-            'sticky top-4 h-[calc(100vh-120px)] w-[340px] shrink-0',
+            'library-inspector sticky top-4 h-[calc(100vh-120px)] w-[340px] shrink-0',
             !inspectorVisible && 'fixed inset-0 z-50 h-full w-full bg-background sm:left-auto sm:w-[340px]'
           )}
         >
