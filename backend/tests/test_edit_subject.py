@@ -35,7 +35,7 @@ def test_roles_survive_reorder_and_fit_schema():
         validate(args, {"$ref": f"#/components/schemas/{root}", "components": {"schemas": schema}})
         assert args["image_urls"] == ["composition"]
         assert args["elements"] == [dict(frontal_image_url="main", reference_image_urls=["angle"])]
-        assert args["num_images"] == 1 and args["series_amount"] == 9
+        assert "num_images" not in args and args["series_amount"] == 9
 
 
 @pytest.mark.parametrize("sources", [
@@ -231,3 +231,10 @@ def test_subject_without_references_still_sends_required_image_urls():
     references, elements = subject_inputs(sources, ["main", "angle"])
     assert references == ["main"]
     assert elements == [{"frontal_image_url": "main", "reference_image_urls": ["angle"]}]
+
+
+def test_element_without_angles_reuses_its_main_photo():
+    from app.services.edit_subject import subject_inputs
+
+    _, elements = subject_inputs([{"role": "element_main", "element": 1}], ["main"])
+    assert elements == [{"frontal_image_url": "main", "reference_image_urls": ["main"]}]

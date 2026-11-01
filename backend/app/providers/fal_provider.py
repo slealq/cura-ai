@@ -151,7 +151,7 @@ def build_image_request(
             if not isinstance(count, int) or not 2 <= count <= 9:
                 raise ValueError("Series requires 2–9 images")
             arguments["series_amount"] = count
-            arguments["num_images"] = 1
+            arguments.pop("num_images", None)
     if values.get("mask_url"):
         from app.services.edit_mask import provider_mask_url
         if model.key == "ideogram-v4.5-edit":
@@ -613,7 +613,7 @@ class FalEditor(BaseEditor):
 
             images_data = result.get("images", [])
             if not images_data:
-                raise RuntimeError("No images returned from fal.ai edit")
+                raise RuntimeError(f"No images returned from fal.ai edit (response fields: {sorted(result)})")
 
             downloaded: list[bytes] = []
             widths: list[int] = []

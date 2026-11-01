@@ -32,6 +32,9 @@ def subject_inputs(sources, urls):
         if not element["frontal_image_url"] or len(element["reference_image_urls"]) > 3:
             raise ValueError("Each element needs a main photo and up to 3 alternate angles")
     ordered = [elements[number] for number in sorted(elements)]
+    # Kling rejects an element with no reference images, though its schema marks them optional.
+    for element in ordered:
+        element["reference_image_urls"] = element["reference_image_urls"] or [element["frontal_image_url"]]
     # Kling requires at least one image_urls entry, even when only elements are used.
     return references or [ordered[0]["frontal_image_url"]] if ordered else references, ordered
 
