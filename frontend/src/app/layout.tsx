@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { AxiosError } from 'axios';
 import { Toaster, toast } from 'sonner';
+import { NotificationProvider } from '@/contexts/NotificationContext';
 import MobileStatus from '@/components/MobileStatus';
 import Link from 'next/link';
 import MobileNavigation from '@/components/MobileNavigation';
@@ -91,7 +92,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
           <main className="app-main flex-1 overflow-auto px-5 py-5">{children}</main>
         </div>
       </div>
-      <Toaster position="bottom-right" richColors theme={resolvedTheme} />
+      <Toaster position="top-right" closeButton toastOptions={{ style: { width: 'var(--width)' } }} richColors theme={resolvedTheme} />
     </>
   );
 }
@@ -130,7 +131,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     return (
       <>
         {children}
-        <Toaster position="bottom-right" richColors theme={resolvedTheme} />
+        <Toaster position="top-right" closeButton toastOptions={{ style: { width: 'var(--width)' } }} richColors theme={resolvedTheme} />
       </>
     );
   }
@@ -230,10 +231,12 @@ export default function RootLayout({
         <QueryClientProvider client={queryClient}>
           <ThemeProvider>
             <AuthProvider>
+              <NotificationProvider>
               <UploadProvider>
                 <SentryInit />
                 <AuthGate>{children}</AuthGate>
               </UploadProvider>
+              </NotificationProvider>
             </AuthProvider>
           </ThemeProvider>
         </QueryClientProvider>

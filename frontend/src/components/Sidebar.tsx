@@ -336,6 +336,7 @@ export default function Sidebar() {
       <div className="space-y-px border-t border-border p-2">
         <NavItem href="/jobs" icon={Activity} label="Jobs" active={isActive('/jobs')} collapsed={collapsed} />
         <NavItem href="/billing" icon={CreditCard} label="Billing" active={isActive('/billing')} collapsed={collapsed} />
+        <NavItem href="/notifications" icon={Settings} label="Notifications" active={isActive('/notifications')} collapsed={collapsed} />
         <NavItem href="/settings" icon={Settings} label="Settings" active={isActive('/settings')} collapsed={collapsed} />
         {isAdmin && (
           <>
