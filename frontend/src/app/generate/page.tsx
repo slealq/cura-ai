@@ -4,47 +4,23 @@ import LibraryImage from '@/components/LibraryImage';
 
 import { useState, useEffect, useRef, useMemo, Suspense } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { generationApi, settingsApi, billingApi } from '@/lib/api';
-import { Loader2, Sparkles, ChevronDown, ChevronUp, X, Plus, Trash2, Zap, Wand2 } from 'lucide-react';
+import { generationApi, settingsApi, billingApi, imagesApi } from '@/lib/api';
+import { Loader2, X, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { trackFunnelStep } from '@/lib/observability';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import ToolEntry from '@/components/ToolEntry';
-import GeneratedImageCard from '@/components/GeneratedImageCard';
-import ModelSelector from '@/components/ModelSelector';
-import { cn } from '@/lib/utils';
+import Stage from '@/components/tools/Stage';
+import Composer from '@/components/tools/Composer';
+import Notice from '@/components/tools/Notice';
+import type { GeneratedImage } from '@/types';
 import { useModelCatalog } from '@/hooks/useModelCatalog';
 import { Slider } from '@/components/Slider';
-
-const SIZE_PRESETS = [
-  { label: '1024 x 1024', w: 1024, h: 1024 },
-  { label: '768 x 1024', w: 768, h: 1024 },
-  { label: '1024 x 768', w: 1024, h: 768 },
-  { label: '512 x 512', w: 512, h: 512 },
-  { label: '768 x 1344', w: 768, h: 1344 },
-  { label: '1344 x 768', w: 1344, h: 768 },
-];
-
-function AspectIcon({ ratio, className }: { ratio: string; className?: string }) {
-  const dims: Record<string, [number, number]> = {
-    '1:1': [10, 10], '16:9': [14, 8], '9:16': [8, 14],
-    '4:3': [12, 9], '3:4': [9, 12],
-  };
-  const [w, h] = dims[ratio] || [10, 10];
-  const x = (16 - w) / 2, y = (16 - h) / 2;
-  return (
-    <svg viewBox="0 0 16 16" className={cn('w-4 h-4', className)}>
-      <rect x={x} y={y} width={w} height={h} rx={1}
-        className="fill-current" />
-    </svg>
-  );
-}
 
 export default function GeneratePage() {
   return (
     <Suspense fallback={<div className="flex items-center justify-center h-32"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>}>
-      <ToolEntry tool="generate"><GeneratePageInner /></ToolEntry>
+      <GeneratePageInner />
     </Suspense>
   );
 }
@@ -52,11 +28,31 @@ export default function GeneratePage() {
 function GeneratePageInner() {
   const queryClient = useQueryClient();
   const searchParams = useSearchParams();
+  const dirty = useRef(new Set<string>());
+  const [references, setReferences] = useState<Array<{ id: number; url: string }>>([]);
+
+  useEffect(() => {
+    const ids = (searchParams.get('sources') || '').split(',').map(Number).filter(id => Number.isInteger(id) && id > 0);
+    let active = true;
+    Promise.all(ids.map(async id => {
+      try {
+        const image = await imagesApi.get(id);
+        const thumbnail = image.thumbnail_uri_medium || image.thumbnail_uri_small;
+        return { id, url: thumbnail ? imagesApi.getThumbnailUrl(thumbnail.split('/').pop()!) : imagesApi.getImageUrl(image.object_key.split('/').pop()!) };
+      } catch {
+        toast.error(`Could not load selected image ${id}`);
+        return null;
+      }
+    })).then(items => {
+      if (active) setReferences(items.filter((item): item is NonNullable<typeof item> => item !== null));
+    });
+    return () => { active = false; };
+  }, [searchParams]);
 
   // Form state
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [notice, setNotice] = useState('');
   const [baseModel, setBaseModel] = useState('');
   const [quality, setQuality] = useState('');
   const [loraSelections, setLoraSelections] = useState<Array<{ id: number; scale: number }>>([]);
@@ -83,23 +79,33 @@ function GeneratePageInner() {
   const ASPECT_RATIOS = (spec.aspect_ratio?.options ?? []).map(value => ({ value, label: value }));
   const SAFETY_LEVELS = (spec.safety_tolerance?.options ?? []).map(value => ({ value, label: value, level: Number(value) }));
   const IMAGE_SIZE_PRESETS = [...(spec.image_size?.options ?? []), ...(spec.image_size?.custom_size ? ['custom'] : [])].map(value => ({ value, label: value.replaceAll('_', ' '), ratio: '1:1' }));
+  // Model changes preserve supported values and report any adjustments below.
+
+  const initializedModel = useRef('');
   useEffect(() => {
-    if (!model) return;
-    setResolution(spec.resolution?.default ?? ''); setAspectRatio(spec.aspect_ratio?.default ?? '');
-    setSafetyTolerance(spec.safety_tolerance?.default ?? ''); setImageSizePreset(spec.image_size?.default ?? '');
-    setQuality(spec.quality?.default ?? '');
-    setSteps(spec.steps_guidance?.steps?.default ?? 28); setGuidance(spec.steps_guidance?.guidance?.default ?? 0);
-  }, [model, spec.resolution?.default, spec.aspect_ratio?.default, spec.safety_tolerance?.default, spec.image_size?.default, spec.quality?.default, spec.steps_guidance?.steps?.default, spec.steps_guidance?.guidance?.default]);
+    if (!model || initializedModel.current === model.key) return;
+    initializedModel.current = model.key;
+    setResolution(model.params.resolution?.default ?? '');
+    setAspectRatio(model.params.aspect_ratio?.default ?? '');
+    setImageSizePreset(model.params.image_size?.default ?? '');
+    setQuality(model.params.quality?.default ?? '');
+    setSafetyTolerance(model.params.safety_tolerance?.default ?? '');
+    setSteps(model.params.steps_guidance?.steps?.default ?? 28);
+    setGuidance(model.params.steps_guidance?.guidance?.default ?? 0);
+  }, [model]);
 
   const { data: generationConfig } = useQuery({
     queryKey: ['generation-config', baseModel],
     queryFn: () => settingsApi.getGenerationConfig(baseModel),
     enabled: !!model,
   });
+  const configuredModel = useRef('');
   useEffect(() => {
-    if (!generationConfig || !model) return;
+    if (!generationConfig || !model || configuredModel.current) return;
+    configuredModel.current = model.key;
     if (model.params.image_size?.custom_size) {
-      setWidth(generationConfig.width); setHeight(generationConfig.height);
+      setWidth(generationConfig.width);
+      setHeight(generationConfig.height);
     }
     const bounds = model.params.steps_guidance;
     if (bounds?.steps && bounds.guidance) {
@@ -173,6 +179,7 @@ function GeneratePageInner() {
         generationApi.getLora(parsed).then((lora) => {
           const modelEntry = BASE_MODELS.find((m) => m.value === lora.base_model);
           if (modelEntry) {
+            hasInitialized.current = true;
             setBaseModel(modelEntry.value);
             setGuidance(modelEntry.defaultGuidance);
           }
@@ -183,7 +190,7 @@ function GeneratePageInner() {
     }
     if (promptParam) {
       hasAppliedUrlParams.current = true;
-      setPrompt(decodeURIComponent(promptParam));
+      setPrompt(promptParam);
     }
   }, [searchParams, catalog, BASE_MODELS]);
 
@@ -355,203 +362,255 @@ function GeneratePageInner() {
     });
   };
 
-  const handleSizePreset = (w: number, h: number) => {
-    setWidth(w);
-    setHeight(h);
-  };
+  function changeModel(key: string) {
+    if (key === baseModel) return;
+    const next = catalog?.generation.find(entry => entry.key === key);
+    if (!next) return;
+    const changes: string[] = [];
+    const options = [
+      ['Resolution', resolution, setResolution, next.params.resolution],
+      ['Shape', aspectRatio, setAspectRatio, next.params.aspect_ratio],
+      ['Image size', imageSizePreset, setImageSizePreset, next.params.image_size],
+      ['Quality', quality, setQuality, next.params.quality],
+      ['Safety tolerance', safetyTolerance, setSafetyTolerance, next.params.safety_tolerance],
+    ] as const;
+    for (const [label, value, setter, param] of options) {
+      const supported = param?.options?.includes(value) || (value === 'custom' && param?.custom_size);
+      const replacement = supported ? value : param?.default ?? '';
+      if (value !== replacement && value && dirty.current.has(label)) changes.push(`${label} ${replacement ? `changed to ${replacement}` : 'removed'}`);
+      if (replacement !== value) dirty.current.delete(label);
+      setter(replacement);
+    }
+    if (loraSelections.length) {
+      setLoraSelections([]);
+      changes.push('LoRAs removed because they belong to the previous model');
+    }
+    if (!next.params.negative_prompt && negativePrompt) {
+      setNegativePrompt('');
+      changes.push('Negative prompt removed');
+    }
+    if (!next.params.seed && seed) {
+      setSeed('');
+      changes.push('Seed removed');
+    }
+    if (!next.params.enable_web_search && enableWebSearch) {
+      setEnableWebSearch(false);
+      changes.push('Web search disabled');
+    }
+    const bounds = next.params.steps_guidance;
+    for (const [label, value, setter, bound] of [
+      ['Steps', steps, setSteps, bounds?.steps],
+      ['Guidance', guidance, setGuidance, bounds?.guidance],
+    ] as const) {
+      const replacement = bound ? (spec.steps_guidance ? Math.max(bound.minimum, Math.min(bound.maximum, value)) : bound.default) : 0;
+      if (dirty.current.has(label) && replacement !== value) changes.push(`${label} ${bound ? `changed to ${replacement}` : 'removed'}`);
+      if (replacement !== value) dirty.current.delete(label);
+      setter(replacement);
+    }
+    if (numImages > next.max_num_images) {
+      setNumImages(next.max_num_images);
+      changes.push(`Results changed to ${next.max_num_images}`);
+    }
+    setNotice(changes.join('. '));
+    initializedModel.current = key;
+    setBaseModel(key);
+  }
 
   const images = generatedImages?.items || [];
   const selectedImage = selectedImageId != null
     ? images.find((img) => img.id === selectedImageId) ?? null
     : null;
 
+  const runs = new Map<string, GeneratedImage[]>();
+  for (const image of images) {
+    const key = image.job_id != null ? `job-${image.job_id}` : `image-${image.id}`;
+    runs.set(key, [...(runs.get(key) ?? []), image]);
+  }
+  const chipClass = 'min-w-0 max-w-full rounded-md border border-input bg-background px-2 py-1 text-xs';
+  const modelControl = (
+    <select aria-label="Model" value={baseModel} onChange={event => changeModel(event.target.value)} className={chipClass}>
+      {BASE_MODELS.map(entry => (
+        <option key={entry.value} value={entry.value}>{entry.label}</option>
+      ))}
+    </select>
+  );
+  const shapeControl = (spec.aspect_ratio ? (
+    <select aria-label="Shape" value={aspectRatio} onChange={event => { dirty.current.add('Shape'); setAspectRatio(event.target.value); }} className={chipClass}>
+      {ASPECT_RATIOS.map(option => (
+        <option key={option.value}>{option.value}</option>
+      ))}
+    </select>
+  ) : spec.image_size ? (
+    <select aria-label="Shape" value={imageSizePreset} onChange={event => { dirty.current.add('Image size'); setImageSizePreset(event.target.value); }} className={chipClass}>
+      {IMAGE_SIZE_PRESETS.map(option => (
+        <option key={option.value} value={option.value}>{option.label}</option>
+      ))}
+    </select>
+  ) : <span className={chipClass}>{width} × {height}</span>);
+  const countControl = (
+    <select aria-label="Results" value={numImages} onChange={event => setNumImages(Number(event.target.value))} className={chipClass}>
+      {Array.from({ length: modelCaps.maxImages }, (_, index) => index + 1).map(count => (
+        <option key={count} value={count}>{count} {count === 1 ? 'result' : 'results'}</option>
+      ))}
+    </select>
+  );
+  const qualityControl = spec.quality ? (
+    <select aria-label="Quality" value={quality} onChange={event => { dirty.current.add('Quality'); setQuality(event.target.value); }} className={chipClass}>
+      {spec.quality.options?.map(value => <option key={value}>{value}</option>)}
+    </select>
+  ) : spec.resolution ? (
+    <select aria-label="Resolution" value={resolution} onChange={event => { dirty.current.add('Resolution'); setResolution(event.target.value); }} className={chipClass}>
+      {RESOLUTIONS.map(option => (
+        <option key={option.value}>{option.value}</option>
+      ))}
+    </select>
+  ) : null;
+
   return (
-    <div className="max-w-7xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Generate</h1>
-        <p className="text-muted-foreground mt-1">
-          Create images with your trained LoRAs
-        </p>
-      </div>
-
-      {/* Generation Form */}
-      <section className="bg-card rounded-xl border border-border p-6 space-y-4">
-        {/* Prompt */}
-        <div>
-          <label className="block text-sm font-medium mb-1">Prompt</label>
-          <textarea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder="Describe the image you want to generate..."
-            className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-y min-h-[80px]"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                handleGenerate();
-              }
-            }}
-          />
-          <div className="flex items-center justify-between mt-1">
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={autoExpand}
-                onChange={(e) => setAutoExpand(e.target.checked)}
-                className="rounded"
-              />
-              Auto-expand on generate
-              {generationCosts?.expand_prompt_cost != null && (
-                <span className="inline-flex items-center gap-0.5 text-amber-600 dark:text-amber-400">
-                  <Zap className="h-3 w-3" />~{generationCosts.expand_prompt_cost < 1 ? '<1' : Math.round(generationCosts.expand_prompt_cost)}
-                </span>
-              )}
-            </label>
-            <div className="flex items-center gap-2">
-              {generationCosts?.expand_prompt_cost != null && (
-                <span className="text-xs text-muted-foreground inline-flex items-center gap-0.5">
-                  <Zap className="h-3 w-3 text-amber-600 dark:text-amber-400" />~{generationCosts.expand_prompt_cost < 1 ? '<1' : Math.round(generationCosts.expand_prompt_cost)}
-                </span>
-              )}
-              <button
-                onClick={() => expandMutation.mutate(prompt.trim())}
-                disabled={expandMutation.isPending || !prompt.trim()}
-                className="flex items-center gap-1.5 px-3 py-1 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
-              >
-                {expandMutation.isPending ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Wand2 className="h-3.5 w-3.5" />
-                )}
-                Expand
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Model selector + LoRA + quick params */}
-        <div className="flex flex-wrap gap-4 items-end">
-          {/* Base Model */}
-          <ModelSelector
-            label="Model"
-            models={BASE_MODELS}
-            value={baseModel}
-            onChange={(v) => {
-              const caps = BASE_MODELS.find((m) => m.value === v);
-              setBaseModel(v);
-              setLoraSelections([]);
-              setGuidance(caps?.defaultGuidance ?? 0);
-              if (numImages > (caps?.maxImages ?? 8)) setNumImages(caps?.maxImages ?? 8);
-              // Reset safety tolerance to model default
-
-            }}
-            size="sm"
-          />
-
-          {/* LoRA selections (max 2) — only for models that support LoRA */}
-          {modelCaps.hasLora && (
-            <div className="flex flex-wrap gap-3 items-end">
-              {loraSelections.map((sel, idx) => {
-                const available = getAvailableLorasForSlot(idx);
-                return (
-                  <div key={idx} className="flex items-end gap-2">
-                    <div className="min-w-[180px]">
-                      <label className="block text-xs text-muted-foreground mb-1">
-                        LoRA {loraSelections.length > 1 ? idx + 1 : ''}
-                      </label>
-                      <select
-                        value={sel.id}
-                        onChange={(e) => updateLoraId(idx, parseInt(e.target.value))}
-                        className="w-full px-3 py-2 border border-border rounded-lg text-sm"
-                      >
-                        {available.map((lora) => (
-                          <option key={lora.id} value={lora.id}>
-                            {lora.trigger_word ? `${lora.name} (${lora.trigger_word})` : lora.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="w-28">
-                      <label className="block text-xs text-muted-foreground mb-1">
-                        Scale: {sel.scale.toFixed(1)}
-                      </label>
-                      <Slider
-                        min={0}
-                        max={20}
-                        value={Math.round(sel.scale * 10)}
-                        onChange={(v) => updateLoraScale(idx, v / 10)}
-                        className="w-full"
-                      />
-                    </div>
-                    <button
-                      onClick={() => removeLora(idx)}
-                      className="p-2 text-muted-foreground hover:text-red-500 transition-colors"
-                      title="Remove LoRA"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                );
-              })}
-              {loraSelections.length < 2 && (loraList?.items.length ?? 0) > loraSelections.length && (
-                <button
-                  onClick={addLora}
-                  className="flex items-center gap-1 px-3 py-2 text-sm border border-dashed border-border rounded-lg text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  {loraSelections.length === 0 ? 'Add LoRA' : 'Add 2nd LoRA'}
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* Num images */}
-          <div className="w-24">
-            <label className="block text-xs text-muted-foreground mb-1">Images</label>
-            <select
-              value={numImages}
-              onChange={(e) => setNumImages(parseInt(e.target.value))}
-              className="w-full px-3 py-2 border border-border rounded-lg text-sm"
-            >
-              {[1, 2, 4, 8].filter((n) => n <= modelCaps.maxImages).map((n) => (
-                <option key={n} value={n}>{n}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Generate button + cost estimate */}
-          <div className="flex items-end gap-3">
-            <button
-              onClick={handleGenerate}
-              disabled={isGenerating || !prompt.trim()}
-              className="flex items-center gap-2 px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 font-medium"
-            >
-              {isGenerating ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Sparkles className="h-4 w-4" />
-              )}
-              Generate
-            </button>
-            {totalEstimatedCost != null && (
-              <span className="inline-flex items-center gap-1 text-sm text-amber-600 dark:text-amber-400 font-medium pb-2">
-                <Zap className="h-3.5 w-3.5" />
-                {totalEstimatedCost}{numImages > 1 && <span className="text-xs text-muted-foreground font-normal">({estimatedCostPerImage} x {numImages})</span>}
-              </span>
+    <div className="-mx-5 -my-5 h-[calc(100%+40px)] min-h-0">
+      <style jsx global>{`
+        @keyframes create-shimmer {
+          to { background-position: -220% 0; }
+        }
+      `}</style>
+      <Stage
+        canvas={
+          <>
+            {references.length > 0 && (
+              <div className="shrink-0 space-y-2">
+                <p className="text-xs text-muted-foreground">Selected images for visual reference while writing. Create uses your prompt and optional LoRAs.</p>
+                <div className="flex gap-2 overflow-x-auto">
+                  {references.map(image => (
+                    <LibraryImage key={image.id} src={image.url} alt={`Selected image ${image.id}`} className="h-[52px] w-[52px] shrink-0 rounded object-cover" />
+                  ))}
+                </div>
+              </div>
             )}
-          </div>
-        </div>
+            {imagesLoading && <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />}
+            {Array.from(runs, ([key, run]) => {
+              const first = run[0];
+              const params = first.generation_params;
+              const shape = String(params?.aspect_ratio || params?.image_size || `${first.width ?? '?'} × ${first.height ?? '?'}`);
+              const cost = run.reduce((sum, image) => sum + (image.cost_sparks ?? 0), 0);
+              return (
+                <section key={key} className="shrink-0 space-y-2">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2 text-[13px]">
+                    <span className="min-w-0 flex-1 truncate font-medium" title={first.prompt}>{first.prompt}</span>
+                    <span className="font-mono text-[11px] text-muted-foreground">
+                      {catalog?.generation.find(entry => entry.key === first.base_model)?.label || first.base_model} · {shape} · {run.some(image => image.cost_sparks != null) ? `${cost} sparks` : 'Cost pending'}
+                    </span>
+                  </div>
+                  <div className="flex h-[210px] gap-1.5 overflow-x-auto">
+                    {run.map(image => (
+                      <button
+                        key={image.id}
+                        aria-label={`Open result ${image.id}`}
+                        onClick={() => setSelectedImageId(image.id)}
+                        style={{ aspectRatio: `${image.width || 1024} / ${image.height || 1024}` }}
+                        className="relative h-full shrink-0 overflow-hidden rounded-md bg-muted"
+                      >
+                        {image.status === 'completed' && image.object_key ? (
+                          <LibraryImage src={generationApi.getImageUrl(image.id)} alt={image.prompt} className="h-full w-full object-contain" />
+                        ) : image.status === 'failed' ? (
+                          <span className="block max-w-64 p-3 text-sm text-destructive">{image.error_message || 'Generation failed'}</span>
+                        ) : <span className="block h-full w-full bg-[linear-gradient(100deg,transparent_20%,hsl(var(--muted-foreground)/0.12)_45%,transparent_70%)] bg-[length:220%_100%] motion-safe:animate-[create-shimmer_1.4s_linear_infinite]" />}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              );
+            })}
+          </>
+        }
+        composer={
+          <Composer
+            value={prompt}
+            onChange={setPrompt}
+            onApply={handleGenerate}
+            disabled={!model || isGenerating || !prompt.trim()}
+            count={numImages}
+            cost={totalEstimatedCost ?? undefined}
+            placeholder="Describe the image you want to create…"
+            action="Create"
+            chips={<>{modelControl}{shapeControl}{countControl}{qualityControl}</>}
+          />
+        }
+        settings={
+          <>
+            <h2 className="font-semibold">Create settings</h2>
+            <Notice>{notice}</Notice>
+            <label className="grid gap-1">Model{modelControl}</label>
+            <label className="grid gap-1">Shape{shapeControl}</label>
+            <label className="grid gap-1">Results{countControl}</label>
+            {qualityControl && <label className="grid gap-1">{spec.quality ? 'Quality' : 'Resolution'}{qualityControl}</label>}
+            <p className="font-mono text-xs text-muted-foreground">{totalEstimatedCost != null ? `about ${totalEstimatedCost} sparks` : 'Price unavailable'}</p>
+            {/* LoRA selections (max 2) — only for models that support LoRA */}
+            {modelCaps.hasLora && (
+              <div className="flex flex-col gap-3">
+                {loraSelections.map((sel, idx) => {
+                  const available = getAvailableLorasForSlot(idx);
+                  return (
+                    <div key={idx} className="flex flex-wrap items-end gap-2">
+                      <div className="min-w-0 w-full">
+                        <label className="block text-xs text-muted-foreground mb-1">
+                          LoRA {loraSelections.length > 1 ? idx + 1 : ''}
+                        </label>
+                        <select
+                          value={sel.id}
+                          onChange={(e) => updateLoraId(idx, parseInt(e.target.value))}
+                          className="w-full px-3 py-2 border border-border rounded-lg text-sm"
+                        >
+                          {available.map((lora) => (
+                            <option key={lora.id} value={lora.id}>
+                              {lora.trigger_word ? `${lora.name} (${lora.trigger_word})` : lora.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="w-full">
+                        <label className="block text-xs text-muted-foreground mb-1">
+                          Scale: {sel.scale.toFixed(1)}
+                        </label>
+                        <Slider
+                          min={0}
+                          max={20}
+                          value={Math.round(sel.scale * 10)}
+                          onChange={(v) => updateLoraScale(idx, v / 10)}
+                          className="w-full"
+                        />
+                      </div>
+                      <button
+                        onClick={() => removeLora(idx)}
+                        className="p-2 text-muted-foreground hover:text-red-500 transition-colors"
+                        title="Remove LoRA"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  );
+                })}
+                {loraSelections.length < 2 && (loraList?.items.length ?? 0) > loraSelections.length && (
+                  <button
+                    onClick={addLora}
+                    className="flex items-center gap-1 px-3 py-2 text-sm border border-dashed border-border rounded-lg text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    {loraSelections.length === 0 ? 'Add LoRA' : 'Add 2nd LoRA'}
+                  </button>
+                )}
+              </div>
+            )}
 
-        {/* Advanced toggle */}
-        <button
-          onClick={() => setShowAdvanced(!showAdvanced)}
-          className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
-          {showAdvanced ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-          Advanced Parameters
-        </button>
 
-        {/* Advanced params */}
-        {showAdvanced && (
-          <div className="border border-border rounded-lg p-4 space-y-4">
+            <h3 className="border-t border-border pt-3 font-medium">Advanced for this model</h3>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={autoExpand} onChange={event => setAutoExpand(event.target.checked)} />
+              Auto-expand on create
+            </label>
+            <button onClick={() => expandMutation.mutate(prompt.trim())} disabled={expandMutation.isPending || !prompt.trim()} className="rounded-md border border-input p-2 disabled:opacity-50">
+              {expandMutation.isPending ? 'Expanding…' : 'Expand prompt'}
+              {generationCosts?.expand_prompt_cost != null && ` (about ${generationCosts.expand_prompt_cost} sparks)`}
+            </button>
             {/* Negative prompt (only for models that support it) */}
             {modelCaps.hasNegativePrompt && (
               <div>
@@ -566,130 +625,25 @@ function GeneratePageInner() {
               </div>
             )}
 
-            {/* Image size presets + custom (flux-2-pro) */}
-            {modelCaps.hasImageSizePreset && (
-              <div className="space-y-2">
-                <label className="block text-xs text-muted-foreground mb-1">Image Size</label>
-                <div className="flex flex-wrap gap-2">
-                  {IMAGE_SIZE_PRESETS.map((preset) => (
-                    <button
-                      key={preset.value}
-                      onClick={() => setImageSizePreset(preset.value)}
-                      className={cn(
-                        'flex items-center gap-1.5 px-3 py-1.5 text-xs border rounded-lg transition-colors',
-                        imageSizePreset === preset.value
-                          ? 'border-primary bg-primary/5 text-primary'
-                          : 'border-border hover:bg-muted'
-                      )}
-                    >
-                      {preset.value !== 'custom' && <AspectIcon ratio={preset.ratio} />}
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
-                {imageSizePreset === 'custom' && (
-                  <div className="flex items-center gap-2">
-                    <div className="w-28">
-                      <label className="block text-xs text-muted-foreground mb-1">Width</label>
-                      <input
-                        type="number"
-                        value={width}
-                        onChange={(e) => setWidth(Math.max(256, Math.min(2048, parseInt(e.target.value) || 256)))}
-                        min={256}
-                        max={2048}
-                        step={8}
-                        className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
-                      />
-                    </div>
-                    <span className="text-muted-foreground mt-5">&times;</span>
-                    <div className="w-28">
-                      <label className="block text-xs text-muted-foreground mb-1">Height</label>
-                      <input
-                        type="number"
-                        value={height}
-                        onChange={(e) => setHeight(Math.max(256, Math.min(2048, parseInt(e.target.value) || 256)))}
-                        min={256}
-                        max={2048}
-                        step={8}
-                        className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
-                      />
-                    </div>
-                    <span className="text-xs text-muted-foreground mt-5">{width} &times; {height} px</span>
-                  </div>
-                )}
+            {spec.image_size?.custom_size && imageSizePreset === 'custom' && (
+              <div className="grid gap-3">
+                <label className="grid gap-1">Width
+                  <input type="number" min={256} max={2048} step={8} value={width} onChange={event => setWidth(Math.max(256, Math.min(2048, Number(event.target.value))))} className="w-full rounded-md border border-input bg-background p-2" />
+                </label>
+                <label className="grid gap-1">Height
+                  <input type="number" min={256} max={2048} step={8} value={height} onChange={event => setHeight(Math.max(256, Math.min(2048, Number(event.target.value))))} className="w-full rounded-md border border-input bg-background p-2" />
+                </label>
               </div>
             )}
-
-            {/* Size presets (width/height models) */}
-            {modelCaps.hasWidthHeight && (
-              <div>
-                <label className="block text-xs text-muted-foreground mb-1">Size</label>
-                <div className="flex flex-wrap gap-2">
-                  {SIZE_PRESETS.map((preset) => (
-                    <button
-                      key={preset.label}
-                      onClick={() => handleSizePreset(preset.w, preset.h)}
-                      className={cn(
-                        'px-3 py-1.5 text-xs border rounded-lg transition-colors',
-                        width === preset.w && height === preset.h
-                          ? 'border-primary bg-primary/5 text-primary'
-                          : 'border-border hover:bg-muted'
-                      )}
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Resolution + Aspect Ratio (resolution/aspect models) */}
-            {modelCaps.usesResolutionAspect && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {spec.resolution && <div>
-                  <label className="block text-xs text-muted-foreground mb-1">Resolution</label>
-                  <div className="flex gap-2">
-                    {RESOLUTIONS.map((r) => (
-                      <button
-                        key={r.value}
-                        onClick={() => setResolution(r.value)}
-                        className={cn(
-                          'px-4 py-1.5 text-xs border rounded-lg transition-colors',
-                          resolution === r.value
-                            ? 'border-primary bg-primary/5 text-primary'
-                            : 'border-border hover:bg-muted'
-                        )}
-                      >
-                        {r.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>}
-                {spec.aspect_ratio && <div>
-                  <label className="block text-xs text-muted-foreground mb-1">Aspect Ratio</label>
-                  <select
-                    value={aspectRatio}
-                    onChange={(e) => setAspectRatio(e.target.value)}
-                    className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
-                  >
-                    {ASPECT_RATIOS.map((ar) => (
-                      <option key={ar.value} value={ar.value}>{ar.label}</option>
-                    ))}
-                  </select>
-                </div>}
-              </div>
-            )}
-
-            {spec.quality && <label className="block text-sm">Quality <select value={quality} onChange={e => setQuality(e.target.value)} className="ml-2 border rounded p-1">{spec.quality.options?.map(v => <option key={v} value={v}>{v}</option>)}</select></label>}
             {/* Safety Tolerance + Web Search */}
             {(modelCaps.hasSafetyTolerance || modelCaps.hasWebSearch) && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4">
                 {modelCaps.hasSafetyTolerance && (
                   <div>
                     <label className="block text-xs text-muted-foreground mb-1">Safety Tolerance</label>
                     <select
                       value={safetyTolerance}
-                      onChange={(e) => setSafetyTolerance(e.target.value)}
+                      onChange={(e) => { dirty.current.add('Safety tolerance'); setSafetyTolerance(e.target.value); }}
                       className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
                     >
                       {SAFETY_LEVELS.filter((s) => s.level <= (modelCaps.maxSafetyLevel ?? 6)).map((s) => (
@@ -714,7 +668,7 @@ function GeneratePageInner() {
               </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 gap-4">
               {/* Steps */}
               {modelCaps.hasStepsGuidance && (
                 <div>
@@ -725,7 +679,7 @@ function GeneratePageInner() {
                     min={spec.steps_guidance?.steps?.minimum ?? 1}
                     max={spec.steps_guidance?.steps?.maximum ?? 50}
                     value={steps}
-                    onChange={(v) => setSteps(v)}
+                    onChange={(v) => { dirty.current.add('Steps'); setSteps(v); }}
                     className="w-full"
                   />
                 </div>
@@ -741,7 +695,7 @@ function GeneratePageInner() {
                     min={(spec.steps_guidance?.guidance?.minimum ?? 0) * 10}
                     max={(spec.steps_guidance?.guidance?.maximum ?? 20) * 10}
                     value={Math.round(guidance * 10)}
-                    onChange={(v) => setGuidance(v / 10)}
+                    onChange={(v) => { dirty.current.add('Guidance'); setGuidance(v / 10); }}
                     className="w-full"
                   />
                 </div>
@@ -759,40 +713,10 @@ function GeneratePageInner() {
                 />
               </div>}
             </div>
-          </div>
-        )}
-      </section>
 
-      {/* Generated Images Grid */}
-      <section>
-        <h2 className="font-semibold mb-3">
-          Generated Images
-          {generatedImages && <span className="text-muted-foreground font-normal ml-2">({generatedImages.total})</span>}
-        </h2>
-        {imagesLoading ? (
-          <div className="flex items-center justify-center h-32">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-          </div>
-        ) : images.length === 0 ? (
-          <div className="text-center py-16 text-muted-foreground">
-            <Sparkles className="h-12 w-12 mx-auto mb-3 opacity-30" />
-            <p>No images generated yet</p>
-            <p className="text-sm mt-1">Enter a prompt above and click Generate</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-            {images.map((img) => (
-              <GeneratedImageCard
-                key={img.id}
-                image={img}
-                onClick={() => setSelectedImageId(img.id)}
-                onDelete={(id) => deleteMutation.mutate(id)}
-              />
-            ))}
-          </div>
-        )}
-      </section>
-
+          </>
+        }
+      />
       {/* Full-size modal */}
       {selectedImage && (
         <>
@@ -807,6 +731,13 @@ function GeneratePageInner() {
             >
               <div className="flex items-center justify-between p-4 border-b border-border">
                 <h3 className="font-semibold">Generated Image #{selectedImage.id}</h3>
+                <button
+                  onClick={() => deleteMutation.mutate(selectedImage.id, { onSuccess: () => setSelectedImageId(null) })}
+                  disabled={deleteMutation.isPending}
+                  className="ml-auto mr-3 rounded-md border border-input px-2 py-1 text-sm text-destructive disabled:opacity-50"
+                >
+                  Delete
+                </button>
                 <button
                   onClick={() => setSelectedImageId(null)}
                   className="p-1 hover:bg-muted rounded-lg transition-colors"
