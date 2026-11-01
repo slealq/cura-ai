@@ -11,13 +11,12 @@ import PaintCanvas, { maskFile, type PaintMask } from '@/components/tools/PaintC
 import BoxCanvas, { type Box, type ObjectBox } from '@/components/tools/BoxCanvas';
 import Stage from '@/components/tools/Stage';
 import SheetButton from '@/components/tools/SheetButton';
-import SubjectSlots from '@/components/tools/SubjectSlots';
+import SubjectStage, { type SubjectSlot } from '@/components/tools/SubjectStage';
 import JobTabs, { jobs, type EditJob } from '@/components/tools/JobTabs';
 import Notice from '@/components/tools/Notice';
 import ModelPanel from '@/components/tools/ModelPanel';
 import Composer from '@/components/tools/Composer';
 import SourceTray from '@/components/tools/SourceTray';
-import SubjectPanel from '@/components/tools/SubjectPanel';
 import { useSearchParams } from 'next/navigation';
 import { imagesApi } from '@/lib/api';
 import ImagePickerModal from '@/components/ImagePickerModal';
@@ -198,6 +197,8 @@ function EditPageInner() {
     return () => { active = false; };
   }, [sources]);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerSlot, setPickerSlot] = useState<SubjectSlot | null>(null);
+  const subjectEntered = useRef(false);
   const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
@@ -222,6 +223,35 @@ function EditPageInner() {
     });
     return () => { active = false; };
   }, [params]);
+
+  useEffect(() => {
+    if (job !== 'subject') {
+      subjectEntered.current = false;
+      return;
+    }
+    if (subjectEntered.current || !sources.length) return;
+    if (!sources.some(source => source.element === 1 && source.role === 'element_main') && !sources.some(source => source.role === undefined)) return;
+    subjectEntered.current = true;
+    setSources(current => {
+      if (current.some(source => source.element === 1 && source.role === 'element_main')) return current;
+      const first = current.findIndex(source => source.role === undefined);
+      return current.map((source, i) => i === first ? { ...source, role: 'element_main', element: 1 } : source);
+    });
+  }, [job, sources]);
+
+  const slotCapacity = useCallback((slot: SubjectSlot) => {
+    if (slot.role === 'element_main') return 1;
+    if (slot.role === 'reference') return Math.max(0, 10 - sources.filter(source => !source.role || source.role === 'reference').length);
+    return Math.max(0, 3 - sources.filter(source => source.element === slot.element && source.role === 'element_angle').length);
+  }, [sources]);
+
+  function addSources(current: SourceImage[], added: SourceImage[], slot: SubjectSlot | null) {
+    const kept = current.filter(source => !slot || !(
+      (slot.role === 'element_main' && source.element === slot.element && source.role === 'element_main') ||
+      added.some(item => item.id != null && item.type === source.type && item.id === source.id)
+    ));
+    return [...kept, ...added.map(source => slot ? { ...source, role: slot.role, element: slot.role === 'reference' ? undefined : slot.element } : source)];
+  }
 
   // Full-size modal
   const [selectedImageId, setSelectedImageId] = useState<number | null>(null);
@@ -342,8 +372,8 @@ function EditPageInner() {
 
   const maxSources = caps.maxSources;
 
-  const handleFileUpload = useCallback(async (files: FileList | File[]) => {
-    const remaining = maxSources - sources.length;
+  const handleFileUpload = useCallback(async (files: FileList | File[], slot: SubjectSlot | null = null) => {
+    const remaining = slot ? slotCapacity(slot) : maxSources - sources.length;
     if (remaining <= 0) {
       toast.error(`Maximum ${maxSources} source images`);
       return;
@@ -356,7 +386,7 @@ function EditPageInner() {
     });
     if (files.length > remaining) toast.info(`Only ${remaining} sources can be added for this model`);
     const pending = filesToProcess.map(file => ({ file, previewUrl: URL.createObjectURL(file) }));
-    setSources(current => [...current, ...pending.map(({ file, previewUrl }) => ({ type: 'upload' as const, name: file.name, previewUrl }))]);
+    setSources(current => addSources(current, pending.map(({ file, previewUrl }) => ({ type: 'upload' as const, name: file.name, previewUrl })), slot));
     setUploading(true);
     try {
       for (const { file, previewUrl } of pending) {
@@ -372,7 +402,7 @@ function EditPageInner() {
     } finally {
       setUploading(false);
     }
-  }, [sources.length, maxSources]);
+  }, [sources, maxSources, slotCapacity]);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -408,7 +438,7 @@ function EditPageInner() {
       id: item.id,
       previewUrl: item.previewUrl,
     }));
-    setSources((prev) => [...prev, ...newSources]);
+    setSources((prev) => addSources(prev, newSources.slice(0, pickerSlot ? slotCapacity(pickerSlot) : maxSources - prev.length), pickerSlot));
   };
 
   const images = editedImages?.items || [];
@@ -452,18 +482,16 @@ function EditPageInner() {
     prompt.length > 2500 || sources.filter(source => !source.role || source.role === 'reference').length > 10 ||
     Array.from({ length: elementCount }, (_, i) => i + 1).some(element => !sources.some(source => source.element === element && source.role === 'element_main'))
   );
-  let referenceIndex = 0;
-  const subjectLabels = sources.map(source => source.element ? `@Element${source.element} · ${source.role === 'element_main' ? 'main' : 'angle'}` : `@Image${++referenceIndex}`);
-
+  const subjectWarning = sources.filter(source => !source.role || source.role === 'reference').length > 10
+    ? 'Use up to 10 composition references'
+    : prompt.length > 2500 ? 'Keep the prompt to 2500 characters' : 'Add a main photo for each subject';
   const sourceTray = (
     <SourceTray
       sources={sources}
       model={editModel}
-      labels={job === 'subject' ? subjectLabels : undefined}
-      overLimit={job === 'subject' ? subjectLabels.map(label => label.startsWith('@Image') && Number(label.slice(6)) > 10) : undefined}
       limit={maxSources}
       onChange={setSources}
-      onAdd={() => setPickerOpen(true)}
+      onAdd={() => { setPickerSlot(null); setPickerOpen(true); }}
       onUpload={handleFileUpload}
       onUse={(label) => setPrompt(current => `${current} ${label.split(' · ')[0]}`.trim())}
     />
@@ -586,10 +614,17 @@ function EditPageInner() {
                 }}>+ Box</button>
               </div>
             )}
-            {job === 'subject' && <>
-              <SubjectSlots sources={sources} count={elementCount} onCount={setElementCount} onChange={setSources} onAdd={() => setPickerOpen(true)} />
-              <SheetButton title="Subject photos and references">{sourceTray}</SheetButton>
-            </>}
+            {job === 'subject' && (
+              <SubjectStage
+                sources={sources}
+                count={elementCount}
+                onCount={setElementCount}
+                onChange={setSources}
+                onPick={slot => { setPickerSlot(slot); setPickerOpen(true); }}
+                onUpload={handleFileUpload}
+                onUse={label => setPrompt(current => `${current} ${label}`.trim())}
+              />
+            )}
             {job === 'paint' && editModel === 'ideogram-v4.5-edit' && region.area === 'box' && drawPrecision && (
               <BoxCanvas key={`region-${baseKey}`} source={baseUrl} selected={0} boxes={[{ label: 'Precision area', box: region.box }]} onChange={box => setRegions(current => ({ ...current, [baseKey]: { area: 'box', box } }))} />
             )}
@@ -603,7 +638,7 @@ function EditPageInner() {
                 {sourceTray}
               </details>
               </>
-            ) : job === 'subject' ? <div className="hidden md:contents">{sourceTray}</div> : sourceTray}
+            ) : job === 'subject' ? null : sourceTray}
             {results}
           </div>
         }
@@ -615,7 +650,7 @@ function EditPageInner() {
             disabled={subjectInvalid || (job === 'objects' && objectsInvalid) || (job === 'paint' && editModel === 'ideogram-v4.5-edit' && region.area === 'box' && !region.box) || (job === 'paint' && (!mask?.percent || (editModel === 'ideogram-v4.5-edit' && mask.percent === 100))) || !model || editMutation.isPending || uploading || !prompt.trim() || !sources.length || sources.length > maxSources}
             model={model?.label}
             count={outputCount}
-            warning={subjectInvalid ? 'Assign each subject a main photo; up to 3 angles, 10 references and 2500 prompt characters' : job === 'objects' && objectsInvalid ? 'Name and describe each object, then draw its areas' : job === 'paint' && !mask?.percent ? 'Paint the area first' : job === 'paint' && editModel === 'ideogram-v4.5-edit' && mask?.percent === 100 ? 'Leave part of the image unpainted' : sources.length > maxSources ? `This model takes up to ${maxSources} sources. Remove ${sources.length - maxSources}.` : !sources.length ? 'Add a source image' : uploading ? 'Uploading sources…' : undefined}
+            warning={subjectInvalid ? subjectWarning : job === 'objects' && objectsInvalid ? 'Name and describe each object, then draw its areas' : job === 'paint' && !mask?.percent ? 'Paint the area first' : job === 'paint' && editModel === 'ideogram-v4.5-edit' && mask?.percent === 100 ? 'Leave part of the image unpainted' : sources.length > maxSources ? `This model takes up to ${maxSources} sources. Remove ${sources.length - maxSources}.` : !sources.length ? 'Add a source image' : uploading ? 'Uploading sources…' : undefined}
             cost={estimate?.estimated_sparks != null ? estimate.estimated_sparks * (job === 'subject' && resultType === 'series' ? 1 : numImages) : undefined}
           />
         }
@@ -641,12 +676,9 @@ function EditPageInner() {
                 ))}
               </select>
             </label>
-            <div><span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">Sources: {maxSources}</span></div>
+            {(job === 'describe' || job === 'paint') && <div><span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">Sources: {maxSources}</span></div>}
             <div className="space-y-3 border-t border-border pt-2.5">
               <h3 className="text-[12.5px] font-medium">Advanced for this model</h3>
-            {job === 'subject' && (
-              <SubjectPanel sources={sources} count={elementCount} onCount={setElementCount} onChange={setSources} onUse={label => setPrompt(current => `${current} ${label}`.trim())} />
-            )}
             {job === 'paint' && editModel === 'ideogram-v4.5-edit' && (
               <>
               <label className="block text-xs text-muted-foreground">Precision area
@@ -1042,11 +1074,12 @@ function EditPageInner() {
 
       {/* Image Picker Modal */}
       <ImagePickerModal
+        key={pickerOpen ? `open-${pickerSlot?.element}-${pickerSlot?.role}` : 'closed'}
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
         onDone={handlePickerDone}
-        alreadySelectedIds={alreadySelectedIds}
-        maxSelection={Math.max(0, maxSources - sources.filter(source => source.type === 'upload').length)}
+        alreadySelectedIds={pickerSlot ? [] : alreadySelectedIds}
+        maxSelection={pickerSlot ? slotCapacity(pickerSlot) : Math.max(0, maxSources - sources.filter(source => source.type === 'upload').length)}
       />
     </div>
   );

@@ -299,7 +299,6 @@ function ImageGridContent({
   const searchParams = useSearchParams();
   const imageIdParam = searchParams.get('image_id');
   const entryTool = searchParams.get('tool');
-  const entryHint = searchParams.get('hint');
   const sourceParam = searchParams.get('source') as SourceKey | null;
   const source = SOURCE_FILTERS.some((s) => s.key === sourceParam) ? sourceParam : null;
 
@@ -319,14 +318,15 @@ function ImageGridContent({
     return () => media.removeEventListener('change', update);
   }, []);
   useEffect(() => {
-    if (!['Create', 'Edit', 'Ask Vision', 'Train model'].includes(entryTool || '')) {
-      setTool(null);
+    const stage = entryTool === 'Create' ? '/generate' : entryTool === 'Edit' ? '/edit' : entryTool === 'Ask Vision' ? '/vision?mode=custom' : null;
+    if (stage) {
+      router.replace(stage);
       return;
     }
-    setTool(entryTool as InspectorTool);
+    setTool(entryTool === 'Train model' ? 'Train model' : null);
     setToolImages(null);
-    setMobileInspector(true);
-  }, [entryTool]);
+    if (entryTool === 'Train model') setMobileInspector(true);
+  }, [entryTool, router]);
 
   const inspectorVisible = wide && !inspectorHidden;
   const [openImage, setOpenImage] = useState<Image | null>(null);
@@ -462,8 +462,19 @@ function ImageGridContent({
     return () => document.body.classList.remove('mobile-library-selecting');
   }, [selecting]);
 
+  const navigateTool = (next: InspectorTool | null, ids = toolImages ? toolImages.map(image => image.id) : Array.from(selectedIds)) => {
+    const stage = next === 'Create' ? '/generate' : next === 'Edit' ? '/edit' : next === 'Ask Vision' ? '/vision' : null;
+    if (!stage) return false;
+    const params = new URLSearchParams();
+    if (next === 'Ask Vision') params.set('mode', 'custom');
+    if (ids.length) params.set('sources', ids.join(','));
+    router.push(params.size ? `${stage}?${params}` : stage);
+    return true;
+  };
+
   const mobileTool = (next: InspectorTool) => {
     setMobileMenu(null);
+    if (navigateTool(next)) return;
     setTool(next);
     setMobileInspector(true);
   };
@@ -530,8 +541,7 @@ function ImageGridContent({
         {!inspectorVisible && (
           <button
             onClick={() => {
-              setMobileInspector(true);
-              setTool('Create');
+              navigateTool('Create');
             }}
             className="hidden md:block rounded-md border border-border px-3 py-1.5 text-sm"
           >
@@ -539,16 +549,7 @@ function ImageGridContent({
           </button>
         )}
         {subtitle}
-        {(entryHint === 'edit' || entryHint === 'vision') && (
-          <div className="flex items-start gap-3 rounded-lg border border-selection/20 bg-selection-soft p-3 text-sm">
-            <p className="flex-1">Select images, then choose {entryHint === 'edit' ? 'Edit' : 'Ask Vision'} in the inspector or More tools. <Link className="underline" href={`/${entryHint === 'edit' ? 'edit' : 'vision'}?advanced=1`}>{entryHint === 'edit' ? 'Upload sources or use advanced editing' : 'Upload a file or view analysis history'}</Link></p>
-            <button aria-label="Dismiss hint" onClick={() => {
-              const next = new URLSearchParams(searchParams.toString());
-              next.delete('hint');
-              router.replace(next.size ? `${pathname}?${next}` : pathname, { scroll: false });
-            }} className="rounded p-1 hover:bg-accent"><X className="h-4 w-4" /></button>
-          </div>
-        )}
+
 
         <div className="library-filters flex flex-wrap items-center gap-2">
           <button className="hidden rounded-md border border-border px-3 text-sm" aria-pressed={selectMode} onClick={() => { setSelectMode(!selectMode); setSelectedIds(new Set()); }}>{selectMode ? 'Done' : 'Select'}</button>
@@ -639,8 +640,8 @@ function ImageGridContent({
         </div>
         {selecting && (
           <div className="mobile-selection-bar md:hidden" role="toolbar" aria-label="Selection actions">
-            <button disabled={!selectedIds.size} onClick={() => setMobileMenu('jobs')}>Edit</button>
-            <button disabled={!selectedIds.size} onClick={() => mobileTool('Ask Vision')}>Ask</button>
+            <button onClick={() => setMobileMenu('jobs')}>Edit</button>
+            <button onClick={() => mobileTool('Ask Vision')}>Ask</button>
             <button disabled={!selectedIds.size} onClick={() => mobileTool('Add to folder')}>Folder</button>
             <button disabled={!selectedIds.size} onClick={() => mobileTool('Train model')}>Train</button>
             <button onClick={() => setMobileMenu('more')}>More</button>
@@ -735,9 +736,10 @@ function ImageGridContent({
             onTool={(next, image) => {
               if (next === 'Edit') {
                 if (window.innerWidth < 768) { setSelectedIds(new Set([image.id])); setSelectMode(true); setOpenImage(null); setMobileMenu('jobs'); }
-                else router.push(`/edit?sources=${image.id}`);
+                else navigateTool(next, [image.id]);
                 return;
               }
+              if (navigateTool(next, [image.id])) return;
               setSelectedIds(new Set([image.id]));
               setToolImages([image]);
               setTool(next);
@@ -780,11 +782,7 @@ function ImageGridContent({
             images={toolImages ?? Array.from(selectedIds).map(id => images.find(image => image.id === id)).filter((image): image is Image => !!image)}
             tool={tool}
             onTool={(next) => {
-              if (next === 'Edit') {
-                const ids = toolImages ? toolImages.map(image => image.id) : Array.from(selectedIds);
-                router.push(`/edit?sources=${ids.join(',')}`);
-                return;
-              }
+              if (navigateTool(next)) return;
               setTool(next);
               if (!next) {
                 setToolImages(null);

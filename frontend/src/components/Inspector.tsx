@@ -6,7 +6,6 @@ import { clearDeleting, markDeleting } from '@/lib/deletingImages';
 import { useMobileSheet } from '@/hooks/useMobileSheet';
 import LibraryImage from '@/components/LibraryImage';
 
-import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
@@ -15,13 +14,11 @@ import { toast } from 'sonner';
 import {
   billingApi,
   clustersApi,
-  editApi,
   foldersApi,
   generationApi,
   imagesApi,
   jobsApi,
   settingsApi,
-  visionApi,
 } from '@/lib/api';
 import { useModelCatalog } from '@/hooks/useModelCatalog';
 import type { Image } from '@/types';
@@ -76,48 +73,25 @@ export default function Inspector({
   const router = useRouter();
   const client = useQueryClient();
   const { data: catalog } = useModelCatalog();
-  const [prompt, setPrompt] = useState('');
   const [model, setModel] = useState('');
   const [name, setName] = useState('');
   const [trigger, setTrigger] = useState('');
-  const [count, setCount] = useState(1);
   const [folder, setFolder] = useState('');
-  const [lora, setLora] = useState('');
   const { data: stats } = useQuery({ queryKey: ['pipeline-stats'], queryFn: imagesApi.getStats });
   const { data: folders } = useQuery({
     queryKey: ['folders', 'inspector'],
     queryFn: () => foldersApi.list({ limit: 200 }),
     enabled: tool === 'Add to folder',
   });
-  const { data: loras } = useQuery({
-    queryKey: ['lora-models', 'inspector'],
-    queryFn: () => generationApi.listLora({ status: 'completed,uploaded', limit: 200 }),
-    enabled: tool === 'Create',
-  });
-  const { data: generationCost } = useQuery({
-    queryKey: ['inspector-estimate', model, lora],
-    queryFn: () => billingApi.estimateGenerationCost({ base_model: model, with_lora: !!lora }),
-    enabled: tool === 'Create' && !!model,
-  });
   const { data: visionCosts } = useQuery({
     queryKey: ['vision-costs', 'inspector'],
     queryFn: billingApi.getVisionCosts,
-    enabled: tool === 'Describe' || tool === 'Ask Vision',
+    enabled: tool === 'Describe',
   });
   const { data: providerConfig } = useQuery({
     queryKey: ['provider-config'],
     queryFn: settingsApi.getProviderConfig,
     enabled: tool === 'Describe',
-  });
-  const { data: generationCosts } = useQuery({
-    queryKey: ['generation-costs'],
-    queryFn: billingApi.getGenerationCosts,
-    enabled: tool === 'Create',
-  });
-  const { data: editCosts } = useQuery({
-    queryKey: ['edit-costs'],
-    queryFn: billingApi.getEditCosts,
-    enabled: tool === 'Edit',
   });
   const { data: trainingCosts } = useQuery({
     queryKey: ['training-costs'],
@@ -125,20 +99,9 @@ export default function Inspector({
     enabled: tool === 'Train model',
   });
   useEffect(() => {
-    setPrompt('');
     setName('');
     setTrigger('');
-    setCount(1);
-    setLora('');
-    setModel(
-      tool === 'Create'
-        ? (catalog?.defaults.generation_model ?? '')
-        : tool === 'Edit'
-          ? (catalog?.defaults.edit_model ?? '')
-          : tool === 'Train model'
-            ? (catalog?.training_base_models[0]?.key ?? '')
-            : (catalog?.defaults.vision_model ?? '')
-    );
+    setModel(catalog?.training_base_models[0]?.key ?? '');
   }, [tool, catalog]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
@@ -150,35 +113,14 @@ export default function Inspector({
     window.addEventListener('keydown', key, true);
     return () => window.removeEventListener('keydown', key, true);
   }, [tool, onTool]);
-  const imageModels = tool === 'Edit' ? catalog?.edit : catalog?.generation;
-  const chosen = imageModels?.find((m) => m.key === model);
-  const maxSources = chosen?.max_source_images || 1;
-  const models =
-    tool === 'Train model'
-      ? (catalog?.training_base_models ?? []).map((m) => ({ id: m.key, label: m.label, provider: 'fal' }))
-      : tool === 'Ask Vision'
-        ? (catalog?.language ?? []).map((m) => ({
-            id: m.id,
-            label: m.label,
-            provider: m.vendor,
-            cost: visionCosts?.costs.fal?.[m.id]?.describe,
-          }))
-        : (imageModels ?? []).map((m) => ({
-            id: m.key,
-            label: m.label,
-            provider: m.vendor,
-            cost: tool === 'Edit' ? editCosts?.costs[m.key] : generationCosts?.costs[m.key]?.without_lora,
-          }));
-  const needsModel = ['Create', 'Edit', 'Ask Vision', 'Train model'].includes(tool || '');
+  const models = (catalog?.training_base_models ?? []).map((m) => ({ id: m.key, label: m.label, provider: 'fal' }));
+  const needsModel = tool === 'Train model';
   const invalid =
     (tool === 'Describe' && hasBatchRunning) ||
     (needsModel && !model) ||
-    (['Create', 'Edit', 'Ask Vision'].includes(tool || '') && !prompt.trim()) ||
-    (tool === 'Edit' && images.length > maxSources) ||
-    (tool === 'Ask Vision' && images.length > 10) ||
     (tool === 'Train model' && (images.length < 5 || !name.trim())) ||
     (tool === 'Add to folder' && !folder && !name.trim()) ||
-    (tool !== 'Create' && tool !== 'Recluster library' && !images.length);
+    (tool !== 'Recluster library' && !images.length);
   const dispatch = () => {
     if (!tool || invalid) return;
     const action = tool;
@@ -196,29 +138,6 @@ export default function Inspector({
           break;
         case 'Recluster library':
           await clustersApi.recluster();
-          break;
-        case 'Edit':
-          await editApi.edit({ prompt, edit_model: model, source_image_ids: ids, num_images: 1 });
-          break;
-        case 'Create':
-          await generationApi.generate({
-            prompt,
-            base_model: model,
-            num_images: count,
-            ...(lora ? { lora_model_id: Number(lora) } : {}),
-          });
-          break;
-        case 'Ask Vision':
-          for (let n = 0; n < ids.length; n++) {
-            await visionApi.analyze({
-              source_image_id: ids[n],
-              provider: 'fal',
-              model,
-              mode: 'custom',
-              custom_prompt: prompt,
-            });
-            toast.loading(`Analyzed ${n + 1}/${ids.length}`, { id: notice });
-          }
           break;
         case 'Train model': {
           const trainingFolder = await foldersApi.create({ name: `${name.trim()} — training` });
@@ -248,16 +167,12 @@ export default function Inspector({
           break;
       }
       toast.success(
-        action === 'Ask Vision'
-          ? 'Analysis ready in Vision'
-          : ['Add to folder', 'Remove from folder'].includes(action)
-            ? `${action} complete`
-            : `${action} submitted`,
+        ['Add to folder', 'Remove from folder'].includes(action) ? `${action} complete` : `${action} submitted`,
         {
           id: notice,
           action: {
-            label: action === 'Ask Vision' ? 'View results' : action === 'Train model' ? 'My models' : 'View Jobs',
-            onClick: () => router.push(action === 'Ask Vision' ? '/vision?advanced=1' : action === 'Train model' ? '/models' : '/jobs'),
+            label: action === 'Train model' ? 'My models' : 'View Jobs',
+            onClick: () => router.push(action === 'Train model' ? '/models' : '/jobs'),
           },
         }
       );
@@ -267,23 +182,10 @@ export default function Inspector({
       toast.error(`${action} failed: ${error.message}`, { id: notice });
     });
   };
-  const visionModel =
-    tool === 'Describe' ? providerConfig?.fal_vision_model || catalog?.defaults.vision_model : model;
+  const visionModel = providerConfig?.fal_vision_model || catalog?.defaults.vision_model;
   const languageCost = visionModel ? visionCosts?.costs.fal?.[visionModel] : undefined;
-  const cost =
-    tool === 'Create'
-      ? generationCost?.estimated_sparks != null
-        ? generationCost.estimated_sparks * count
-        : undefined
-      : tool === 'Edit'
-        ? editCosts?.costs[model]
-        : tool === 'Train model'
-          ? trainingCosts?.costs[model]
-          : tool === 'Describe' && languageCost
-            ? languageCost.total * images.length
-            : tool === 'Ask Vision' && languageCost
-              ? languageCost.describe * images.length
-              : undefined;
+  const cost = tool === 'Train model' ? trainingCosts?.costs[model]
+    : tool === 'Describe' && languageCost ? languageCost.total * images.length : undefined;
   return (
     <aside
       ref={sheet}
@@ -365,7 +267,7 @@ export default function Inspector({
                   className="rounded-lg border border-border p-3 text-left hover:bg-accent disabled:opacity-50"
                 >
                   {t}
-                  {!['Create', 'Recluster library'].includes(t) && <span className="mt-1 block text-xs text-muted-foreground">Select images first</span>}
+                  {!['Create', 'Edit', 'Ask Vision', 'Recluster library'].includes(t) && <span className="mt-1 block text-xs text-muted-foreground">Select images first</span>}
                 </button>
               ))}
             </div>
@@ -389,6 +291,7 @@ export default function Inspector({
             <div className="grid grid-cols-2 gap-2">
               {(
                 [
+                  'Create',
                   'Describe',
                   'Recluster library',
                   'Edit',
@@ -421,7 +324,7 @@ export default function Inspector({
         )}
         {tool && !images.length && !['Create', 'Recluster library'].includes(tool) && (
           <p className="rounded-md border border-border bg-chrome p-3 text-muted-foreground">
-            Select images in the grid to {tool === 'Edit' ? 'edit' : 'analyze'} them, or upload an outside image using the advanced tool below.
+            Select images in the grid to use this tool.
           </p>
         )}
         {tool === 'Describe' && (
@@ -448,77 +351,10 @@ export default function Inspector({
           </p>
         )}
         {needsModel && (
-          <>
-            <label className="block space-y-2">
-              <span>Model</span>
-              <ModelPicker
-                models={models}
-                value={model}
-                onChange={(id) => {
-                  setModel(id);
-                  setCount(1);
-                  setLora('');
-                }}
-              />
-            </label>
-            {['Create', 'Edit', 'Ask Vision'].includes(tool || '') && (
-              <label className="block space-y-2">
-                <span>{tool === 'Ask Vision' ? 'Question' : 'Prompt'}</span>
-                <textarea
-                  className={`${field} min-h-32`}
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                />
-              </label>
-            )}
-          </>
-        )}
-        {tool === 'Create' && <Link href={`/generate?sources=${images.map(image => image.id).join(',')}&prompt=${encodeURIComponent(prompt)}`} className="block text-xs text-muted-foreground underline hover:text-foreground">Advanced creation: multiple LoRAs, seeds & model controls</Link>}
-        {tool === 'Edit' && <Link href={`/edit?sources=${images.map(image => image.id).join(',')}`} className="block text-xs text-muted-foreground underline hover:text-foreground">Open in Edit Stage</Link>}
-        {tool === 'Ask Vision' && <Link href={`/vision?sources=${images.map(image => image.id).join(',')}&prompt=${encodeURIComponent(prompt)}&mode=custom`} className="block text-xs text-muted-foreground underline hover:text-foreground">Upload a file, Tag / Describe & analysis history</Link>}
-        {tool === 'Edit' && (
-          <p className="text-xs text-muted-foreground">
-            Selected images are combined as sources for one edit. This model accepts up to {maxSources} source
-            images; {images.length} selected.
-          </p>
-        )}
-        {tool === 'Ask Vision' && (
-          <p className="text-xs text-muted-foreground">
-            Single-image analysis runs sequentially, up to 10 selected images. This API does not create Jobs;
-            progress appears in a toast and results in Vision.
-          </p>
-        )}
-        {tool === 'Create' && (
-          <>
-            <label className="block space-y-2">
-              <span>Images</span>
-              <input
-                type="number"
-                min={1}
-                max={chosen?.max_num_images || 1}
-                value={count}
-                onChange={(e) =>
-                  setCount(Math.max(1, Math.min(chosen?.max_num_images || 1, Number(e.target.value) || 1)))
-                }
-                className={field}
-              />
-            </label>
-            {chosen?.supports_lora && (
-              <label className="block space-y-2">
-                <span>LoRA (optional)</span>
-                <select className={field} value={lora} onChange={(e) => setLora(e.target.value)}>
-                  <option value="">None</option>
-                  {loras?.items
-                    .filter((l) => l.base_model === model)
-                    .map((l) => (
-                      <option key={l.id} value={l.id}>
-                        {l.name}
-                      </option>
-                    ))}
-                </select>
-              </label>
-            )}
-          </>
+          <label className="block space-y-2">
+            <span>Model</span>
+            <ModelPicker models={models} value={model} onChange={setModel} />
+          </label>
         )}
         {(tool === 'Train model' || tool === 'Add to folder') && (
           <>
@@ -575,7 +411,7 @@ export default function Inspector({
           {cost != null && (
             <p className="text-xs text-warning">
               ≈ {cost.toFixed(2)} sparks
-              {tool === 'Ask Vision' || tool === 'Describe' ? ' (typical image size)' : ''}
+              {tool === 'Describe' ? ' (typical image size)' : ''}
             </p>
           )}
           <div className="flex justify-end gap-2">
