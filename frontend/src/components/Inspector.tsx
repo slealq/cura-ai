@@ -176,7 +176,7 @@ export default function Inspector({
     (['Create', 'Edit', 'Ask Vision'].includes(tool || '') && !prompt.trim()) ||
     (tool === 'Edit' && images.length > maxSources) ||
     (tool === 'Ask Vision' && images.length > 10) ||
-    (tool === 'Train model' && (images.length < 10 || !name.trim())) ||
+    (tool === 'Train model' && (images.length < 5 || !name.trim())) ||
     (tool === 'Add to folder' && !folder && !name.trim()) ||
     (tool !== 'Create' && tool !== 'Recluster library' && !images.length);
   const dispatch = () => {
@@ -228,7 +228,6 @@ export default function Inspector({
             trigger_word: trigger.trim() || undefined,
             base_model: model,
             folder_id: trainingFolder.id,
-            steps: model === 'qwen-image-2512' ? 2000 : 1000,
             use_captions: true,
             caption_include_tags: true,
             caption_include_description: true,
@@ -257,8 +256,8 @@ export default function Inspector({
         {
           id: notice,
           action: {
-            label: action === 'Ask Vision' ? 'View results' : 'View Jobs',
-            onClick: () => router.push(action === 'Ask Vision' ? '/vision?advanced=1' : '/jobs'),
+            label: action === 'Ask Vision' ? 'View results' : action === 'Train model' ? 'My models' : 'View Jobs',
+            onClick: () => router.push(action === 'Ask Vision' ? '/vision?advanced=1' : action === 'Train model' ? '/models' : '/jobs'),
           },
         }
       );
@@ -554,9 +553,8 @@ export default function Inspector({
                   <input className={field} value={trigger} onChange={(e) => setTrigger(e.target.value)} />
                 </label>
                 <p className="text-xs text-muted-foreground">
-                  Requires at least 10 images. A folder named “{name || 'Model name'} — training” will be
-                  created from this selection because training accepts folders, not image IDs. The folder
-                  remains available if training fails.
+                  Select at least 5 images. Your selection will be saved in “{name || 'Model name'} — training”
+                  so you can revisit it or retry if training fails.
                 </p>
               </>
             )}

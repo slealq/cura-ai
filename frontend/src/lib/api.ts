@@ -1012,6 +1012,11 @@ export const generationApi = {
     await api.delete(`/generation/lora/${id}`);
   },
 
+  updateLora: async (id: number, values: { name?: string; retire?: boolean }): Promise<LoraModel> => {
+    const { data } = await api.patch(`/generation/lora/${id}`, values);
+    return data;
+  },
+
   recoverLoraTraining: async (loraId: number): Promise<{ status: string; lora_url?: string; request_id?: string; error?: string; fal_status?: string }> => {
     const { data } = await api.post(`/generation/lora/${loraId}/recover`);
     return data;

@@ -3,7 +3,8 @@ import logging
 import uuid
 from datetime import datetime
 
-from sqlalchemy import or_
+from sqlalchemy import cast, or_
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.generated_image import GeneratedImage, GenerationStatus
@@ -323,7 +324,10 @@ class GenerationService:
             joinedload(GeneratedImage.lora_model)
         ).filter(GeneratedImage.user_id == self.user_id)
         if lora_model_id is not None:
-            query = query.filter(GeneratedImage.lora_model_id == lora_model_id)
+            query = query.filter(or_(
+                GeneratedImage.lora_model_id == lora_model_id,
+                cast(GeneratedImage.generation_params["loras"], JSONB).contains([{"lora_model_id": lora_model_id}]),
+            ))
         if status:
             query = query.filter(GeneratedImage.status == status)
         if mode == "edit":
@@ -346,7 +350,10 @@ class GenerationService:
         """Count generated images with optional filters."""
         query = self.db.query(GeneratedImage).filter(GeneratedImage.user_id == self.user_id)
         if lora_model_id is not None:
-            query = query.filter(GeneratedImage.lora_model_id == lora_model_id)
+            query = query.filter(or_(
+                GeneratedImage.lora_model_id == lora_model_id,
+                cast(GeneratedImage.generation_params["loras"], JSONB).contains([{"lora_model_id": lora_model_id}]),
+            ))
         if status:
             query = query.filter(GeneratedImage.status == status)
         if mode == "edit":
