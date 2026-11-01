@@ -222,3 +222,12 @@ def test_series_failure_settles_all_placeholders(monkeypatch, cancelled):
     assert all(gen.status == GenerationStatus.FAILED for gen in generations.values())
     editor.assert_not_called()
     billing.assert_not_called()
+
+
+def test_subject_without_references_still_sends_required_image_urls():
+    from app.services.edit_subject import subject_inputs
+
+    sources = [{"role": "element_main", "element": 1}, {"role": "element_angle", "element": 1}]
+    references, elements = subject_inputs(sources, ["main", "angle"])
+    assert references == ["main"]
+    assert elements == [{"frontal_image_url": "main", "reference_image_urls": ["angle"]}]
