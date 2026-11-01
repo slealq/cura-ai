@@ -46,6 +46,7 @@ class EditImageRequest(BaseModel):
 
     prompt: str = Field("", max_length=8000)
     negative_prompt: str | None = Field(None, max_length=500)
+    mask_key: str | None = None
     ordered_sources: list[OrderedEditSource] | None = None
     source_image_ids: list[int] | None = None
     source_generated_ids: list[int] | None = None
@@ -139,7 +140,16 @@ async def edit_images(
     if source_count == 0:
         raise HTTPException(status_code=400, detail="At least one source image is required")
 
-    max_sources = model.max_source_images
+    if request.mask_key:
+        from app.services.edit_mask import PAINT_MODELS
+        if request.edit_model not in PAINT_MODELS:
+            raise HTTPException(status_code=400, detail="This model does not support paint masks")
+        if not request.mask_key.startswith(f"edit-sources/{current_user.id}-") or ".." in request.mask_key:
+            raise HTTPException(status_code=400, detail="Invalid mask key")
+        if request.edit_model == "ideogram-v4.5-edit" and request.image_size not in (None, "auto"):
+            raise HTTPException(status_code=400, detail="Ideogram paint requires automatic output size")
+
+    max_sources = 4 if request.mask_key and request.edit_model == "ideogram-v4.5-edit" else model.max_source_images
     if source_count > max_sources:
         raise HTTPException(
             status_code=400,
@@ -165,6 +175,7 @@ async def edit_images(
 
     # Build generation_params — only the params this model supports
     gen_params: dict = {
+        **({"mask_key": request.mask_key} if request.mask_key else {}),
         "mode": "edit",
         "edit_model": request.edit_model,
         "sources": source_refs,
@@ -262,7 +273,7 @@ async def upload_source_image(
     ext = file.content_type.split("/")[-1] if file.content_type else "png"
     if ext == "jpeg":
         ext = "jpg"
-    object_key = f"edit-sources/{uuid.uuid4().hex}.{ext}"
+    object_key = f"edit-sources/{current_user.id}-{uuid.uuid4().hex}.{ext}"
 
     from app.services.storage import get_storage_service
     storage = get_storage_service()

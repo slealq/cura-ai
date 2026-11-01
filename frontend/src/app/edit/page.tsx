@@ -7,6 +7,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { editApi, settingsApi, billingApi } from '@/lib/api';
 import { Loader2, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
+import PaintCanvas, { maskFile, type PaintMask } from '@/components/tools/PaintCanvas';
 import Stage from '@/components/tools/Stage';
 import JobTabs, { jobs, type EditJob } from '@/components/tools/JobTabs';
 import Notice from '@/components/tools/Notice';
@@ -121,7 +122,7 @@ function EditPageInner() {
   }, [editModelData, catalog, EDIT_MODELS]);
 
   const caps = {
-    maxSources: model?.max_source_images ?? 1, maxImages: model?.max_num_images || 1,
+    maxSources: job === 'paint' && editModel === 'ideogram-v4.5-edit' ? 4 : model?.max_source_images ?? 1, maxImages: model?.max_num_images || 1,
     hasNegativePrompt: !!spec.negative_prompt, hasPromptExpansion: false, hasSafetyChecker: false,
     usesResolution: !!(spec.resolution || spec.aspect_ratio), hasImageSize: !!spec.image_size,
     hasSeed: !!spec.seed, maxPromptLen: 8000, hasSafetyTolerance: !!spec.safety_tolerance, hasWebSearch: !!spec.enable_web_search
@@ -138,6 +139,23 @@ function EditPageInner() {
 
   // Source images state
   const [sources, setSources] = useState<SourceImage[]>([]);
+  const [masks, setMasks] = useState<Record<string, PaintMask>>({});
+  const baseKey = sources[0] ? `${sources[0].type}-${sources[0].id ?? sources[0].previewUrl}` : '';
+  const mask = masks[baseKey];
+  const [baseUrl, setBaseUrl] = useState<string>();
+  useEffect(() => {
+    let active = true;
+    const base = sources[0];
+    setBaseUrl(undefined);
+    if (base?.type === 'gallery' && base.id) {
+      imagesApi.get(base.id).then(image => {
+        if (active) setBaseUrl(imagesApi.getImageUrl(image.object_key.split('/').pop()!));
+      }).catch(() => toast.error('Could not load full size base'));
+    } else if (base?.type === 'generated' && base.id) {
+      setBaseUrl(editApi.getImageUrl(base.id));
+    } else setBaseUrl(base?.previewUrl);
+    return () => { active = false; };
+  }, [sources]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
 
@@ -196,7 +214,7 @@ function EditPageInner() {
     },
   });
 
-  const handleEdit = () => {
+  const handleEdit = async () => {
     if (!prompt.trim()) {
       toast.error('Please enter a prompt');
       return;
@@ -247,7 +265,21 @@ function EditPageInner() {
 
     params.ordered_sources = sources.map(({ type, id, key, name }) => ({ type, id, key, name }));
 
-    editMutation.mutate(params);
+    if (job === 'paint') {
+      if (!mask?.percent) return toast.error('Paint an area before applying');
+      if (editModel === 'ideogram-v4.5-edit' && mask.percent === 100) return toast.error('Leave part of the base unpainted for Ideogram');
+      setUploading(true);
+      try {
+        const uploaded = await editApi.uploadSource(await maskFile(mask));
+        params.mask_key = uploaded.object_key;
+        if (editModel === 'ideogram-v4.5-edit') params.image_size = 'auto';
+        editMutation.mutate(params);
+      } catch (error) {
+        toast.error(`Mask upload failed: ${(error as Error).message}`);
+      } finally {
+        setUploading(false);
+      }
+    } else editMutation.mutate(params);
   };
 
 
@@ -360,6 +392,18 @@ function EditPageInner() {
     setEditModel(key);
   }
 
+  const sourceTray = (
+    <SourceTray
+      sources={sources}
+      model={editModel}
+      limit={maxSources}
+      onChange={setSources}
+      onAdd={() => setPickerOpen(true)}
+      onUpload={handleFileUpload}
+      onUse={(label) => setPrompt(current => `${current} ${label}`.trim())}
+    />
+  );
+
   const results = images.length > 0 ? (
     <div aria-label="Results" className="flex shrink-0 items-center gap-1 overflow-x-auto">
       <span className="mr-1 text-xs text-muted-foreground">Results</span>
@@ -394,6 +438,11 @@ function EditPageInner() {
             onChange={(next) => {
               setNotice('');
               setJob(next);
+              if (next === 'paint' && editModel === 'ideogram-v4.5-edit' && (imageSize !== 'auto' || useCustomSize)) {
+                setImageSize('auto');
+                setUseCustomSize(false);
+                setNotice('Image size changed to auto for Ideogram paint.');
+              }
               if (!model?.jobs.includes(next)) {
                 const target = catalog?.edit.find(m => m.jobs.includes(next));
                 if (target) changeModel(target.key, `Switched to ${target.label} for this job. Your images are kept.`);
@@ -408,16 +457,18 @@ function EditPageInner() {
             onDrop={handleDrop}
             className="flex min-h-0 flex-1 flex-col gap-2.5"
           >
-            {job !== 'describe' && <p className="text-muted-foreground">Coming next</p>}
-            <SourceTray
-              sources={sources}
-              model={editModel}
-              limit={maxSources}
-              onChange={setSources}
-              onAdd={() => setPickerOpen(true)}
-              onUpload={handleFileUpload}
-              onUse={(label) => setPrompt(current => `${current} ${label}`.trim())}
-            />
+            {job !== 'describe' && job !== 'paint' && <p className="text-muted-foreground">Coming next</p>}
+            <div hidden={job !== 'paint'}>
+              <PaintCanvas source={baseUrl} value={mask} onChange={value => setMasks(current => ({ ...current, [baseKey]: value }))} />
+            </div>
+            {job === 'paint' ? (
+              <details className="shrink-0">
+                <summary className="cursor-pointer text-xs text-muted-foreground">
+                  Sources and references ({sources.length}) · first image is the base
+                </summary>
+                {sourceTray}
+              </details>
+            ) : sourceTray}
             {results}
           </div>
         }
@@ -426,10 +477,10 @@ function EditPageInner() {
             value={prompt}
             onChange={setPrompt}
             onApply={handleEdit}
-            disabled={job !== 'describe' || !model || editMutation.isPending || uploading || !prompt.trim() || !sources.length || sources.length > maxSources}
+            disabled={(job !== 'describe' && job !== 'paint') || (job === 'paint' && (!mask?.percent || (editModel === 'ideogram-v4.5-edit' && mask.percent === 100))) || !model || editMutation.isPending || uploading || !prompt.trim() || !sources.length || sources.length > maxSources}
             model={model?.label}
             count={numImages}
-            warning={job !== 'describe' ? 'Coming next' : sources.length > maxSources ? `This model takes up to ${maxSources} sources. Remove ${sources.length - maxSources}.` : !sources.length ? 'Add a source image' : uploading ? 'Uploading sources…' : undefined}
+            warning={job !== 'describe' && job !== 'paint' ? 'Coming next' : job === 'paint' && !mask?.percent ? 'Paint the area first' : job === 'paint' && editModel === 'ideogram-v4.5-edit' && mask?.percent === 100 ? 'Leave part of the image unpainted' : sources.length > maxSources ? `This model takes up to ${maxSources} sources. Remove ${sources.length - maxSources}.` : !sources.length ? 'Add a source image' : uploading ? 'Uploading sources…' : undefined}
             cost={estimate?.estimated_sparks != null ? estimate.estimated_sparks * numImages : undefined}
           />
         }
@@ -537,7 +588,7 @@ function EditPageInner() {
                 </label>
               )}
               {/* Size presets (Qwen/FLUX). Seedream requires its own named enum. */}
-              {caps.hasImageSize && (
+              {caps.hasImageSize && !(job === 'paint' && editModel === 'ideogram-v4.5-edit') && (
                 <div>
                   <label className="block text-xs text-muted-foreground mb-1">Image Size</label>
                   <div className="flex flex-wrap gap-2">

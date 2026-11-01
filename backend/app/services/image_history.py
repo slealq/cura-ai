@@ -40,7 +40,7 @@ def snapshot(db, gen, inputs=None, partial=False):
         if kind == "generate":
             values = {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 3.5, **values}
         _, arguments = build_image_request(model, gen.prompt, values,
-                                            source_urls=["input"] * len(inputs or []) if kind == "edit" else None)
+                                            source_urls=["input"] * len([item for item in inputs or [] if item.get("role") != "mask"]) if kind == "edit" else None)
         settings = {k: v for k, v in arguments.items() if k not in ("prompt", "negative_prompt", "image_url", "image_urls", "reference_image_urls", "loras")}
     return {"version": 1, "job_type": kind, "date": gen.created_at.isoformat() + ("Z" if gen.created_at.tzinfo is None else ""),
             "prompt": gen.prompt, "negative_prompt": gen.negative_prompt,
@@ -68,11 +68,15 @@ async def input_snapshot(storage, user_id, data, filename, source_key=None, role
         item["file_hash"] = digest
         with PILImage.open(io.BytesIO(data)) as image:
             item["width"], item["height"] = image.size
-            image = image.convert("RGB")
-            image.thumbnail((800, 800))
             output = io.BytesIO()
-            image.save(output, format="JPEG", quality=85)
-        key = f"{user_id}-{digest}.jpg"
+            if role == "mask":
+                # Retain the exact canonical mask, independently of temporary uploads.
+                image.convert("L").save(output, format="PNG")
+            else:
+                image = image.convert("RGB")
+                image.thumbnail((800, 800))
+                image.save(output, format="JPEG", quality=85)
+        key = f"{user_id}-{digest}{'-mask.png' if role == 'mask' else '.jpg'}"
         import asyncio
         await asyncio.wait_for(storage.save_history_copy(output.getvalue(), key), timeout=5)
         item["copy_key"] = key

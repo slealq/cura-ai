@@ -1032,6 +1032,24 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
         from app.services.image_history import safe_snapshot
         history_inputs = []
         image_urls = _resolve_edit_sources(db, params, user_id, history_inputs)
+        mask_url = None
+        if params.get("mask_key"):
+            from app.services.edit_mask import prepare_mask, upright_base
+            from app.services.image_history import input_snapshot
+            from app.services.storage import get_storage_service
+            if not params["mask_key"].startswith(f"edit-sources/{user_id}-") or ".." in params["mask_key"]:
+                raise ValueError("Invalid mask key")
+            storage = get_storage_service()
+            mask_data = _run_async(storage.get_generated_image(params["mask_key"]))
+            original_base = base64.b64decode(image_urls[0].split(",", 1)[1])
+            base_data = upright_base(original_base)
+            if base_data != original_base:
+                image_urls[0] = _to_data_uri(base_data, "image/png")
+            mask_data = prepare_mask(mask_data, base_data, edit_model, len(image_urls))
+            mask_url = _to_data_uri(mask_data, "image/png")
+            item = _run_async(input_snapshot(storage, user_id, mask_data, "paint-mask.png", role="mask", uploaded=True))
+            item["label"] = "Painted area"
+            history_inputs.append(item)
         gen.history = safe_snapshot(db, gen, history_inputs)
         db.commit()
         if not image_urls:
@@ -1060,6 +1078,9 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
                     "safety_tolerance", "enable_web_search"):
             if params.get(key) is not None:
                 edit_kwargs[key] = params[key]
+
+        if mask_url:
+            edit_kwargs["mask_url"] = mask_url
 
         editor = get_editor(db=db, edit_model=edit_model, user_id=user_id)
         trace_id = get_trace_id()
