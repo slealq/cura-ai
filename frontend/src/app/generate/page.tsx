@@ -215,7 +215,8 @@ function GeneratePageInner() {
   const { data: generatedImages, isLoading: imagesLoading } = useQuery({
     queryKey: ['generated-images'],
     queryFn: () => generationApi.listImages({ limit: 100 }),
-    refetchInterval: 3000,
+    // Poll only while a result is on its way; starting a run invalidates this query.
+    refetchInterval: query => query.state.data?.items.some(image => image.status === 'pending' || image.status === 'generating') ? 3000 : false,
   });
 
   // Fetch generation costs for cost estimate display

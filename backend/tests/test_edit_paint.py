@@ -163,3 +163,11 @@ def test_rotated_phone_photo_matches_a_mask_painted_upright():
     out = io.BytesIO()
     mask.save(out, format="PNG")
     assert prepare_mask(out.getvalue(), upright, "gpt-image-2-edit", 1)
+
+
+def test_generated_image_response_caps_old_error_messages():
+    import inspect
+
+    from app.api import generation
+
+    assert "gen.error_message[:2000]" in inspect.getsource(generation._gen_to_response)

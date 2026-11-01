@@ -279,8 +279,8 @@ input[type="range"]::-moz-range-track {
   .tool-sources { flex-wrap: nowrap; justify-content: start; overflow-x: auto; scroll-snap-type: x mandatory; min-height: 260px; }
   .tool-source { flex: 0 0 85%; max-width: none; min-height: 260px; scroll-snap-align: center; }
   .tool-source button { min-width: 40px; }
-  .paint-viewport { min-height: 260px; }
-  .paint-image { width: 100% !important; }
+  .paint-viewport { min-height: 260px; container-type: size; }
+  .paint-image { width: min(100cqw, calc(100cqh * var(--paint-ratio, 1))) !important; }
 }
 
 @media (max-width: 767px) {
