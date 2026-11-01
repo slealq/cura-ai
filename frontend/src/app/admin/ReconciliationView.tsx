@@ -185,7 +185,7 @@ export default function ReconciliationView() {
 
       {/* Table */}
       <div className="border rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
+        <table className="mobile-wide-table w-full text-sm">
           <thead className="bg-muted/50">
             <tr>
               <th className="text-left p-2 font-medium">Operation</th>

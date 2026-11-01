@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { Loader2, Search } from 'lucide-react';
@@ -11,6 +11,13 @@ import type { Image } from '@/types';
 
 function SearchContent() {
   const searchParams = useSearchParams();
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (window.matchMedia('(max-width: 767px)').matches) {
+      inputRef.current?.focus();
+    }
+  }, []);
   const initialQuery = searchParams.get('q') || '';
   const [query, setQuery] = useState(initialQuery);
   const [searchTerm, setSearchTerm] = useState(initialQuery);
@@ -35,7 +42,7 @@ function SearchContent() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="mobile-search space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Search</h1>
         <p className="text-muted-foreground mt-1">
@@ -48,7 +55,9 @@ function SearchContent() {
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
           <input
+            ref={inputRef}
             type="text"
+            aria-label="Search your images"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search for design styles, colors, moods..."

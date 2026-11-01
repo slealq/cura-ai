@@ -215,7 +215,7 @@ input[type="range"]::-moz-range-track {
   .admin-workbench { padding: 0; }
   .admin-tabs { width: 100%; overflow-x: auto; }
   .admin-tabs > button { flex-shrink: 0; white-space: nowrap; }
-  .admin-workbench table { display: table; min-width: 640px; }
+  .admin-workbench table.mobile-wide-table { display: table; min-width: 640px; }
   .admin-workbench :has(> table) { max-width: 100%; overflow-x: auto; }
   .mobile-modal { max-width: calc(100vw - 24px); max-height: calc(100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); overflow-y: auto; }
   .mobile-modal-actions { position: sticky; bottom: 0; padding-block: 12px; background: hsl(var(--card)); z-index: 1; }
@@ -317,4 +317,55 @@ input[type="range"]::-moz-range-track {
 [data-sonner-toast] [data-button] {
   min-height: 40px;
   min-width: 40px;
+}
+
+/* Account records reuse mobile cards; comparison tables keep their own scroll. */
+@media (max-width: 767px) {
+  .mobile-account, .mobile-search { min-width: 0; max-width: 100%; }
+  .mobile-account :is(div, section, form, dl, dd) { min-width: 0; }
+  .mobile-account :is(div, section, form) { overflow-wrap: anywhere; }
+  .mobile-account div.flex:not(.flex-col) { flex-wrap: wrap; }
+  .mobile-account .admin-tabs { flex-wrap: nowrap !important; }
+  .mobile-account :is(input, textarea, select) { max-width: 100%; }
+  .mobile-account :is(.grid-cols-2, .grid-cols-3) { grid-template-columns: minmax(0, 1fr); }
+  .mobile-account .inline-flex:has(> button) { flex-wrap: wrap; max-width: 100%; }
+  .mobile-account table.mobile-cards { width: 100%; overflow-x: visible; }
+  .mobile-account table.mobile-cards tr { width: 100%; }
+  .mobile-account table.mobile-cards td { white-space: normal; overflow: visible; }
+  .mobile-account table.mobile-cards td.truncate { text-overflow: clip; }
+  .mobile-account table.mobile-cards td::before { max-width: 45%; }
+  .mobile-account table.mobile-cards td[colspan] { display: block; text-align: left; }
+  .mobile-account table.mobile-cards td[colspan]::before { content: none; }
+  .mobile-account table.mobile-cards td .truncate { white-space: normal; overflow: visible; }
+  .mobile-account table.mobile-cards td > :is(div, span, button) { max-width: 100%; }
+  .mobile-account table.mobile-cards td[colspan] > * { width: 100%; }
+  .mobile-account .mobile-modal > .flex:last-child { position: sticky; bottom: 0; background: hsl(var(--background)); padding-block: 12px; }
+  .mobile-trace-sheet { align-self: flex-end; height: 85dvh; max-height: 85dvh; border-radius: 20px 20px 0 0; padding-bottom: env(safe-area-inset-bottom); }
+  .mobile-account aside[aria-label="Job inspector"]:not(.hidden) { bottom: calc(65px + env(safe-area-inset-bottom)); height: calc(85dvh - 65px); max-height: calc(85dvh - 65px); }
+  .mobile-account aside[aria-label="Job inspector"] dl { grid-template-columns: auto minmax(0, 1fr); }
+  .mobile-account .mobile-job-images {
+    position: fixed;
+    top: auto;
+    left: 12px;
+    right: 12px;
+    bottom: calc(84px + env(safe-area-inset-bottom));
+    width: auto;
+    max-height: 45dvh;
+  }
+  .mobile-account pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .mobile-tool .app-main:has(.mobile-search) { overflow-y: auto; }
+  .mobile-search form { flex-wrap: wrap; }
+  .mobile-search form > div { min-width: 0; }
+  .mobile-account .group.inline-flex > .pointer-events-none {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    bottom: calc(84px + env(safe-area-inset-bottom));
+    width: auto;
+    transform: none;
+    opacity: 0;
+  }
+  .mobile-account .group.inline-flex:is(:hover, :focus-within) > .pointer-events-none { opacity: 1; }
+  .mobile-search form > div { flex-basis: 100%; }
+  .mobile-search form > button { width: 100%; }
 }

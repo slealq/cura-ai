@@ -198,7 +198,7 @@ export default function AnomaliesView({ onViewTrace }: AnomaliesViewProps) {
 
       {/* Table */}
       <div className="border rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
+        <table className="mobile-cards w-full text-sm">
           <thead className="bg-muted/50">
             <tr>
               <th className="text-left p-2 font-medium">Type</th>
@@ -221,7 +221,7 @@ export default function AnomaliesView({ onViewTrace }: AnomaliesViewProps) {
                   className={`border-t hover:bg-muted/30 ${onViewTrace && a.detail?.trace_id ? 'cursor-pointer' : ''}`}
                   onClick={() => handleRowClick(a)}
                 >
-                  <td className="p-2">
+                  <td data-label="Type" className="p-2">
                     <span className="flex items-center gap-1">
                       <span
                         className="w-2 h-2 rounded-full flex-shrink-0"
@@ -233,9 +233,9 @@ export default function AnomaliesView({ onViewTrace }: AnomaliesViewProps) {
                       )}
                     </span>
                   </td>
-                  <td className="p-2 text-xs">{a.provider}/{a.model ? (a.model.length > 25 ? a.model.slice(0, 25) + '...' : a.model) : '-'}</td>
-                  <td className="p-2">{a.operation || '-'}</td>
-                  <td className="p-2">
+                  <td data-label="Provider / Model" className="p-2 text-xs">{a.provider}/{a.model ? (a.model.length > 25 ? a.model.slice(0, 25) + '...' : a.model) : '-'}</td>
+                  <td data-label="Operation" className="p-2">{a.operation || '-'}</td>
+                  <td data-label="Status" className="p-2">
                     {a.resolved ? (
                       <span className="flex items-center gap-1 text-green-600 dark:text-green-400">
                         <CheckCircle className="h-3.5 w-3.5" /> Resolved
@@ -244,8 +244,8 @@ export default function AnomaliesView({ onViewTrace }: AnomaliesViewProps) {
                       <span className="text-yellow-600 dark:text-yellow-400">Open</span>
                     )}
                   </td>
-                  <td className="p-2 text-xs text-muted-foreground">{formatDateCompact(a.created_at)}</td>
-                  <td className="p-2 text-right" onClick={(e) => e.stopPropagation()}>
+                  <td data-label="Created" className="p-2 text-xs text-muted-foreground">{formatDateCompact(a.created_at)}</td>
+                  <td data-label="Actions" className="p-2 text-right" onClick={(e) => e.stopPropagation()}>
                     {!a.resolved && (
                       <div className="flex gap-1 justify-end">
                         <button

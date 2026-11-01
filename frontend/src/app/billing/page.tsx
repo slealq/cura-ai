@@ -324,7 +324,7 @@ export default function BillingPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[880px] flex flex-col gap-5">
+    <div className="mobile-account mx-auto w-full max-w-[880px] flex flex-col gap-5">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold tracking-tight">Billing</h1>
         <a href="#add-sparks" className="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground">Add sparks</a>
@@ -678,7 +678,7 @@ export default function BillingPage() {
       {/* Manual PayPal payment dialog */}
       {manualPack && paymentConfig?.paypal_me_url && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-background border border-border rounded-lg w-full max-w-md p-6 space-y-4">
+          <div className="mobile-modal bg-background border border-border rounded-lg w-full max-w-md p-6 space-y-4">
             <div>
               <h3 className="text-sm font-semibold">Pay with PayPal</h3>
               <p className="text-sm text-muted-foreground mt-1">
