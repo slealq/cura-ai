@@ -144,6 +144,16 @@ function GeneratePageInner() {
 
   // Full-size modal — store only the ID so the modal always uses fresh polled data
   const [selectedImageId, setSelectedImageId] = useState<number | null>(null);
+  useEffect(() => {
+    const id = Number(searchParams.get('image'));
+    if (Number.isInteger(id) && id > 0) setSelectedImageId(id);
+  }, [searchParams]);
+  const { data: linkedImage } = useQuery({
+    queryKey: ['generated-image', selectedImageId],
+    queryFn: () => generationApi.getImage(selectedImageId!),
+    enabled: selectedImageId != null,
+    refetchInterval: 5000,
+  });
 
   // Fetch base model from settings to initialize
   const hasInitialized = useRef(false);
@@ -418,7 +428,7 @@ function GeneratePageInner() {
 
   const images = generatedImages?.items || [];
   const selectedImage = selectedImageId != null
-    ? images.find((img) => img.id === selectedImageId) ?? null
+    ? images.find((img) => img.id === selectedImageId) ?? linkedImage ?? null
     : null;
 
   const runs = new Map<string, GeneratedImage[]>();

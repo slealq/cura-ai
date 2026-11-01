@@ -17,7 +17,7 @@ export default function MobileNavigation() {
   const { user, logout } = useAuth();
   const { theme, setTheme } = useTheme();
   const { data } = useQuery({ queryKey: ['folders', 'mobile'], queryFn: () => foldersApi.list({ limit: 200 }) });
-  const links = [['Clusters', '/clusters'], ['Upload', '/upload'], ['Edit', '/images?tool=Edit'], ['Vision', '/images?tool=Ask%20Vision'], ['Models', '/models'], ['Billing', '/billing'], ['Settings', '/settings'], ...(user?.role === 'admin' ? [['Admin', '/admin'], ['Debug', '/debug']] : [])];
+  const links = [['Clusters', '/clusters'], ['Upload', '/upload'], ['Edit', '/images?tool=Edit'], ['Vision', '/images?tool=Ask%20Vision'], ['My models', '/models'], ['Billing', '/billing'], ['Settings', '/settings'], ...(user?.role === 'admin' ? [['Admin', '/admin'], ['Debug', '/debug']] : [])];
   return <>
     <nav aria-label="Mobile navigation" className="mobile-tabs md:hidden">
       {[

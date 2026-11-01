@@ -312,7 +312,7 @@ function ImageGridContent({
     return () => media.removeEventListener('change', update);
   }, []);
   useEffect(() => {
-    if (!['Create', 'Edit', 'Ask Vision'].includes(entryTool || '')) {
+    if (!['Create', 'Edit', 'Ask Vision', 'Train model'].includes(entryTool || '')) {
       setTool(null);
       return;
     }

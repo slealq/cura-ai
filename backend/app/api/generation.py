@@ -71,6 +71,21 @@ class TrainLoraRequest(BaseModel):
         return self
 
 
+class UpdateLoraRequest(BaseModel):
+    """Rename or retire a model without removing its history or weights."""
+
+    name: str | None = Field(None, min_length=1, max_length=256)
+    retire: bool = False
+
+    @model_validator(mode="after")
+    def validate_name(self) -> "UpdateLoraRequest":
+        if self.name is not None:
+            self.name = self.name.strip()
+            if not self.name:
+                raise ValueError("Model name cannot be blank")
+        return self
+
+
 class LoraInput(BaseModel):
     """A single LoRA selection for generation."""
 
@@ -476,7 +491,7 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db), c
     if request.folder_id:
         from app.models.folder import Folder, FolderImage
 
-        folder = db.query(Folder).filter(Folder.id == request.folder_id).first()
+        folder = db.query(Folder).filter(Folder.id == request.folder_id, Folder.user_id == current_user.id).first()
         if not folder:
             raise HTTPException(status_code=404, detail="Folder not found")
 
@@ -488,7 +503,7 @@ async def train_lora(request: TrainLoraRequest, db: Session = Depends(get_db), c
     elif request.cluster_id:
         from app.models.cluster import Cluster, ClusterMembership
 
-        cluster = db.query(Cluster).filter(Cluster.id == request.cluster_id).first()
+        cluster = db.query(Cluster).filter(Cluster.id == request.cluster_id, Cluster.user_id == current_user.id).first()
         if not cluster:
             raise HTTPException(status_code=404, detail="Cluster not found")
 
@@ -767,6 +782,28 @@ async def get_lora_model(lora_id: int, db: Session = Depends(get_db), current_us
     return _lora_to_response(lora, db)
 
 
+@router.patch("/lora/{lora_id}", response_model=LoraModelResponse)
+async def update_lora_model(
+    lora_id: int, request: UpdateLoraRequest,
+    db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
+):
+    """Update an owned model; retiring preserves its existing images and weights."""
+    lora = get_generation_service(db, current_user.id).get_lora_model(lora_id)
+    if not lora:
+        raise HTTPException(status_code=404, detail="LoRA model not found")
+    if request.retire and lora.status not in (
+        LoraModelStatus.COMPLETED, LoraModelStatus.UPLOADED, LoraModelStatus.ARCHIVED,
+    ):
+        raise HTTPException(status_code=400, detail="Only ready models can be retired")
+    if request.name is not None:
+        lora.name = request.name
+    if request.retire:
+        lora.status = LoraModelStatus.ARCHIVED
+    db.commit()
+    db.refresh(lora)
+    return _lora_to_response(lora, db)
+
+
 @router.post("/lora/{lora_id}/recover")
 async def recover_lora_training(lora_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Recover a stuck LoRA training job.
@@ -907,7 +944,7 @@ async def download_lora_weights_endpoint(lora_id: int, db: Session = Depends(get
     lora = gen_service.get_lora_model(lora_id)
     if not lora:
         raise HTTPException(status_code=404, detail="LoRA model not found")
-    if lora.status not in (LoraModelStatus.COMPLETED, LoraModelStatus.UPLOADED):
+    if lora.status not in (LoraModelStatus.COMPLETED, LoraModelStatus.UPLOADED, LoraModelStatus.ARCHIVED):
         raise HTTPException(status_code=400, detail="LoRA model is not completed")
     if not lora.lora_url:
         raise HTTPException(status_code=400, detail="No lora_url available")
