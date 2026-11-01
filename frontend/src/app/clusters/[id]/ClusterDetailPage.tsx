@@ -23,9 +23,10 @@ export default function ClusterDetailPage() {
       title={clusterTitle(cluster)}
       queryKeyPrefix={`cluster-images-${id}-${cluster.updated_at}-${cluster.size}`}
       clusterId={id}
-      fetchImages={async ({ skip = 0, limit = 60, status, min_status, max_status }) => {
+      subtitle={<details className="md:hidden text-sm text-muted-foreground"><summary className="min-h-10">{cluster.size} images · {cluster.summary_description?.split('. ')[0] || 'Summary'}</summary><p>{cluster.summary_description || 'Summarizing cluster…'}</p></details>}
+      fetchImages={async ({ skip = 0, limit = 60, status, min_status, max_status, source }) => {
         const statuses = ['pending', 'ingested', 'normalized', 'tagged', 'described', 'embedded', 'clustered'];
-        const images = cluster.images.filter(image => (!status || image.status === status)
+        const images = cluster.images.filter(image => (!source || image.source === source) && (!status || image.status === status)
           && (!min_status || statuses.indexOf(image.status) >= statuses.indexOf(min_status))
           && (!max_status || (statuses.indexOf(image.status) >= 0 && statuses.indexOf(image.status) <= statuses.indexOf(max_status))));
         return { items: images.slice(skip, skip + limit), total: images.length, skip, limit };

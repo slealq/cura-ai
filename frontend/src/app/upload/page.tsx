@@ -60,11 +60,11 @@ export default function UploadPage() {
     setFiles([]);
     setNewFolderName('');
     setShowNewFolder(false);
-    router.push('/images');
+    router.push(window.innerWidth < 768 ? '/collection' : '/images');
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
+    <div className="mobile-upload max-w-4xl mx-auto space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Upload Images</h1>
         <p className="text-muted-foreground mt-1">
@@ -85,7 +85,7 @@ export default function UploadPage() {
       )}
 
       {/* Folder selector */}
-      <div>
+      <div className="mobile-upload-folder">
         <label className="block text-sm font-medium mb-1">
           Upload to Folder <span className="text-muted-foreground">(optional)</span>
         </label>
@@ -136,6 +136,7 @@ export default function UploadPage() {
         )}
       </div>
 
+      <p className="md:hidden text-sm text-muted-foreground">You can leave this screen. Each photo gets thumbnails, tags and a description, then joins your clusters.</p>
       {/* Dropzone */}
       <div
         {...getRootProps()}
@@ -153,7 +154,8 @@ export default function UploadPage() {
         ) : (
           <>
             <p className="text-lg font-medium">
-              Drag & drop images here, or click to select
+              <span className="md:hidden">Choose photos / Add more</span>
+              <span className="hidden md:inline">Drag &amp; drop images here, or click to select</span>
             </p>
             <p className="text-sm text-muted-foreground mt-2">
               Supports PNG, JPG, GIF, WebP, BMP

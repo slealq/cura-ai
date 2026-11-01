@@ -226,8 +226,44 @@ input[type="range"]::-moz-range-track {
   .mobile-topbar { min-height: calc(60px + env(safe-area-inset-top)); padding-top: env(safe-area-inset-top); }
   .app-main { padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
   .mobile-tool .mobile-tabs { display: none; }
+  body:has(.image-viewer) .mobile-tabs { display: none; }
+  .app-main .image-viewer[role="dialog"] { max-height: none; }
   .mobile-tool .app-main { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
 }
 @media (max-width: 767px) {
   .mobile-topbar h1 { min-width: 0; overflow-wrap: anywhere; }
+}
+
+@media (max-width: 767px) {
+  body.mobile-library-selecting .mobile-tabs { display: none; }
+  .mobile-selection-bar { position: fixed; inset: auto 0 0; z-index: 40; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); background: hsl(var(--background)); border-top: 1px solid hsl(var(--border)); padding: 8px 4px calc(8px + env(safe-area-inset-bottom)); }
+  .mobile-selection-bar button { min-height: 48px; }
+  .mobile-selection-bar button:disabled { opacity: .4; }
+  .mobile-library .library-tile { touch-action: pan-y; user-select: none; -webkit-touch-callout: none; }
+  .mobile-library .library-filters button { min-height: 40px; }
+  .mobile-library .library-filters { scrollbar-width: none; }
+  .image-viewer { background: #000; }
+  .image-viewer .viewer-canvas { background: #000; padding-top: calc(60px + env(safe-area-inset-top)); padding-bottom: 84px; }
+  .image-viewer:has([data-height="half"]) .viewer-canvas { padding-bottom: 52dvh; }
+  .viewer-info[data-height] { display: flex; position: absolute; inset: auto 0 0; height: 84px; border-radius: 20px 20px 0 0; background: hsl(var(--background)); z-index: 20; padding-bottom: env(safe-area-inset-bottom); overflow: hidden; }
+  .viewer-info[data-height="half"] { height: 52dvh; }
+  .viewer-info[data-height="full"] { height: 88dvh; }
+  .viewer-info[data-height="peek"] > :not(.viewer-grab) { display: none; }
+  .viewer-info > .sticky, .viewer-info > .viewer-desktop-actions { display: none; }
+  .viewer-grab { touch-action: none; }
+  .viewer-phone-actions button { min-height: 40px; padding: 0 8px; }
+  .viewer-info > .overflow-y-auto { min-height: 0; overscroll-behavior: contain; }
+}
+@media (max-width: 767px) {
+  .mobile-upload { display: flex; flex-direction: column; gap: 16px; }
+  .mobile-upload > * { margin-top: 0 !important; }
+  .mobile-upload > :last-child > button:last-child { position: sticky; bottom: calc(84px + env(safe-area-inset-bottom)); }
+  .mobile-upload > :first-child p { display: none; }
+}
+
+@media (max-width: 767px) {
+  .mobile-upload-folder { order: 2; }
+  .mobile-upload > :last-child { order: 3; }
+  .mobile-upload > .border-dashed { padding: 20px; }
+  .folder-delete-sheet { position: absolute; bottom: 0; left: 0; max-width: none; max-height: 85dvh; overflow-y: auto; border-radius: 20px 20px 0 0; padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
 }
