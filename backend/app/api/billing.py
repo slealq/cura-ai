@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -142,6 +142,8 @@ class GenerationEstimateRequest(BaseModel):
     image_size: str | None = None
     quality: str | None = None
     with_lora: bool = False
+    result_type: Literal["single", "series"] | None = None
+    series_amount: int | None = Field(None, ge=2, le=9)
 
 
 class GenerationEstimateResponse(BaseModel):
@@ -449,6 +451,12 @@ def estimate_generation_cost(
 
     # Build params dict for pricing engine
     gen_params: dict = {}
+    if body.result_type == "series":
+        if body.operation != "edit" or body.base_model != "kling-image" or body.series_amount is None:
+            raise HTTPException(400, "Series estimates require Kling edit and 2–9 images")
+        gen_params.update(result_type="series", series_amount=body.series_amount)
+    elif body.series_amount is not None:
+        raise HTTPException(400, "Series count requires series mode")
     if body.resolution:
         gen_params["resolution"] = body.resolution
     if body.enable_web_search:

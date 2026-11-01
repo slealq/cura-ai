@@ -939,7 +939,18 @@ def _resolve_edit_sources(db: Session, gen_params: dict, user_id: int, history_i
             group = {"gallery": "image_ids", "generated": "generated_ids", "upload": "upload_keys"}[source["type"]]
             refs = {group: [source.get("key") if source["type"] == "upload" else source["id"]],
                     "upload_names": {source.get("key"): source.get("name") or source.get("key")}}
+            start = len(history_inputs) if history_inputs is not None else 0
             result.extend(_resolve_edit_sources(db, {"sources": refs, "edit_model": gen_params.get("edit_model")}, user_id, history_inputs))
+            if history_inputs is not None and gen_params.get("edit_model") == "kling-image":
+                item = history_inputs[start]
+                role = source.get("role", "reference")
+                item["role"] = role
+                item["element"] = source.get("element")
+                if role == "reference":
+                    count = sum(entry.get("role") == "reference" for entry in history_inputs)
+                    item["label"] = f"@Image{count}"
+                else:
+                    item["label"] = f"@Element{source['element']} · {'main' if role == 'element_main' else 'angle'}"
         return result
     data_uris: list[str] = []
 
@@ -1002,8 +1013,8 @@ def _resolve_edit_sources(db: Session, gen_params: dict, user_id: int, history_i
 
 
 @celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
-def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id: int | None = None, from_batch: bool = False, trace_id: str | None = None, session_id: str | None = None) -> dict:
-    """Edit an image via fal.ai."""
+def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id: int | None = None, from_batch: bool = False, trace_id: str | None = None, session_id: str | None = None, series_ids: list[int] | None = None) -> dict:
+    """Edit an image or one related-image series via fal.ai."""
     write_log(
         category=LogCategory.TASK,
         message=f"Task edit_image started for generated_image {generated_image_id}",
@@ -1014,6 +1025,8 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
     task_start = time.monotonic()
     _init_task_context(user_id, job_id=job_id, trace_id=trace_id, session_id=session_id)
     db = _get_db()
+    gen_service = get_generation_service(db, user_id)
+    _edit_billing_ctx = None
     try:
         _update_job_status(db, job_id, JobStatus.RUNNING)
 
@@ -1032,6 +1045,12 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
         from app.services.image_history import safe_snapshot
         history_inputs = []
         image_urls = _resolve_edit_sources(db, params, user_id, history_inputs)
+        if edit_model == "kling-image":
+            from app.services.edit_subject import validate_subject_media
+            for url in image_urls:
+                validate_subject_media(base64.b64decode(url.split(",", 1)[1]))
+        if params.get("result_type") == "series" and not series_ids:
+            raise ValueError("Series must be dispatched once with all output records")
         if params.get("object_boxes") is not None:
             from app.services.edit_mask import upright_base
             for index, url in enumerate(image_urls):
@@ -1095,13 +1114,17 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
             "cancel_check": _is_cancelled,
         }
         for key in ("image_size", "seed", "resolution", "aspect_ratio", "quality",
-                    "safety_tolerance", "enable_web_search", "object_boxes", "precision_area", "context_window_box"):
+                    "safety_tolerance", "enable_web_search", "object_boxes", "precision_area", "context_window_box", "result_type", "series_amount"):
             if params.get(key) is not None:
                 edit_kwargs[key] = params[key]
 
+        if edit_model == "kling-image" and "ordered" in params.get("sources", {}):
+            edit_kwargs["subject_sources"] = params["sources"]["ordered"]
         if mask_url:
             edit_kwargs["mask_url"] = mask_url
 
+        if _is_cancelled():
+            raise GenerationCancelledError("Edit cancelled before submission")
         editor = get_editor(db=db, edit_model=edit_model, user_id=user_id)
         trace_id = get_trace_id()
         _edit_billing_ctx = None
@@ -1122,22 +1145,43 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
             _edit_billing_ctx = b_edit
             result = b_edit.call(_run_async, editor.edit(**edit_kwargs))
 
-        # Save first output image
         if not result.images:
             raise Exception("No images returned from edit provider")
 
-        _run_async(
-            gen_service.save_generated_result(
-                generated_image_id=generated_image_id,
-                image_data=result.images[0],
-                width=result.widths[0],
-                height=result.heights[0],
-                seed=result.seed,
-                provider_metadata=result.metadata,
+        output_ids = list(series_ids or [generated_image_id])
+        # Preserve unexpected extra outputs too; never discard a paid result.
+        while len(output_ids) < len(result.images):
+            extra = gen_service.create_generated_image(
+                prompt=gen.prompt, negative_prompt=gen.negative_prompt,
+                base_model=gen.base_model, generation_provider="fal",
+                generation_params=params, job_id=job_id,
             )
-        )
-
-        _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
+            output_ids.append(extra.id)
+        for index, data in enumerate(result.images):
+            output = gen_service.get_generated_image(output_ids[index])
+            output.history = safe_snapshot(db, output, history_inputs)
+            if series_ids:
+                output.generation_params = dict(params, series_billing_resource=generated_image_id,
+                                                series_output_count=len(result.images))
+            db.commit()
+            _run_async(gen_service.save_generated_result(
+                generated_image_id=output.id, image_data=data,
+                width=result.widths[index], height=result.heights[index],
+                seed=result.seed, provider_metadata=result.metadata,
+            ))
+        for missing_id in output_ids[len(result.images):]:
+            missing = gen_service.get_generated_image(missing_id)
+            missing.status = GenerationStatus.FAILED
+            missing.error_message = "Provider returned fewer series images than requested"
+        db.commit()
+        if series_ids and job_id:
+            job = db.query(Job).filter(Job.id == job_id).first()
+            if job:
+                job.total_items = len(output_ids)
+                job.result = {"total": len(output_ids), "succeeded": len(result.images),
+                              "failed": max(0, len(output_ids) - len(result.images))}
+                db.commit()
+        _update_job_status(db, job_id, JobStatus.COMPLETED, progress=len(result.images))
 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(
@@ -1209,6 +1253,15 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
         _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
         raise
     finally:
+        if series_ids:
+            # Cancellation/failure must settle every placeholder, including partial saves.
+            db.rollback()
+            for output_id in series_ids:
+                output = gen_service.get_generated_image(output_id)
+                if output and output.status not in (GenerationStatus.COMPLETED, GenerationStatus.FAILED):
+                    output.status = GenerationStatus.FAILED
+                    output.error_message = "Series did not complete"
+            db.commit()
         if not from_batch and job_id:
             try:
                 finalize_job_billing(db, user_id, job_id)

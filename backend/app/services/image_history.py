@@ -40,6 +40,8 @@ def snapshot(db, gen, inputs=None, partial=False):
         from app.providers.fal_provider import build_image_request
         values = dict(params, negative_prompt=gen.negative_prompt)
         # Mask bytes are stored as a separate input, not a provider URL in params.
+        if key == "kling-image" and "ordered" in params.get("sources", {}):
+            values["subject_sources"] = params["sources"]["ordered"]
         auto_context = values.get("precision_area") == "auto"
         if auto_context:
             values.pop("precision_area")

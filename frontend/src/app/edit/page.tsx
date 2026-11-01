@@ -15,6 +15,7 @@ import Notice from '@/components/tools/Notice';
 import ModelPanel from '@/components/tools/ModelPanel';
 import Composer from '@/components/tools/Composer';
 import SourceTray from '@/components/tools/SourceTray';
+import SubjectPanel from '@/components/tools/SubjectPanel';
 import { useSearchParams } from 'next/navigation';
 import { imagesApi } from '@/lib/api';
 import ImagePickerModal from '@/components/ImagePickerModal';
@@ -37,6 +38,8 @@ interface SourceImage {
   key?: string;
   previewUrl?: string;
   name?: string;
+  role?: 'reference' | 'element_main' | 'element_angle';
+  element?: number;
 }
 
 function formatDuration(createdAt: string, completedAt: string | null): string | null {
@@ -83,6 +86,10 @@ function EditPageInner() {
   const [customHeight, setCustomHeight] = useState(1024);
   const [useCustomSize, setUseCustomSize] = useState(false);
   const [numImages, setNumImages] = useState(1);
+  const [resultType, setResultType] = useState<'single' | 'series'>('single');
+  const [seriesAmount, setSeriesAmount] = useState(2);
+  const [elementCount, setElementCount] = useState(1);
+  const outputCount = job === 'subject' && resultType === 'series' ? seriesAmount : numImages;
   const [seed, setSeed] = useState<string>('');
   const [enablePromptExpansion, setEnablePromptExpansion] = useState(true);
   const [enableSafetyChecker, setEnableSafetyChecker] = useState(true);
@@ -100,6 +107,7 @@ function EditPageInner() {
 
   const estimateParams = {
     base_model: editModel, operation: 'edit' as const,
+    ...(job === 'subject' && resultType === 'series' ? { result_type: resultType, series_amount: seriesAmount } : {}),
     ...(spec.resolution && resolution ? { resolution } : {}),
     ...(spec.quality && quality ? { quality } : {}),
     ...(spec.image_size && imageSize ? { image_size: imageSize } : {}),
@@ -123,7 +131,7 @@ function EditPageInner() {
   }, [editModelData, catalog, EDIT_MODELS]);
 
   const caps = {
-    maxSources: job === 'paint' && editModel === 'ideogram-v4.5-edit' ? 4 : model?.max_source_images ?? 1, maxImages: model?.max_num_images || 1,
+    maxSources: job === 'subject' ? 10 + elementCount * 4 : job === 'paint' && editModel === 'ideogram-v4.5-edit' ? 4 : model?.max_source_images ?? 1, maxImages: model?.max_num_images || 1,
     hasNegativePrompt: !!spec.negative_prompt, hasPromptExpansion: false, hasSafetyChecker: false,
     usesResolution: !!(spec.resolution || spec.aspect_ratio), hasImageSize: !!spec.image_size,
     hasSeed: !!spec.seed, maxPromptLen: 8000, hasSafetyTolerance: !!spec.safety_tolerance, hasWebSearch: !!spec.enable_web_search
@@ -246,7 +254,7 @@ function EditPageInner() {
 
     const params: Parameters<typeof editApi.edit>[0] = {
       edit_model: editModel,
-      num_images: numImages,
+      num_images: job === 'subject' && resultType === 'series' ? 1 : numImages,
       prompt: prompt.trim(),
     };
 
@@ -279,7 +287,12 @@ function EditPageInner() {
     if (caps.hasSeed && seed) params.seed = parseInt(seed);
     if (spec.quality && quality) params.quality = quality;
 
-    params.ordered_sources = sources.map(({ type, id, key, name }) => ({ type, id, key, name }));
+    params.ordered_sources = sources.map(({ type, id, key, name, role, element }) => ({ type, id, key, name, ...(job === 'subject' ? { role: role ?? 'reference', element } : {}) }));
+    if (job === 'subject') {
+      if (subjectInvalid) return toast.error('Assign a main photo to each subject and keep up to 10 composition references');
+      params.result_type = resultType;
+      if (resultType === 'series') params.series_amount = seriesAmount;
+    }
 
     if (job === 'objects') {
       if (objectsInvalid) return toast.error('Give each box a unique valid name, description and required areas');
@@ -417,15 +430,24 @@ function EditPageInner() {
     setEditModel(key);
   }
 
+  const subjectInvalid = job === 'subject' && (
+    prompt.length > 2500 || sources.filter(source => !source.role || source.role === 'reference').length > 10 ||
+    Array.from({ length: elementCount }, (_, i) => i + 1).some(element => !sources.some(source => source.element === element && source.role === 'element_main'))
+  );
+  let referenceIndex = 0;
+  const subjectLabels = sources.map(source => source.element ? `@Element${source.element} · ${source.role === 'element_main' ? 'main' : 'angle'}` : `@Image${++referenceIndex}`);
+
   const sourceTray = (
     <SourceTray
       sources={sources}
       model={editModel}
+      labels={job === 'subject' ? subjectLabels : undefined}
+      overLimit={job === 'subject' ? subjectLabels.map(label => label.startsWith('@Image') && Number(label.slice(6)) > 10) : undefined}
       limit={maxSources}
       onChange={setSources}
       onAdd={() => setPickerOpen(true)}
       onUpload={handleFileUpload}
-      onUse={(label) => setPrompt(current => `${current} ${label}`.trim())}
+      onUse={(label) => setPrompt(current => `${current} ${label.split(' · ')[0]}`.trim())}
     />
   );
 
@@ -461,7 +483,7 @@ function EditPageInner() {
           <JobTabs
             value={job}
             onChange={(next) => {
-              setNotice('');
+              setNotice(job === 'subject' && next !== 'subject' && (resultType === 'series' || sources.some(source => source.element)) ? 'Subject assignments and series settings are kept for Keep a subject. This job uses ordinary sources and its Results count.' : '');
               setJob(next);
               if (next === 'paint' && editModel === 'ideogram-v4.5-edit' && (imageSize !== 'auto' || useCustomSize)) {
                 setImageSize('auto');
@@ -482,7 +504,7 @@ function EditPageInner() {
             onDrop={handleDrop}
             className="flex min-h-0 flex-1 flex-col gap-2.5"
           >
-            {job === 'subject' && <p className="text-muted-foreground">Coming next</p>}
+            
             {job === 'paint' && editModel === 'ideogram-v4.5-edit' && region.area === 'box' && (
               <button className="self-start rounded border border-border px-2 py-1 text-xs" onClick={() => setDrawPrecision(!drawPrecision)}>{drawPrecision ? 'Paint inside area' : 'Draw precision area'}</button>
             )}
@@ -514,11 +536,11 @@ function EditPageInner() {
             value={prompt}
             onChange={setPrompt}
             onApply={handleEdit}
-            disabled={(job === 'subject') || (job === 'objects' && objectsInvalid) || (job === 'paint' && editModel === 'ideogram-v4.5-edit' && region.area === 'box' && !region.box) || (job === 'paint' && (!mask?.percent || (editModel === 'ideogram-v4.5-edit' && mask.percent === 100))) || !model || editMutation.isPending || uploading || !prompt.trim() || !sources.length || sources.length > maxSources}
+            disabled={subjectInvalid || (job === 'objects' && objectsInvalid) || (job === 'paint' && editModel === 'ideogram-v4.5-edit' && region.area === 'box' && !region.box) || (job === 'paint' && (!mask?.percent || (editModel === 'ideogram-v4.5-edit' && mask.percent === 100))) || !model || editMutation.isPending || uploading || !prompt.trim() || !sources.length || sources.length > maxSources}
             model={model?.label}
-            count={numImages}
-            warning={job === 'subject' ? 'Coming next' : job === 'objects' && objectsInvalid ? 'Name and describe each object, then draw its areas' : job === 'paint' && !mask?.percent ? 'Paint the area first' : job === 'paint' && editModel === 'ideogram-v4.5-edit' && mask?.percent === 100 ? 'Leave part of the image unpainted' : sources.length > maxSources ? `This model takes up to ${maxSources} sources. Remove ${sources.length - maxSources}.` : !sources.length ? 'Add a source image' : uploading ? 'Uploading sources…' : undefined}
-            cost={estimate?.estimated_sparks != null ? estimate.estimated_sparks * numImages : undefined}
+            count={outputCount}
+            warning={subjectInvalid ? 'Assign each subject a main photo; up to 3 angles, 10 references and 2500 prompt characters' : job === 'objects' && objectsInvalid ? 'Name and describe each object, then draw its areas' : job === 'paint' && !mask?.percent ? 'Paint the area first' : job === 'paint' && editModel === 'ideogram-v4.5-edit' && mask?.percent === 100 ? 'Leave part of the image unpainted' : sources.length > maxSources ? `This model takes up to ${maxSources} sources. Remove ${sources.length - maxSources}.` : !sources.length ? 'Add a source image' : uploading ? 'Uploading sources…' : undefined}
+            cost={estimate?.estimated_sparks != null ? estimate.estimated_sparks * (job === 'subject' && resultType === 'series' ? 1 : numImages) : undefined}
           />
         }
         settings={
@@ -531,21 +553,32 @@ function EditPageInner() {
               value={editModel}
               onChange={changeModel}
             />
+            {job === 'subject' && (
+              <label className="block text-xs text-muted-foreground">Output mode
+                <select className="mt-1 w-full rounded border border-input bg-background p-2" value={resultType} onChange={event => setResultType(event.target.value as 'single' | 'series')}>
+                  <option value="single">Single images</option>
+                  <option value="series">Related-image series</option>
+                </select>
+              </label>
+            )}
             <label className="block text-xs text-muted-foreground">
-              Results
+              {job === 'subject' && resultType === 'series' ? 'Series images' : 'Results'}
               <select
                 className="mt-1 w-full rounded-md border border-input bg-background px-2 py-1.5 text-[13px] text-foreground"
-                value={numImages}
-                onChange={(event) => setNumImages(Number(event.target.value))}
+                value={outputCount}
+                onChange={(event) => job === 'subject' && resultType === 'series' ? setSeriesAmount(Number(event.target.value)) : setNumImages(Number(event.target.value))}
               >
-                {Array.from({ length: caps.maxImages }, (_, i) => (
-                  <option key={i + 1}>{i + 1}</option>
+                {Array.from({ length: job === 'subject' && resultType === 'series' ? 8 : caps.maxImages }, (_, i) => (
+                  <option key={i + 1}>{i + (job === 'subject' && resultType === 'series' ? 2 : 1)}</option>
                 ))}
               </select>
             </label>
             <div><span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">Sources: {maxSources}</span></div>
             <div className="space-y-3 border-t border-border pt-2.5">
               <h3 className="text-[12.5px] font-medium">Advanced for this model</h3>
+            {job === 'subject' && (
+              <SubjectPanel sources={sources} count={elementCount} onCount={setElementCount} onChange={setSources} onUse={label => setPrompt(current => `${current} ${label}`.trim())} />
+            )}
             {job === 'paint' && editModel === 'ideogram-v4.5-edit' && (
               <label className="block text-xs text-muted-foreground">Precision area
                 <select className="mt-1 w-full rounded-md border border-input bg-background p-2" value={region.area} onChange={event => { setDrawPrecision(event.target.value === 'box'); setRegions(current => ({ ...current, [baseKey]: { ...region, area: event.target.value as 'none' | 'auto' | 'box' } })); }}>

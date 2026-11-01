@@ -93,7 +93,10 @@ def _catalog_table_cost(provider: str, model: str, operation: str, params: dict)
     option = params.get(image_model.price_param)
     if option is None:
         option = image_model.params.get(image_model.price_param, {}).get("default")
-    return Decimal(str(image_model.price_table.get(option, image_model.base_price)))
+    cost = Decimal(str(image_model.price_table.get(option, image_model.base_price)))
+    if image_model.key == "kling-image" and params.get("result_type") == "series":
+        cost *= Decimal(str(params["series_amount"]))
+    return cost
 
 
 # ---------------------------------------------------------------------------
