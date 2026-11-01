@@ -11,6 +11,7 @@ import { trackFunnelStep } from '@/lib/observability';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import Stage from '@/components/tools/Stage';
+import SheetButton from '@/components/tools/SheetButton';
 import Composer from '@/components/tools/Composer';
 import Notice from '@/components/tools/Notice';
 import type { GeneratedImage } from '@/types';
@@ -484,6 +485,8 @@ function GeneratePageInner() {
         }
       `}</style>
       <Stage
+        mobileFeedKey={images.length}
+        mobileSheets={{ Model: <label className="grid gap-2">Model{modelControl}</label> }}
         canvas={
           <>
             {references.length > 0 && (
@@ -497,13 +500,13 @@ function GeneratePageInner() {
               </div>
             )}
             {imagesLoading && <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />}
-            {Array.from(runs, ([key, run]) => {
+            {Array.from(runs, ([key, run], index) => {
               const first = run[0];
               const params = first.generation_params;
               const shape = String(params?.aspect_ratio || params?.image_size || `${first.width ?? '?'} × ${first.height ?? '?'}`);
               const cost = run.reduce((sum, image) => sum + (image.cost_sparks ?? 0), 0);
               return (
-                <section key={key} className="shrink-0 space-y-2">
+                <section key={key} style={{ '--mobile-run-order': runs.size - index } as React.CSSProperties} className="create-run shrink-0 space-y-2">
                   <div className="flex flex-wrap items-baseline justify-between gap-2 text-[13px]">
                     <span className="min-w-0 flex-1 truncate font-medium" title={first.prompt}>{first.prompt}</span>
                     <span className="font-mono text-[11px] text-muted-foreground">
@@ -542,6 +545,7 @@ function GeneratePageInner() {
             cost={totalEstimatedCost ?? undefined}
             placeholder="Describe the image you want to create…"
             action="Create"
+            mobileChips={<><SheetButton title="Model" label={model?.label || 'Model'} /><SheetButton title="Create settings" label={`${aspectRatio || imageSizePreset || 'Shape'} · ${numImages} ${numImages === 1 ? 'result' : 'results'}`} /></>}
             chips={<>{modelControl}{shapeControl}{countControl}{qualityControl}</>}
           />
         }

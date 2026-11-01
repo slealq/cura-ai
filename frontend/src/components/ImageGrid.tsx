@@ -1,5 +1,7 @@
 'use client';
 
+import JobChooser from '@/components/tools/JobChooser';
+
 import { useMobileSheet } from '@/hooks/useMobileSheet';
 import LibraryThumbnail from '@/components/LibraryThumbnail';
 
@@ -649,10 +651,7 @@ function ImageGridContent({
             <section ref={sheetRef} role="dialog" aria-modal="true" aria-label="Library actions" className="mobile-sheet absolute inset-x-0 bottom-0 max-h-[85dvh] overflow-y-auto rounded-t-2xl bg-background p-4 space-y-3" onClick={e => e.stopPropagation()}>
               <button className="min-h-10" onClick={() => setMobileMenu(null)}>Close</button>
               {mobileMenu === 'jobs' ? <>
-                <h2 className="font-semibold">What do you want to do?</h2>
-                {([['describe', 'Describe the change'], ['paint', 'Paint an area'], ['objects', 'Arrange objects'], ['subject', 'Keep a subject']] as const).map(([job, label]) => (
-                  <button key={job} className="block min-h-12 w-full text-left" onClick={() => router.push(`/edit?job=${job}&sources=${Array.from(selectedIds).join(',')}`)}>{label}</button>
-                ))}
+                <JobChooser onChange={job => router.push(`/edit?job=${job}&sources=${Array.from(selectedIds).join(',')}`)} />
               </> : mobileMenu === 'actions' ? <>{headerActions}{inspectorOverview}</> : <>
                 <button className="block min-h-12" onClick={() => setSelectedIds(previous => new Set([...Array.from(previous), ...images.map(image => image.id)]))}>Select all loaded</button>
                 {(['Describe', 'Recluster library', 'Remove from folder', 'Delete'] as InspectorTool[]).filter(next => next !== 'Remove from folder' || folderId).map(next => <button key={next} className="block min-h-12" disabled={!selectedIds.size} onClick={() => mobileTool(next)}>{next}</button>)}

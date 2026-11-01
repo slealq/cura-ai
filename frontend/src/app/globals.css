@@ -267,3 +267,34 @@ input[type="range"]::-moz-range-track {
   .mobile-upload > .border-dashed { padding: 20px; }
   .folder-delete-sheet { position: absolute; bottom: 0; left: 0; max-width: none; max-height: 85dvh; overflow-y: auto; border-radius: 20px 20px 0 0; padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
 }
+
+@media (max-width: 767px) {
+  .mobile-tool .app-main { overflow: hidden; padding-bottom: 20px; }
+  .tool-stage { height: 100%; }
+  .tool-stage button, .tool-stage select, .mobile-sheet button, .mobile-sheet select { min-height: 40px; }
+  .tool-stage input, .tool-stage textarea, .tool-stage select, .mobile-sheet input, .mobile-sheet select, .mobile-sheet textarea { font-size: 16px; }
+  .tool-composer { margin: 0 10px max(8px, env(safe-area-inset-bottom)); }
+  .tool-composer textarea { min-height: 24px; height: 26px; }
+  .tool-composer textarea:focus { height: 72px; }
+  .tool-sources { flex-wrap: nowrap; justify-content: start; overflow-x: auto; scroll-snap-type: x mandatory; min-height: 260px; }
+  .tool-source { flex: 0 0 85%; max-width: none; min-height: 260px; scroll-snap-align: center; }
+  .tool-source button { min-width: 40px; }
+  .paint-viewport { min-height: 260px; }
+  .paint-image { width: 100% !important; }
+}
+
+@media (max-width: 767px) {
+  .create-run { order: var(--mobile-run-order); }
+  .tool-canvas:has(.create-run) { gap: 24px; }
+  .model-list-row a:has(img) { height: 88px; width: 88px; }
+  .model-list-row h4 { display: none; }
+}
+@media (min-width: 768px) {
+  .paint-viewport { display: contents; }
+  .paint-image { transform: none !important; }
+}
+
+@media (max-width: 767px) {
+  .tool-composer > div > div:first-child { min-width: 0; max-width: 100%; }
+  .tool-composer > div > div:first-child > button { max-width: 55vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}

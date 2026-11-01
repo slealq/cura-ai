@@ -8,6 +8,7 @@ import { visionApi, settingsApi, billingApi, imagesApi, authUrl } from '@/lib/ap
 import { Loader2, X, Copy, Check, Trash2, Save } from 'lucide-react';
 import { toast } from 'sonner';
 import Stage from '@/components/tools/Stage';
+import SheetButton from '@/components/tools/SheetButton';
 import Composer from '@/components/tools/Composer';
 import SourceTray from '@/components/tools/SourceTray';
 import Notice from '@/components/tools/Notice';
@@ -352,6 +353,9 @@ function VisionPageInner() {
   return (
     <div className="-mx-5 -my-5 h-[calc(100%+40px)] min-h-0" onPaste={handlePaste} onDragOver={event => event.preventDefault()} onDrop={handleDrop}>
       <Stage
+        mobileSheets={{
+          Mode: <div className="space-y-2">{MODES.map(entry => <button key={entry.value} className="block min-h-12 w-full text-left" aria-pressed={mode === entry.value} onClick={() => setMode(entry.value)}>{entry.label}</button>)}</div>,
+        }}
         canvas={
           <>
             <SourceTray
@@ -479,6 +483,7 @@ function VisionPageInner() {
             onChange={updatePrompt}
             onApply={handleAnalyze}
             disabled={!catalog || !selectedModel || catalogError || uploading || analyzeMutation.isPending || !source || (mode === 'custom' && !customPrompt.trim())}
+            mobileChips={<><SheetButton title="Mode" label={MODES.find(entry => entry.value === mode)?.label} /><SheetButton title="Provider" label={catalog?.language.find(entry => entry.id === selectedModel)?.label || provider} /></>}
             model={catalog?.language.find(entry => entry.id === selectedModel)?.label}
             count={sources.length}
             cost={currentCost != null ? currentCost * sources.length : undefined}

@@ -58,7 +58,16 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const { resolvedTheme } = useTheme();
   useJobNotifications();
   const pathname = usePathname();
-  const tool = ['/edit', '/generate', '/vision', '/search'].includes(pathname);
+  const tool = ['/edit', '/generate', '/vision', '/models', '/search'].includes(pathname);
+  const [modelTitle, setModelTitle] = useState('');
+  const [editTitle, setEditTitle] = useState('Edit');
+  useEffect(() => {
+    const update = (event: Event) => setEditTitle((event as CustomEvent<string>).detail);
+    const updateModel = (event: Event) => setModelTitle((event as CustomEvent<string>).detail);
+    window.addEventListener('mobile-model-title', updateModel);
+    window.addEventListener('mobile-edit-title', update);
+    return () => { window.removeEventListener('mobile-edit-title', update); window.removeEventListener('mobile-model-title', updateModel); };
+  }, []);
   // Every page under a tab goes back to that tab's hub.
   const parent = ['/collection', '/studio', '/account'].includes(pathname) ? null
     : ['/edit', '/generate', '/vision', '/models'].some(path => pathname.startsWith(path)) ? '/studio'
@@ -75,8 +84,8 @@ function AppShell({ children }: { children: React.ReactNode }) {
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           <Header />
           <div className="mobile-topbar flex shrink-0 items-center gap-2 border-b border-border px-3 md:hidden">
-            {parent && <Link href={parent} className="flex min-h-10 items-center pr-1 text-sm">Back</Link>}
-            <h1 className="text-lg font-semibold">{title}</h1>
+            {parent && (pathname === '/models' && modelTitle ? <button className="min-h-10 pr-1 text-sm" onClick={() => window.dispatchEvent(new Event('mobile-model-back'))}>Back</button> : <Link href={parent} className="flex min-h-10 items-center pr-1 text-sm">Back</Link>)}
+            <h1 className="text-lg font-semibold">{pathname === '/edit' ? <button className="min-h-10 text-left" onClick={() => window.dispatchEvent(new Event('mobile-edit-jobs'))}>{editTitle} ▾</button> : pathname === '/models' ? modelTitle || 'My models' : title}</h1>
             <MobileStatus />
           </div>
           <main className="app-main flex-1 overflow-auto px-5 py-5">{children}</main>

@@ -37,11 +37,11 @@ export default function SourceTray({ sources, model, limit, onChange, onAdd, onU
   const addClass = 'flex min-h-[86px] flex-1 items-center justify-center rounded-md border border-dashed border-input p-3 text-center text-[13px] text-muted-foreground hover:bg-muted focus-within:ring-2 focus-within:ring-ring';
 
   return (
-    <div className="flex min-h-[180px] flex-1 flex-wrap items-stretch justify-center gap-2">
+    <div className="tool-sources flex min-h-[180px] flex-1 flex-wrap items-stretch justify-center gap-2">
       {sources.map((source, index) => (
         <div
           key={`${source.type}-${source.id ?? source.key}-${index}`}
-          className={`group relative min-h-[180px] max-w-[300px] flex-[1_1_180px] overflow-hidden rounded-md bg-muted ${(overLimit?.[index] ?? index >= limit) ? 'opacity-40' : ''}`}
+          className={`tool-source group relative min-h-[180px] max-w-[300px] flex-[1_1_180px] overflow-hidden rounded-md bg-muted ${(overLimit?.[index] ?? index >= limit) ? 'opacity-40' : ''}`}
         >
           {source.previewUrl && (
             <LibraryImage src={source.previewUrl} alt={(labels?.[index] ?? sourceLabel(model, index))} className="absolute inset-0 h-full w-full object-cover" />
@@ -58,7 +58,7 @@ export default function SourceTray({ sources, model, limit, onChange, onAdd, onU
         </div>
       ))}
       <div className="flex w-[120px] shrink-0 flex-col gap-2">
-        <button onClick={onAdd} className={addClass}>+ Add from library</button>
+        <button onClick={() => { window.dispatchEvent(new Event('mobile-close-sheets')); onAdd(); }} className={addClass}>+ Add from library</button>
         <label className={`${addClass} relative cursor-pointer`}>
           + Upload
           <input
