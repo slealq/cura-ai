@@ -10,6 +10,8 @@ import { toast } from 'sonner';
 import PaintCanvas, { maskFile, type PaintMask } from '@/components/tools/PaintCanvas';
 import BoxCanvas, { type Box, type ObjectBox } from '@/components/tools/BoxCanvas';
 import Stage from '@/components/tools/Stage';
+import SheetButton from '@/components/tools/SheetButton';
+import SubjectSlots from '@/components/tools/SubjectSlots';
 import JobTabs, { jobs, type EditJob } from '@/components/tools/JobTabs';
 import Notice from '@/components/tools/Notice';
 import ModelPanel from '@/components/tools/ModelPanel';
@@ -486,6 +488,42 @@ function EditPageInner() {
     </div>
   ) : null;
 
+  const objectControls = (
+              <div className="space-y-3">
+                <p className="text-xs text-muted-foreground">Move and Remove use the first source image. Names start with a letter and contain letters, numbers or underscores.</p>
+                {objects.map((object, index) => (
+                  <div key={index} className="space-y-2 border-b border-border pb-3">
+                    <button className="text-xs text-primary" aria-pressed={selectedBox === index} onClick={() => setSelectedBox(index)}>Draw object {index + 1}</button>
+                    <label className="block text-xs">Name, used as &lt;{object.label}&gt;
+                      <input className="mt-1 w-full rounded border border-input bg-background p-2" maxLength={64} pattern="[A-Za-z][A-Za-z0-9_]*" value={object.label} onChange={event => updateObject(index, { label: event.target.value })} />
+                    </label>
+                    <label className="block text-xs">What’s in this box
+                      <input className="mt-1 w-full rounded border border-input bg-background p-2" maxLength={500} value={object.description} onChange={event => updateObject(index, { description: event.target.value })} />
+                    </label>
+                    <label className="block text-xs">Action
+                      <select className="mt-1 w-full rounded border border-input bg-background p-2" value={object.action} onChange={event => updateObject(index, { action: event.target.value as ObjectBox['action'], ...(window.matchMedia('(max-width: 767px)').matches ? { source_box: object.source_box ?? object.target_box ?? { x_min: 0.3, y_min: 0.3, x_max: 0.7, y_max: 0.7 }, target_box: object.target_box ?? object.source_box ?? { x_min: 0.3, y_min: 0.3, x_max: 0.7, y_max: 0.7 } } : {}) })}>
+                        {(['Place', 'Move', 'Remove'] as const).map(action => <option key={action}>{action}</option>)}
+                      </select>
+                    </label>
+                    <p className="text-xs text-muted-foreground">Source: {object.source_box ? 'drawn' : 'not drawn'} · Target: {object.target_box ? 'drawn' : 'not drawn'}</p>
+                    {object.action === 'Move' && selectedBox === index && (
+                      <select aria-label="Area to draw" className="w-full rounded border border-input bg-background p-2 text-xs" value={boxPart} onChange={event => setBoxPart(event.target.value as typeof boxPart)}>
+                        <option value="source_box">Draw source area</option>
+                        <option value="target_box">Draw target area</option>
+                      </select>
+                    )}
+                    <button className="text-xs text-muted-foreground" onClick={() => { setObjects(objects.filter((_, i) => i !== index)); setSelectedBox(0); }}>Delete box</button>
+                  </div>
+                ))}
+                <button className="rounded border border-border px-2 py-1 text-xs" disabled={objects.length >= 32} onClick={() => {
+                  let number = objects.length + 1;
+                  while (objects.some(object => object.label === `object_${number}`)) number++;
+                  setObjects([...objects, { label: `object_${number}`, description: '', action: 'Place', ...(window.matchMedia('(max-width: 767px)').matches ? { target_box: { x_min: 0.3, y_min: 0.3, x_max: 0.7, y_max: 0.7 } } : {}) }]);
+                  setSelectedBox(objects.length);
+                }}>+ Add box ({objects.length}/32)</button>
+              </div>
+  );
+
   return (
     <div className="-mx-5 -my-5 h-[calc(100%+40px)] min-h-0">
       <style jsx global>{`
@@ -494,6 +532,10 @@ function EditPageInner() {
         }
       `}</style>
       <Stage
+        mobileSheets={{
+          Model: <ModelPanel models={catalog?.edit ?? []} job={job} value={editModel} onChange={changeModel} />,
+          'Object details': objectControls,
+        }}
         tabs={
           <JobTabs
             value={job}
@@ -527,22 +569,40 @@ function EditPageInner() {
               <PaintCanvas region={editModel === 'ideogram-v4.5-edit' && region.area === 'box' ? region.box : undefined} source={baseUrl} value={mask} onChange={value => setMasks(current => ({ ...current, [baseKey]: value }))} />
             </div>
             {job === 'objects' && (
-              <BoxCanvas key={baseKey} source={baseUrl} selected={selectedBox} boxes={objects.map(object => ({ label: `${object.label} · ${object.action === 'Place' ? 'target' : object.action === 'Remove' ? 'source' : boxPart === 'source_box' ? 'source' : 'target'}`, box: object[object.action === 'Place' ? 'target_box' : object.action === 'Remove' ? 'source_box' : boxPart] }))} onChange={box => {
+              <BoxCanvas key={baseKey} source={baseUrl} selected={selectedBox} onSelect={setSelectedBox} staticBoxes={objects.flatMap(object => object.action === 'Move' && object.source_box && boxPart === 'target_box' ? [{ label: `${object.label} · source`, box: object.source_box }] : [])} boxes={objects.map(object => ({ label: `${object.label} · ${object.action === 'Place' ? 'target' : object.action === 'Remove' ? 'source' : boxPart === 'source_box' ? 'source' : 'target'}`, box: object[object.action === 'Place' ? 'target_box' : object.action === 'Remove' ? 'source_box' : boxPart] }))} onChange={box => {
                 const object = objects[selectedBox];
                 if (object) updateObject(selectedBox, { [object.action === 'Place' ? 'target_box' : object.action === 'Remove' ? 'source_box' : boxPart]: box });
               }} />
             )}
+            {job === 'objects' && (
+              <div className="flex justify-between gap-2 md:hidden">
+                <SheetButton title="Object details" label={`Edit ${objects[selectedBox]?.label || 'box'}`} />
+                <button className="min-h-10 rounded border px-3" disabled={objects.length >= 32} onClick={() => {
+                  let number = objects.length + 1;
+                  while (objects.some(object => object.label === `object_${number}`)) number++;
+                  setObjects([...objects, { label: `object_${number}`, description: '', action: 'Place', target_box: { x_min: 0.3, y_min: 0.3, x_max: 0.7, y_max: 0.7 } }]);
+                  setSelectedBox(objects.length);
+                }}>+ Box</button>
+              </div>
+            )}
+            {job === 'subject' && <>
+              <SubjectSlots sources={sources} count={elementCount} onCount={setElementCount} onChange={setSources} onAdd={() => setPickerOpen(true)} />
+              <SheetButton title="Subject photos and references">{sourceTray}</SheetButton>
+            </>}
             {job === 'paint' && editModel === 'ideogram-v4.5-edit' && region.area === 'box' && drawPrecision && (
               <BoxCanvas key={`region-${baseKey}`} source={baseUrl} selected={0} boxes={[{ label: 'Precision area', box: region.box }]} onChange={box => setRegions(current => ({ ...current, [baseKey]: { area: 'box', box } }))} />
             )}
             {job === 'paint' || job === 'objects' ? (
-              <details className="shrink-0">
+              <>
+              <div className="md:hidden"><SheetButton title="References" label={`Sources and references (${sources.length})`}>{sourceTray}</SheetButton></div>
+              <details className="hidden shrink-0 md:block">
                 <summary className="cursor-pointer text-xs text-muted-foreground">
                   Sources and references ({sources.length}) · first image is the base
                 </summary>
                 {sourceTray}
               </details>
-            ) : sourceTray}
+              </>
+            ) : job === 'subject' ? <div className="hidden md:contents">{sourceTray}</div> : sourceTray}
             {results}
           </div>
         }
@@ -598,41 +658,7 @@ function EditPageInner() {
               <p className="text-xs text-muted-foreground">Ideogram can change more than the area you paint. Only a drawn box keeps everything outside it untouched.</p>
               </>
             )}
-            {job === 'objects' && (
-              <div className="space-y-3">
-                <p className="text-xs text-muted-foreground">Move and Remove use the first source image. Names start with a letter and contain letters, numbers or underscores.</p>
-                {objects.map((object, index) => (
-                  <div key={index} className="space-y-2 border-b border-border pb-3">
-                    <button className="text-xs text-primary" aria-pressed={selectedBox === index} onClick={() => setSelectedBox(index)}>Draw object {index + 1}</button>
-                    <label className="block text-xs">Name, used as &lt;{object.label}&gt;
-                      <input className="mt-1 w-full rounded border border-input bg-background p-2" maxLength={64} pattern="[A-Za-z][A-Za-z0-9_]*" value={object.label} onChange={event => updateObject(index, { label: event.target.value })} />
-                    </label>
-                    <label className="block text-xs">What’s in this box
-                      <input className="mt-1 w-full rounded border border-input bg-background p-2" maxLength={500} value={object.description} onChange={event => updateObject(index, { description: event.target.value })} />
-                    </label>
-                    <label className="block text-xs">Action
-                      <select className="mt-1 w-full rounded border border-input bg-background p-2" value={object.action} onChange={event => updateObject(index, { action: event.target.value as ObjectBox['action'] })}>
-                        {(['Place', 'Move', 'Remove'] as const).map(action => <option key={action}>{action}</option>)}
-                      </select>
-                    </label>
-                    <p className="text-xs text-muted-foreground">Source: {object.source_box ? 'drawn' : 'not drawn'} · Target: {object.target_box ? 'drawn' : 'not drawn'}</p>
-                    {object.action === 'Move' && selectedBox === index && (
-                      <select aria-label="Area to draw" className="w-full rounded border border-input bg-background p-2 text-xs" value={boxPart} onChange={event => setBoxPart(event.target.value as typeof boxPart)}>
-                        <option value="source_box">Draw source area</option>
-                        <option value="target_box">Draw target area</option>
-                      </select>
-                    )}
-                    <button className="text-xs text-muted-foreground" onClick={() => { setObjects(objects.filter((_, i) => i !== index)); setSelectedBox(0); }}>Delete box</button>
-                  </div>
-                ))}
-                <button className="rounded border border-border px-2 py-1 text-xs" disabled={objects.length >= 32} onClick={() => {
-                  let number = objects.length + 1;
-                  while (objects.some(object => object.label === `object_${number}`)) number++;
-                  setObjects([...objects, { label: `object_${number}`, description: '', action: 'Place' }]);
-                  setSelectedBox(objects.length);
-                }}>+ Add box ({objects.length}/32)</button>
-              </div>
-            )}
+            {job === 'objects' && objectControls}
               {/* Negative prompt */}
               {caps.hasNegativePrompt && (
                 <div>

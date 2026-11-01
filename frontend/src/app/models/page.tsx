@@ -23,6 +23,7 @@ import { toast } from 'sonner';
 import Link from 'next/link';
 import { cn, formatDate } from '@/lib/utils';
 import Stage from '@/components/tools/Stage';
+import SheetButton from '@/components/tools/SheetButton';
 import Composer from '@/components/tools/Composer';
 import type { LoraModel } from '@/types';
 import { imagesApi } from '@/lib/api';
@@ -260,8 +261,9 @@ function TrainingPreview({ image }: { image: LoraModel['source_preview_images'][
   );
 }
 
-function LoraModelCard({ model, selected, onClick }: {
+function LoraModelCard({ model, selected, onClick, detailed }: {
   model: LoraModel;
+  detailed?: boolean;
   selected: boolean;
   onClick: () => void;
 }) {
@@ -274,7 +276,7 @@ function LoraModelCard({ model, selected, onClick }: {
   const source = getSourceInfo(model);
 
   return (
-    <section className={cn('border-b border-border pb-6 space-y-3', selected && 'border-selection')}>
+    <section className={cn('border-b border-border pb-6 space-y-3', !detailed && 'model-list-row', selected && 'border-selection')}>
       <button onClick={onClick} aria-pressed={selected} className="flex w-full flex-wrap items-center gap-3 text-left">
         <h3 className="font-medium">{model.name}</h3>
         <span className={cn('rounded-full px-2 py-1 text-xs', config.color)}>{config.label}</span>
@@ -295,6 +297,7 @@ function LoraModelCard({ model, selected, onClick }: {
         ))}
         {!data?.items.length && <p className="py-8 text-sm text-muted-foreground">{isError ? 'Could not load images.' : data ? 'Try this model below to make its first image.' : 'Loading images…'}</p>}
       </div>
+      <div className={detailed ? '' : 'hidden md:contents'}>
       <h4 className="text-xs text-muted-foreground">Trained on</h4>
       <div className="flex gap-2 overflow-x-auto">
         {model.source_preview_images?.map(image => (
@@ -312,6 +315,7 @@ function LoraModelCard({ model, selected, onClick }: {
         ) : <p className="py-2 text-muted-foreground">Not evaluated yet</p>}
         {isModelReady(model) && <Link className="underline" href={`/models/${model.id}/evaluate`}>Evaluate model</Link>}
       </details>
+      </div>
       <button onClick={onClick} className="rounded-md border border-input px-3 py-1.5 text-xs">Try it & actions</button>
     </section>
   );
@@ -320,6 +324,7 @@ function LoraModelCard({ model, selected, onClick }: {
 export default function ModelsPage() {
   const queryClient = useQueryClient();
   const [prompt, setPrompt] = useState('');
+  const [mobileDetail, setMobileDetail] = useState(false);
   const [rename, setRename] = useState('');
   const [showTrainModal, setShowTrainModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -365,6 +370,12 @@ export default function ModelsPage() {
   const models = loraData?.items || [];
   const selectedModel = models.find((model) => model.id === selectedModelId) ?? models[0] ?? null;
   const activeId = selectedModel?.id;
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('mobile-model-title', { detail: mobileDetail ? selectedModel?.name ?? 'My models' : '' }));
+    const back = () => setMobileDetail(false);
+    window.addEventListener('mobile-model-back', back);
+    return () => window.removeEventListener('mobile-model-back', back);
+  }, [mobileDetail, selectedModel?.name]);
   const { data: estimate } = useQuery({
     queryKey: ['model-try-estimate', selectedModel?.base_model],
     queryFn: () => billingApi.estimateGenerationCost({ base_model: selectedModel!.base_model, with_lora: true }),
@@ -426,21 +437,30 @@ export default function ModelsPage() {
                 Select images in the Library, then choose Train model to make your first model.
               </p>
             )}
+            <div className="flex justify-between gap-2 md:hidden">
+              {mobileDetail && <button className="min-h-10" onClick={() => setMobileDetail(false)}>All models</button>}
+              <SheetButton title="Options" />
+            </div>
             {models.map(model => (
+              <div key={model.id} className={mobileDetail && activeId !== model.id ? 'hidden md:block' : ''}>
               <LoraModelCard
                 key={model.id}
                 model={model}
+                detailed={mobileDetail && activeId === model.id}
                 selected={activeId === model.id}
                 onClick={() => {
                   setSelectedModel(model);
                   setRename('');
+                  setMobileDetail(true);
                 }}
               />
+              </div>
             ))}
           </div>
         }
         composer={
           <Composer
+            mobileHidden={!mobileDetail}
             value={prompt}
             onChange={setPrompt}
             onApply={() => tryMutation.mutate()}

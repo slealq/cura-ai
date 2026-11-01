@@ -18,6 +18,10 @@ export default function PaintCanvas({ source, value, onChange, region }: {
   onChange: (value: PaintMask) => void;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
+  const undo = useRef<ImageData[]>([]);
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
+  const pinch = useRef<{ distance: number; x: number; y: number; scale: number; tx: number; ty: number }>();
+  const [view, setView] = useState({ scale: 1, x: 0, y: 0 });
   const drawing = useRef(false);
   const last = useRef<{ x: number; y: number } | null>(null);
   const [size, setSize] = useState(40);
@@ -40,6 +44,26 @@ export default function PaintCanvas({ source, value, onChange, region }: {
     image.src = value.dataUrl;
     return () => { active = false; };
   }, [source, dimensions, value?.dataUrl]);
+
+  useEffect(() => {
+    undo.current = [];
+    pointers.current.clear();
+    pinch.current = undefined;
+    setView({ scale: 1, x: 0, y: 0 });
+  }, [source]);
+
+  function restoreStroke() {
+    const previous = undo.current.pop();
+    if (previous) canvas.current?.getContext('2d')?.putImageData(previous, 0, 0);
+  }
+
+  function finish(event: React.PointerEvent<HTMLCanvasElement>) {
+    if (!pointers.current.has(event.pointerId)) return;
+    pointers.current.delete(event.pointerId);
+    drawing.current = false;
+    last.current = null;
+    if (!pointers.current.size) { pinch.current = undefined; save(); }
+  }
 
   function save() {
     const node = canvas.current;
@@ -95,14 +119,18 @@ export default function PaintCanvas({ source, value, onChange, region }: {
           {size}px
         </label>
         <button className="rounded-md border border-border px-2 py-1 text-muted-foreground hover:bg-muted" onClick={() => {
+          const node = canvas.current;
+          if (node) undo.current.push(node.getContext('2d')!.getImageData(0, 0, node.width, node.height));
           canvas.current?.getContext('2d')?.clearRect(0, 0, dimensions.width, dimensions.height);
           save();
         }}>Clear</button>
         <button className="rounded-md border border-border px-2 py-1 text-muted-foreground hover:bg-muted" aria-pressed={visible} onClick={() => setVisible(!visible)}>{visible ? 'Hide' : 'Show'} area</button>
+        <button className="rounded-md border border-border px-2 py-1 text-muted-foreground md:hidden" onClick={() => { restoreStroke(); save(); }}>Undo</button>
         <span className="font-mono">{(value?.percent ?? 0).toFixed(1)}% selected</span>
       </div>
       {source ? (
-        <div className="relative mx-auto w-full max-w-[900px]" style={{ aspectRatio: `${dimensions.width}/${dimensions.height}`, width: `min(100%, ${55 * dimensions.width / dimensions.height}vh)` }}>
+        <div className="paint-viewport min-h-0 flex-1 overflow-hidden">
+        <div className="paint-image relative mx-auto w-full max-w-[900px]" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`, aspectRatio: `${dimensions.width}/${dimensions.height}`, width: `min(100%, ${55 * dimensions.width / dimensions.height}vh)` }}>
           <LibraryImage src={source} alt="Base image to paint" className="absolute inset-0 h-full w-full" onLoad={event => {
             const image = event.currentTarget;
             setDimensions({ width: image.naturalWidth, height: image.naturalHeight });
@@ -120,15 +148,41 @@ export default function PaintCanvas({ source, value, onChange, region }: {
             className="absolute inset-0 h-full w-full touch-none cursor-crosshair"
             style={{ opacity: visible ? 0.5 : 0, pointerEvents: visible ? 'auto' : 'none' }}
             onPointerDown={event => {
+              if (event.button !== 0) return;
               event.currentTarget.setPointerCapture(event.pointerId);
+              pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+              if (window.matchMedia('(max-width: 767px)').matches && pointers.current.size > 1) {
+                if (drawing.current) restoreStroke();
+                drawing.current = false;
+                last.current = null;
+                const [a, b] = Array.from(pointers.current.values());
+                pinch.current = { distance: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, scale: view.scale, tx: view.x, ty: view.y };
+                return;
+              }
+              if (pinch.current) return;
+              const node = canvas.current;
+              if (node) {
+                undo.current.push(node.getContext('2d')!.getImageData(0, 0, node.width, node.height));
+                if (undo.current.length > 12) undo.current.shift();
+              }
               drawing.current = true;
               last.current = null;
               paint(event);
             }}
-            onPointerMove={paint}
-            onPointerUp={() => { drawing.current = false; last.current = null; save(); }}
-            onPointerCancel={() => { drawing.current = false; last.current = null; save(); }}
+            onPointerMove={event => {
+              if (!pointers.current.has(event.pointerId)) return;
+              pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+              const start = pinch.current;
+              if (start && pointers.current.size >= 2) {
+                const [a, b] = Array.from(pointers.current.values());
+                setView({ scale: Math.max(1, Math.min(6, start.scale * Math.hypot(a.x - b.x, a.y - b.y) / start.distance)), x: start.tx + (a.x + b.x) / 2 - start.x, y: start.ty + (a.y + b.y) / 2 - start.y });
+              } else if (!start) paint(event);
+            }}
+            onPointerUp={finish}
+            onPointerCancel={finish}
+            onLostPointerCapture={finish}
           />
+        </div>
         </div>
       ) : <p className="text-sm text-muted-foreground">Add a base image, then paint the area to change.</p>}
     </div>
