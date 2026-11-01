@@ -12,6 +12,7 @@ from app.core.security import get_current_user, get_current_user_from_token_para
 from app.db.base import get_db
 from app.models import Job, JobStatus, JobType
 from app.models.user import User
+from app.services.edit_layout import Box, ObjectBox
 from app.services.generation_service import get_generation_service
 from app.services.model_catalog import DEFAULT_EDIT_MODEL, offered_keys
 from app.workers.dispatch import dispatch_or_fail
@@ -46,6 +47,9 @@ class EditImageRequest(BaseModel):
 
     prompt: str = Field("", max_length=8000)
     negative_prompt: str | None = Field(None, max_length=500)
+    object_boxes: list[ObjectBox] | None = Field(None, max_length=32)
+    precision_area: Literal["none", "auto", "box"] | None = None
+    precision_box: Box | None = None
     mask_key: str | None = None
     ordered_sources: list[OrderedEditSource] | None = None
     source_image_ids: list[int] | None = None
@@ -140,6 +144,18 @@ async def edit_images(
     if source_count == 0:
         raise HTTPException(status_code=400, detail="At least one source image is required")
 
+    if request.object_boxes is not None:
+        if request.edit_model != "flux-3-klein-edit":
+            raise HTTPException(400, "Object boxes require FLUX.3 Klein")
+        labels = [obj.label for obj in request.object_boxes]
+        if len(set(labels)) != len(labels):
+            raise HTTPException(400, "Object names must be unique")
+    if request.precision_area is not None or request.precision_box is not None:
+        if request.edit_model != "ideogram-v4.5-edit" or not request.mask_key:
+            raise HTTPException(400, "Precision area requires Ideogram paint")
+        if (request.precision_area == "box") != (request.precision_box is not None):
+            raise HTTPException(400, "Drawn precision area requires exactly one box")
+
     if request.mask_key:
         from app.services.edit_mask import PAINT_MODELS
         if request.edit_model not in PAINT_MODELS:
@@ -176,6 +192,9 @@ async def edit_images(
     # Build generation_params — only the params this model supports
     gen_params: dict = {
         **({"mask_key": request.mask_key} if request.mask_key else {}),
+        **({"object_boxes": [obj.model_dump(exclude_none=True) for obj in request.object_boxes]} if request.object_boxes is not None else {}),
+        **({"precision_area": request.precision_area} if request.precision_area else {}),
+        **({"precision_box": request.precision_box.model_dump()} if request.precision_box else {}),
         "mode": "edit",
         "edit_model": request.edit_model,
         "sources": source_refs,

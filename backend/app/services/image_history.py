@@ -5,6 +5,7 @@ import io
 import logging
 
 from PIL import Image as PILImage
+from PIL import ImageOps
 from sqlalchemy import func
 
 from app.models import GeneratedImage, Image, ImageHistoryLink, LoraModel
@@ -32,18 +33,26 @@ def snapshot(db, gen, inputs=None, partial=False):
         if created_at:
             loras[-1]["created_at"] = created_at.isoformat()
         partial = partial or lora is None
+    run_prompt = gen.prompt
     settings = {k: v for k, v in params.items() if k not in ("sources", "loras", "actual_seed", "mode", "edit_model")}
     partial = partial or any(not item.get("copy_key") for item in inputs or [])
     if model and not backfilled:
         from app.providers.fal_provider import build_image_request
         values = dict(params, negative_prompt=gen.negative_prompt)
+        # Mask bytes are stored as a separate input, not a provider URL in params.
+        auto_context = values.get("precision_area") == "auto"
+        if auto_context:
+            values.pop("precision_area")
         if kind == "generate":
             values = {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 3.5, **values}
         _, arguments = build_image_request(model, gen.prompt, values,
                                             source_urls=["input"] * len([item for item in inputs or [] if item.get("role") != "mask"]) if kind == "edit" else None)
+        if auto_context:
+            arguments.update(edit_precision="high", context_window="auto")
+        run_prompt = arguments["prompt"]
         settings = {k: v for k, v in arguments.items() if k not in ("prompt", "negative_prompt", "image_url", "image_urls", "reference_image_urls", "loras")}
     return {"version": 1, "job_type": kind, "date": gen.created_at.isoformat() + ("Z" if gen.created_at.tzinfo is None else ""),
-            "prompt": gen.prompt, "negative_prompt": gen.negative_prompt,
+            "prompt": run_prompt, "negative_prompt": gen.negative_prompt,
             "model": {"key": key, "name": model.label if model else key}, "provider": gen.generation_provider,
             "settings": settings,
             "seed": params.get("actual_seed"), "charged_cost": None,
@@ -67,6 +76,7 @@ async def input_snapshot(storage, user_id, data, filename, source_key=None, role
         digest = hashlib.sha256(data).hexdigest()
         item["file_hash"] = digest
         with PILImage.open(io.BytesIO(data)) as image:
+            image = ImageOps.exif_transpose(image)
             item["width"], item["height"] = image.size
             output = io.BytesIO()
             if role == "mask":

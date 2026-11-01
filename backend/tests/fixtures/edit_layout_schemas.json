@@ -1,0 +1,887 @@
+{
+  "flux-3-klein-edit": {
+    "QueueStatus": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "IN_QUEUE",
+            "IN_PROGRESS",
+            "COMPLETED"
+          ]
+        },
+        "request_id": {
+          "type": "string",
+          "description": "The request id."
+        },
+        "response_url": {
+          "type": "string",
+          "description": "The response url."
+        },
+        "status_url": {
+          "type": "string",
+          "description": "The status url."
+        },
+        "cancel_url": {
+          "type": "string",
+          "description": "The cancel url."
+        },
+        "logs": {
+          "type": "object",
+          "description": "The logs.",
+          "additionalProperties": true
+        },
+        "metrics": {
+          "type": "object",
+          "description": "The metrics.",
+          "additionalProperties": true
+        },
+        "queue_position": {
+          "type": "integer",
+          "description": "The queue position."
+        }
+      },
+      "required": [
+        "status",
+        "request_id"
+      ]
+    },
+    "Flux3KleinEditImageInput": {
+      "x-fal-order-properties": [
+        "prompt",
+        "enable_prompt_expansion",
+        "seed",
+        "num_images",
+        "enable_safety_checker",
+        "output_format",
+        "sync_mode",
+        "image_urls",
+        "image_size",
+        "bounding_boxes"
+      ],
+      "title": "DistilledEditInput",
+      "type": "object",
+      "required": [
+        "prompt",
+        "image_urls"
+      ],
+      "properties": {
+        "image_size": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/ImageSize"
+            },
+            {
+              "type": "string",
+              "enum": [
+                "square_hd",
+                "square",
+                "portrait_4_3",
+                "portrait_16_9",
+                "landscape_4_3",
+                "landscape_16_9"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-fal": {
+            "max_area": 16777216,
+            "min_height": 256,
+            "max_height": 4096,
+            "min_width": 256,
+            "multiple_of": 16,
+            "max_width": 4096
+          },
+          "title": "Image Size",
+          "description": "The size of the generated image, 256 to 4096 pixels per side. If not set, a single reference image's own size (scaled to at most 4 megapixels) is used, or the first reference image's size (at most 1 megapixel) when several are given."
+        },
+        "enable_prompt_expansion": {
+          "default": true,
+          "title": "Enable Prompt Expansion",
+          "type": "boolean",
+          "description": "If set to true, the prompt is expanded into a detailed caption (grounded in the reference images when editing) before generation."
+        },
+        "sync_mode": {
+          "default": false,
+          "title": "Sync Mode",
+          "type": "boolean",
+          "description": "If `True`, the media will be returned as a data URI and the output data won't be available in the request history."
+        },
+        "enable_safety_checker": {
+          "default": true,
+          "title": "Enable Safety Checker",
+          "type": "boolean",
+          "description": "If set to true, the safety checker will be enabled."
+        },
+        "output_format": {
+          "default": "png",
+          "title": "Output Format",
+          "enum": [
+            "jpeg",
+            "png",
+            "webp"
+          ],
+          "type": "string",
+          "description": "The format of the generated image."
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Seed",
+          "description": "The same seed and the same prompt given to the same version of the model will output the same image every time."
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string",
+          "examples": [
+            "A miniature grey amigurumi knight figure crocheted from thick woolen yarn stands on a cliff of stacked yarn skeins at night, lit by a full moon, next to a large fluffy knitted dragon in terracotta and mustard yarn, with a soft out-of-focus backdrop of indigo knitted yarn."
+          ],
+          "description": "A complete caption of the target image with the edit folded in. Refer to the references by their order: the first image, the second image."
+        },
+        "num_images": {
+          "minimum": 1,
+          "default": 1,
+          "title": "Number of Images",
+          "type": "integer",
+          "maximum": 4,
+          "description": "The number of images to generate."
+        },
+        "image_urls": {
+          "examples": [
+            [
+              "https://storage.googleapis.com/falserverless/example_inputs/z-image-turbo-i2i-input.png"
+            ]
+          ],
+          "minItems": 1,
+          "type": "array",
+          "title": "Image URLs",
+          "maxItems": 10,
+          "description": "The reference images to edit or compose from (up to 10).",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bounding_boxes": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/components/schemas/EditBoundingBox"
+              },
+              "type": "array",
+              "maxItems": 32
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Bounding Boxes",
+          "description": "Optional layout, with (0, 0) at the top-left of each image: keep, move, resize or remove objects from the references, or place new ones. Name boxes in the prompt by label, e.g. `<dragon>`."
+        }
+      }
+    },
+    "Flux3KleinEditImageOutput": {
+      "x-fal-order-properties": [
+        "images",
+        "timings",
+        "seed",
+        "has_nsfw_concepts",
+        "prompt"
+      ],
+      "title": "Output",
+      "type": "object",
+      "required": [
+        "images",
+        "timings",
+        "seed",
+        "has_nsfw_concepts",
+        "prompt"
+      ],
+      "properties": {
+        "seed": {
+          "title": "Seed",
+          "type": "integer",
+          "description": "Seed used to generate the first image."
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string",
+          "description": "The prompt used for generating the image."
+        },
+        "images": {
+          "title": "Images",
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/ImageFile"
+          },
+          "description": "The generated images."
+        },
+        "has_nsfw_concepts": {
+          "title": "Has Nsfw Concepts",
+          "type": "array",
+          "items": {
+            "type": "boolean"
+          },
+          "description": "Whether the generated images contain NSFW concepts."
+        },
+        "timings": {
+          "title": "Timings",
+          "type": "object",
+          "description": "The timings of the generation process.",
+          "additionalProperties": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "ImageSize": {
+      "title": "ImageSize",
+      "type": "object",
+      "x-fal-order-properties": [
+        "width",
+        "height"
+      ],
+      "properties": {
+        "width": {
+          "maximum": 14142,
+          "default": 512,
+          "title": "Width",
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "The width of the generated image."
+        },
+        "height": {
+          "maximum": 14142,
+          "default": 512,
+          "title": "Height",
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "The height of the generated image."
+        }
+      }
+    },
+    "EditBoundingBox": {
+      "x-fal-order-properties": [
+        "label",
+        "description",
+        "box",
+        "source_image_index",
+        "source_box",
+        "target_box"
+      ],
+      "title": "EditBoundingBox",
+      "type": "object",
+      "required": [
+        "description"
+      ],
+      "properties": {
+        "source_box": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/Box"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where the object is in the reference image. Requires `source_image_index`."
+        },
+        "target_box": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/Box"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where the object goes in the output image. Leave unset to remove a referenced object; set both boxes to move or resize it."
+        },
+        "box": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/Box"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where the object goes in the output image, as on text-to-image. Use instead of `source_box`/`target_box`."
+        },
+        "label": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Label",
+          "examples": [
+            "dragon"
+          ],
+          "description": "Short name for the object in this box, e.g. `dragon`. Write `<dragon>` in the prompt to tie the box to those words; a box the prompt doesn't name is added to the scene. Defaults to `obj_<n>`."
+        },
+        "description": {
+          "maxLength": 500,
+          "title": "Description",
+          "type": "string",
+          "examples": [
+            "a large fluffy knitted dragon in terracotta and mustard yarn"
+          ],
+          "description": "What to draw in this box: the object and its look."
+        },
+        "source_image_index": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Source Image Index",
+          "description": "0-based index into `image_urls` of the reference the object comes from. Leave unset for a new object."
+        }
+      }
+    },
+    "ImageFile": {
+      "required": [
+        "url"
+      ],
+      "x-fal-order-properties": [
+        "url",
+        "content_type",
+        "file_name",
+        "file_size",
+        "width",
+        "height"
+      ],
+      "title": "ImageFile",
+      "properties": {
+        "content_type": {
+          "description": "The mime type of the file.",
+          "title": "Content Type",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "examples": [
+            "image/png"
+          ]
+        },
+        "width": {
+          "description": "The width of the image",
+          "title": "Width",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "url": {
+          "description": "The URL where the file can be downloaded from.",
+          "title": "Url",
+          "type": "string"
+        },
+        "height": {
+          "description": "The height of the image",
+          "title": "Height",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "file_name": {
+          "description": "The name of the file. It will be auto-generated if not provided.",
+          "title": "File Name",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "examples": [
+            "z9RV14K95DvU.png"
+          ]
+        },
+        "file_size": {
+          "description": "The size of the file in bytes.",
+          "title": "File Size",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "examples": [
+            4404019
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Box": {
+      "x-fal-order-properties": [
+        "x_min",
+        "y_min",
+        "x_max",
+        "y_max"
+      ],
+      "title": "Box",
+      "type": "object",
+      "required": [
+        "x_min",
+        "y_min",
+        "x_max",
+        "y_max"
+      ],
+      "properties": {
+        "x_min": {
+          "minimum": 0,
+          "maximum": 1,
+          "title": "X Min",
+          "type": "number",
+          "examples": [
+            0.3
+          ],
+          "description": "Left edge as a fraction of the image width (0-1)."
+        },
+        "x_max": {
+          "minimum": 0,
+          "maximum": 1,
+          "title": "X Max",
+          "type": "number",
+          "examples": [
+            0.7
+          ],
+          "description": "Right edge as a fraction of the image width (0-1)."
+        },
+        "y_min": {
+          "minimum": 0,
+          "maximum": 1,
+          "title": "Y Min",
+          "type": "number",
+          "examples": [
+            0.4
+          ],
+          "description": "Top edge as a fraction of the image height (0-1)."
+        },
+        "y_max": {
+          "minimum": 0,
+          "maximum": 1,
+          "title": "Y Max",
+          "type": "number",
+          "examples": [
+            0.9
+          ],
+          "description": "Bottom edge as a fraction of the image height (0-1)."
+        }
+      }
+    }
+  },
+  "ideogram-v4.5-edit": {
+    "QueueStatus": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "IN_QUEUE",
+            "IN_PROGRESS",
+            "COMPLETED"
+          ]
+        },
+        "request_id": {
+          "type": "string",
+          "description": "The request id."
+        },
+        "response_url": {
+          "type": "string",
+          "description": "The response url."
+        },
+        "status_url": {
+          "type": "string",
+          "description": "The status url."
+        },
+        "cancel_url": {
+          "type": "string",
+          "description": "The cancel url."
+        },
+        "logs": {
+          "type": "object",
+          "description": "The logs.",
+          "additionalProperties": true
+        },
+        "metrics": {
+          "type": "object",
+          "description": "The metrics.",
+          "additionalProperties": true
+        },
+        "queue_position": {
+          "type": "integer",
+          "description": "The queue position."
+        }
+      },
+      "required": [
+        "status",
+        "request_id"
+      ]
+    },
+    "V45EditInput": {
+      "properties": {
+        "edit_precision": {
+          "default": "regular",
+          "description": "regular uses Generate; high uses Precise Edit with unchanged-pixel restoration. Both always prepare structured edit instructions.",
+          "type": "string",
+          "enum": [
+            "regular",
+            "high"
+          ],
+          "title": "Edit Precision"
+        },
+        "num_images": {
+          "default": 1,
+          "description": "Number of images to generate.",
+          "type": "integer",
+          "minimum": 1,
+          "title": "Number of Images",
+          "maximum": 8
+        },
+        "seed": {
+          "description": "Random seed. Omit to choose automatically.",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Seed"
+        },
+        "enable_safety_checker": {
+          "description": "Authorized callers may set false to request relaxed screening.",
+          "type": "boolean",
+          "default": true,
+          "title": "Enable Safety Checker"
+        },
+        "sync_mode": {
+          "description": "Return image data directly in the response.",
+          "type": "boolean",
+          "default": false,
+          "title": "Sync Mode"
+        },
+        "image_size": {
+          "description": "auto preserves source geometry, downscaled by the provider if needed. Only unmasked regular edits accept named presets or custom sizes: dimensions >=256, multiples of 32, area <=4194304, ratio <=6:1. Named presets use standard fal dimensions.",
+          "default": "auto",
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/ImageSize"
+            },
+            {
+              "enum": [
+                "auto",
+                "square",
+                "square_hd",
+                "portrait_4_3",
+                "landscape_4_3",
+                "portrait_16_9",
+                "landscape_16_9"
+              ],
+              "type": "string"
+            }
+          ],
+          "title": "Image Size"
+        },
+        "quality": {
+          "default": "medium",
+          "description": "Quality tier for either edit precision. Defaults to medium.",
+          "type": "string",
+          "enum": [
+            "very_low",
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Quality"
+        },
+        "mask_url": {
+          "description": "Mask matching the source dimensions. Black edits, white preserves. Must contain both regions after rounding.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Mask URL"
+        },
+        "image_url": {
+          "description": "Primary source image to edit.",
+          "type": "string",
+          "title": "Image URL"
+        },
+        "prompt": {
+          "maxLength": 10000,
+          "description": "The generation or editing prompt.",
+          "type": "string",
+          "minLength": 1,
+          "title": "Prompt",
+          "examples": [
+            "A colorful storefront with a sign reading hello"
+          ]
+        },
+        "reference_image_urls": {
+          "items": {
+            "type": "string"
+          },
+          "description": "Up to four references plus the primary source, or three references plus the primary source and mask.",
+          "type": "array",
+          "title": "Reference Image URLs",
+          "maxItems": 4
+        },
+        "context_window_box": {
+          "description": "Explicit region to edit with high edit_precision, in source pixels with exclusive x_max/y_max. Must lie inside the image, measure at least 256 pixels per side, cover at most 4194304 pixels, and have an aspect ratio within 1:6 and 6:1. A mask may select only pixels inside it. Cannot be combined with context_window auto. Leave unset to edit the whole image.",
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/ContextWindowBox"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "context_window": {
+          "description": "Region to edit with high edit_precision. none edits the whole image, downscaled to at most 4194304 pixels. auto requires mask_url and fits the region around the mask; an oversized mask falls back to whole-image editing. Set context_window_box instead to pick the region yourself. Localized edits preserve the original image resolution and every pixel outside the region.",
+          "type": "string",
+          "enum": [
+            "none",
+            "auto"
+          ],
+          "title": "Context Window",
+          "default": "none"
+        }
+      },
+      "required": [
+        "prompt",
+        "image_url"
+      ],
+      "type": "object",
+      "additionalProperties": false,
+      "title": "EditInputV45",
+      "x-fal-order-properties": [
+        "prompt",
+        "image_url",
+        "reference_image_urls",
+        "mask_url",
+        "edit_precision",
+        "context_window",
+        "context_window_box",
+        "quality",
+        "image_size",
+        "num_images",
+        "seed",
+        "sync_mode",
+        "enable_safety_checker"
+      ]
+    },
+    "V45EditOutput": {
+      "x-fal-order-properties": [
+        "images",
+        "seed"
+      ],
+      "type": "object",
+      "required": [
+        "images",
+        "seed"
+      ],
+      "title": "OutputV3",
+      "properties": {
+        "seed": {
+          "description": "Seed used for the random number generator",
+          "type": "integer",
+          "title": "Seed",
+          "examples": [
+            123456
+          ]
+        },
+        "images": {
+          "items": {
+            "$ref": "#/components/schemas/File"
+          },
+          "type": "array",
+          "title": "Images",
+          "examples": [
+            [
+              {
+                "url": "https://v3.fal.media/files/penguin/lHdRabS80guysb8Zw1kul_image.png"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "ImageSize": {
+      "type": "object",
+      "x-fal-order-properties": [
+        "width",
+        "height"
+      ],
+      "title": "ImageSize",
+      "properties": {
+        "width": {
+          "default": 512,
+          "description": "The width of the generated image.",
+          "exclusiveMinimum": 0,
+          "type": "integer",
+          "title": "Width",
+          "maximum": 14142
+        },
+        "height": {
+          "default": 512,
+          "description": "The height of the generated image.",
+          "exclusiveMinimum": 0,
+          "type": "integer",
+          "title": "Height",
+          "maximum": 14142
+        }
+      }
+    },
+    "ContextWindowBox": {
+      "x-fal-order-properties": [
+        "x_min",
+        "y_min",
+        "x_max",
+        "y_max"
+      ],
+      "type": "object",
+      "required": [
+        "x_min",
+        "y_min",
+        "x_max",
+        "y_max"
+      ],
+      "title": "ContextWindowBox",
+      "properties": {
+        "y_min": {
+          "description": "Top edge in source pixels (inclusive).",
+          "type": "integer",
+          "minimum": 0,
+          "title": "Y Min"
+        },
+        "x_max": {
+          "description": "Right edge in source pixels (exclusive).",
+          "type": "integer",
+          "minimum": 0,
+          "title": "X Max"
+        },
+        "y_max": {
+          "description": "Bottom edge in source pixels (exclusive).",
+          "type": "integer",
+          "minimum": 0,
+          "title": "Y Max"
+        },
+        "x_min": {
+          "description": "Left edge in source pixels (inclusive).",
+          "type": "integer",
+          "minimum": 0,
+          "title": "X Min"
+        }
+      }
+    },
+    "File": {
+      "x-fal-order-properties": [
+        "url",
+        "content_type",
+        "file_name",
+        "file_size"
+      ],
+      "type": "object",
+      "required": [
+        "url"
+      ],
+      "title": "File",
+      "properties": {
+        "file_size": {
+          "description": "The size of the file in bytes.",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "File Size",
+          "examples": [
+            4404019
+          ]
+        },
+        "content_type": {
+          "description": "The mime type of the file.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Content Type",
+          "examples": [
+            "image/png"
+          ]
+        },
+        "file_name": {
+          "description": "The name of the file. It will be auto-generated if not provided.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "File Name",
+          "examples": [
+            "z9RV14K95DvU.png"
+          ]
+        },
+        "url": {
+          "description": "The URL where the file can be downloaded from.",
+          "type": "string",
+          "title": "Url"
+        }
+      }
+    }
+  }
+}

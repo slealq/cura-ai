@@ -8,6 +8,7 @@ import { editApi, settingsApi, billingApi } from '@/lib/api';
 import { Loader2, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import PaintCanvas, { maskFile, type PaintMask } from '@/components/tools/PaintCanvas';
+import BoxCanvas, { type Box, type ObjectBox } from '@/components/tools/BoxCanvas';
 import Stage from '@/components/tools/Stage';
 import JobTabs, { jobs, type EditJob } from '@/components/tools/JobTabs';
 import Notice from '@/components/tools/Notice';
@@ -142,6 +143,21 @@ function EditPageInner() {
   const [masks, setMasks] = useState<Record<string, PaintMask>>({});
   const baseKey = sources[0] ? `${sources[0].type}-${sources[0].id ?? sources[0].previewUrl}` : '';
   const mask = masks[baseKey];
+  const [layouts, setLayouts] = useState<Record<string, ObjectBox[]>>({});
+  const [regions, setRegions] = useState<Record<string, { area: 'none' | 'auto' | 'box'; box?: Box }>>({});
+  const [selectedBox, setSelectedBox] = useState(0);
+  const [drawPrecision, setDrawPrecision] = useState(false);
+  const [boxPart, setBoxPart] = useState<'source_box' | 'target_box'>('target_box');
+  const objects = layouts[baseKey] ?? [];
+  const region = regions[baseKey] ?? { area: 'none' as const };
+  function setObjects(next: ObjectBox[]) {
+    setLayouts(current => ({ ...current, [baseKey]: next }));
+  }
+  function updateObject(index: number, patch: Partial<ObjectBox>) {
+    setLayouts(current => ({ ...current, [baseKey]: (current[baseKey] ?? []).map((object, i) => i === index ? { ...object, ...patch } : object) }));
+  }
+  const objectsInvalid = !objects.length || objects.some(object => !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(object.label) || !object.description.trim() || (object.action !== 'Place' && !object.source_box) || (object.action !== 'Remove' && !object.target_box)) || new Set(objects.map(object => object.label)).size !== objects.length;
+
   const [baseUrl, setBaseUrl] = useState<string>();
   useEffect(() => {
     let active = true;
@@ -265,7 +281,16 @@ function EditPageInner() {
 
     params.ordered_sources = sources.map(({ type, id, key, name }) => ({ type, id, key, name }));
 
+    if (job === 'objects') {
+      if (objectsInvalid) return toast.error('Give each box a unique valid name, description and required areas');
+      params.object_boxes = objects;
+    }
     if (job === 'paint') {
+      if (editModel === 'ideogram-v4.5-edit') {
+        if (region.area === 'box' && !region.box) return toast.error('Draw the precision area first');
+        params.precision_area = region.area;
+        if (region.area === 'box') params.precision_box = region.box;
+      }
       if (!mask?.percent) return toast.error('Paint an area before applying');
       if (editModel === 'ideogram-v4.5-edit' && mask.percent === 100) return toast.error('Leave part of the base unpainted for Ideogram');
       setUploading(true);
@@ -457,11 +482,23 @@ function EditPageInner() {
             onDrop={handleDrop}
             className="flex min-h-0 flex-1 flex-col gap-2.5"
           >
-            {job !== 'describe' && job !== 'paint' && <p className="text-muted-foreground">Coming next</p>}
-            <div hidden={job !== 'paint'}>
-              <PaintCanvas source={baseUrl} value={mask} onChange={value => setMasks(current => ({ ...current, [baseKey]: value }))} />
+            {job === 'subject' && <p className="text-muted-foreground">Coming next</p>}
+            {job === 'paint' && editModel === 'ideogram-v4.5-edit' && region.area === 'box' && (
+              <button className="self-start rounded border border-border px-2 py-1 text-xs" onClick={() => setDrawPrecision(!drawPrecision)}>{drawPrecision ? 'Paint inside area' : 'Draw precision area'}</button>
+            )}
+            <div hidden={job !== 'paint' || (editModel === 'ideogram-v4.5-edit' && region.area === 'box' && drawPrecision)}>
+              <PaintCanvas region={editModel === 'ideogram-v4.5-edit' && region.area === 'box' ? region.box : undefined} source={baseUrl} value={mask} onChange={value => setMasks(current => ({ ...current, [baseKey]: value }))} />
             </div>
-            {job === 'paint' ? (
+            {job === 'objects' && (
+              <BoxCanvas key={baseKey} source={baseUrl} selected={selectedBox} boxes={objects.map(object => ({ label: `${object.label} · ${object.action === 'Place' ? 'target' : object.action === 'Remove' ? 'source' : boxPart === 'source_box' ? 'source' : 'target'}`, box: object[object.action === 'Place' ? 'target_box' : object.action === 'Remove' ? 'source_box' : boxPart] }))} onChange={box => {
+                const object = objects[selectedBox];
+                if (object) updateObject(selectedBox, { [object.action === 'Place' ? 'target_box' : object.action === 'Remove' ? 'source_box' : boxPart]: box });
+              }} />
+            )}
+            {job === 'paint' && editModel === 'ideogram-v4.5-edit' && region.area === 'box' && drawPrecision && (
+              <BoxCanvas key={`region-${baseKey}`} source={baseUrl} selected={0} boxes={[{ label: 'Precision area', box: region.box }]} onChange={box => setRegions(current => ({ ...current, [baseKey]: { area: 'box', box } }))} />
+            )}
+            {job === 'paint' || job === 'objects' ? (
               <details className="shrink-0">
                 <summary className="cursor-pointer text-xs text-muted-foreground">
                   Sources and references ({sources.length}) · first image is the base
@@ -477,10 +514,10 @@ function EditPageInner() {
             value={prompt}
             onChange={setPrompt}
             onApply={handleEdit}
-            disabled={(job !== 'describe' && job !== 'paint') || (job === 'paint' && (!mask?.percent || (editModel === 'ideogram-v4.5-edit' && mask.percent === 100))) || !model || editMutation.isPending || uploading || !prompt.trim() || !sources.length || sources.length > maxSources}
+            disabled={(job === 'subject') || (job === 'objects' && objectsInvalid) || (job === 'paint' && editModel === 'ideogram-v4.5-edit' && region.area === 'box' && !region.box) || (job === 'paint' && (!mask?.percent || (editModel === 'ideogram-v4.5-edit' && mask.percent === 100))) || !model || editMutation.isPending || uploading || !prompt.trim() || !sources.length || sources.length > maxSources}
             model={model?.label}
             count={numImages}
-            warning={job !== 'describe' && job !== 'paint' ? 'Coming next' : job === 'paint' && !mask?.percent ? 'Paint the area first' : job === 'paint' && editModel === 'ideogram-v4.5-edit' && mask?.percent === 100 ? 'Leave part of the image unpainted' : sources.length > maxSources ? `This model takes up to ${maxSources} sources. Remove ${sources.length - maxSources}.` : !sources.length ? 'Add a source image' : uploading ? 'Uploading sources…' : undefined}
+            warning={job === 'subject' ? 'Coming next' : job === 'objects' && objectsInvalid ? 'Name and describe each object, then draw its areas' : job === 'paint' && !mask?.percent ? 'Paint the area first' : job === 'paint' && editModel === 'ideogram-v4.5-edit' && mask?.percent === 100 ? 'Leave part of the image unpainted' : sources.length > maxSources ? `This model takes up to ${maxSources} sources. Remove ${sources.length - maxSources}.` : !sources.length ? 'Add a source image' : uploading ? 'Uploading sources…' : undefined}
             cost={estimate?.estimated_sparks != null ? estimate.estimated_sparks * numImages : undefined}
           />
         }
@@ -509,6 +546,50 @@ function EditPageInner() {
             <div><span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">Sources: {maxSources}</span></div>
             <div className="space-y-3 border-t border-border pt-2.5">
               <h3 className="text-[12.5px] font-medium">Advanced for this model</h3>
+            {job === 'paint' && editModel === 'ideogram-v4.5-edit' && (
+              <label className="block text-xs text-muted-foreground">Precision area
+                <select className="mt-1 w-full rounded-md border border-input bg-background p-2" value={region.area} onChange={event => { setDrawPrecision(event.target.value === 'box'); setRegions(current => ({ ...current, [baseKey]: { ...region, area: event.target.value as 'none' | 'auto' | 'box' } })); }}>
+                  <option value="none">None</option>
+                  <option value="auto">Auto</option>
+                  <option value="box">Drawn box</option>
+                </select>
+              </label>
+            )}
+            {job === 'objects' && (
+              <div className="space-y-3">
+                <p className="text-xs text-muted-foreground">Move and Remove use the first source image. Names start with a letter and contain letters, numbers or underscores.</p>
+                {objects.map((object, index) => (
+                  <div key={index} className="space-y-2 border-b border-border pb-3">
+                    <button className="text-xs text-primary" aria-pressed={selectedBox === index} onClick={() => setSelectedBox(index)}>Draw object {index + 1}</button>
+                    <label className="block text-xs">Name, used as &lt;{object.label}&gt;
+                      <input className="mt-1 w-full rounded border border-input bg-background p-2" maxLength={64} pattern="[A-Za-z][A-Za-z0-9_]*" value={object.label} onChange={event => updateObject(index, { label: event.target.value })} />
+                    </label>
+                    <label className="block text-xs">What’s in this box
+                      <input className="mt-1 w-full rounded border border-input bg-background p-2" maxLength={500} value={object.description} onChange={event => updateObject(index, { description: event.target.value })} />
+                    </label>
+                    <label className="block text-xs">Action
+                      <select className="mt-1 w-full rounded border border-input bg-background p-2" value={object.action} onChange={event => updateObject(index, { action: event.target.value as ObjectBox['action'] })}>
+                        {(['Place', 'Move', 'Remove'] as const).map(action => <option key={action}>{action}</option>)}
+                      </select>
+                    </label>
+                    <p className="text-xs text-muted-foreground">Source: {object.source_box ? 'drawn' : 'not drawn'} · Target: {object.target_box ? 'drawn' : 'not drawn'}</p>
+                    {object.action === 'Move' && selectedBox === index && (
+                      <select aria-label="Area to draw" className="w-full rounded border border-input bg-background p-2 text-xs" value={boxPart} onChange={event => setBoxPart(event.target.value as typeof boxPart)}>
+                        <option value="source_box">Draw source area</option>
+                        <option value="target_box">Draw target area</option>
+                      </select>
+                    )}
+                    <button className="text-xs text-muted-foreground" onClick={() => { setObjects(objects.filter((_, i) => i !== index)); setSelectedBox(0); }}>Delete box</button>
+                  </div>
+                ))}
+                <button className="rounded border border-border px-2 py-1 text-xs" disabled={objects.length >= 32} onClick={() => {
+                  let number = objects.length + 1;
+                  while (objects.some(object => object.label === `object_${number}`)) number++;
+                  setObjects([...objects, { label: `object_${number}`, description: '', action: 'Place' }]);
+                  setSelectedBox(objects.length);
+                }}>+ Add box ({objects.length}/32)</button>
+              </div>
+            )}
               {/* Negative prompt */}
               {caps.hasNegativePrompt && (
                 <div>

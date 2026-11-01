@@ -1144,6 +1144,9 @@ export const editApi = {
     source_image_ids?: number[];
     source_generated_ids?: number[];
     source_upload_keys?: string[];
+    object_boxes?: import('@/components/tools/BoxCanvas').ObjectBox[];
+    precision_area?: 'none' | 'auto' | 'box';
+    precision_box?: import('@/components/tools/BoxCanvas').Box;
     mask_key?: string;
     ordered_sources?: { type: 'gallery' | 'generated' | 'upload'; id?: number; key?: string; name?: string }[];
     source_upload_names?: Record<string, string>;

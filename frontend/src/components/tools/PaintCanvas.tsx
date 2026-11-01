@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import LibraryImage from '@/components/LibraryImage';
+import type { Box } from './BoxCanvas';
 
 const PAINT_COLOR = 'hsl(225 80% 55%)';
 
@@ -10,8 +11,9 @@ export interface PaintMask {
   percent: number;
 }
 
-export default function PaintCanvas({ source, value, onChange }: {
+export default function PaintCanvas({ source, value, onChange, region }: {
   source?: string;
+  region?: Box;
   value?: PaintMask;
   onChange: (value: PaintMask) => void;
 }) {
@@ -105,6 +107,11 @@ export default function PaintCanvas({ source, value, onChange }: {
             const image = event.currentTarget;
             setDimensions({ width: image.naturalWidth, height: image.naturalHeight });
           }} />
+          {region && (
+            <div className="pointer-events-none absolute z-10 border-2 border-primary" style={{ left: `${region.x_min * 100}%`, top: `${region.y_min * 100}%`, width: `${(region.x_max - region.x_min) * 100}%`, height: `${(region.y_max - region.y_min) * 100}%` }}>
+              <span className="bg-background/90 px-1 text-xs">Precision area</span>
+            </div>
+          )}
           <canvas
             ref={canvas}
             width={dimensions.width}

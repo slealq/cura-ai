@@ -1032,6 +1032,13 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
         from app.services.image_history import safe_snapshot
         history_inputs = []
         image_urls = _resolve_edit_sources(db, params, user_id, history_inputs)
+        if params.get("object_boxes") is not None:
+            from app.services.edit_mask import upright_base
+            for index, url in enumerate(image_urls):
+                original = base64.b64decode(url.split(",", 1)[1])
+                upright = upright_base(original)
+                if upright != original:
+                    image_urls[index] = _to_data_uri(upright, "image/png")
         mask_url = None
         if params.get("mask_key"):
             from app.services.edit_mask import prepare_mask, upright_base
@@ -1050,6 +1057,19 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
             item = _run_async(input_snapshot(storage, user_id, mask_data, "paint-mask.png", role="mask", uploaded=True))
             item["label"] = "Painted area"
             history_inputs.append(item)
+        if params.get("precision_area") == "box":
+            from app.services.edit_layout import precision_box
+            params["context_window_box"] = precision_box(params["precision_box"], base_data)
+            if mask_url:
+                import io
+
+                from PIL import Image
+                with Image.open(io.BytesIO(mask_data)) as selected:
+                    bounds = selected.getbbox()
+                box = params["context_window_box"]
+                if bounds and (bounds[0] < box["x_min"] or bounds[1] < box["y_min"] or bounds[2] > box["x_max"] or bounds[3] > box["y_max"]):
+                    raise ValueError("Painted pixels must stay inside the precision box")
+            gen.generation_params = dict(params)
         gen.history = safe_snapshot(db, gen, history_inputs)
         db.commit()
         if not image_urls:
@@ -1075,7 +1095,7 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
             "cancel_check": _is_cancelled,
         }
         for key in ("image_size", "seed", "resolution", "aspect_ratio", "quality",
-                    "safety_tolerance", "enable_web_search"):
+                    "safety_tolerance", "enable_web_search", "object_boxes", "precision_area", "context_window_box"):
             if params.get(key) is not None:
                 edit_kwargs[key] = params[key]
 
