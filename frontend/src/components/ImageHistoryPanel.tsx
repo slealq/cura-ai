@@ -61,7 +61,7 @@ export default function ImageHistoryPanel({ imageId, onOpen }: { imageId: number
     )}
     {!!history.inputs.length && <div className="space-y-2 border-t border-border pt-4"><h4 className="text-xs font-medium text-muted-foreground">Inputs</h4>
       <div className="flex flex-wrap gap-2">{history.inputs.map((input, index) => {
-        const content = <><span className="block text-xs">{input.label}</span>{input.copy_key ?
+        const content = <><span className="block text-xs">{input.label}{input.role === 'reference' ? ' · composition reference' : ''}</span>{input.copy_key ?
           // eslint-disable-next-line @next/next/no-img-element
           <img className={`h-20 w-24 rounded object-cover ${input.image_id ? '' : 'grayscale opacity-50'}`} src={historyApi.inputUrl(imageId, index)} alt={input.filename} /> : <span className="block h-20 w-24 rounded bg-muted p-2 text-xs">No copy was saved</span>}
           <span className="block max-w-24 truncate text-xs" title={input.filename}>{input.filename}</span></>;

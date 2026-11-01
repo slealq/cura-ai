@@ -103,7 +103,7 @@ def build_image_request(
         urls = source_urls or []
         if not urls:
             raise ValueError("At least one source image is required for editing")
-        if len(urls) > model.max_source_images:
+        if len(urls) > model.max_source_images and not (model.key == "kling-image" and values.get("subject_sources")):
             raise ValueError(f"{model.key!r} accepts at most {model.max_source_images} source images")
         if model.uses_single_image_url:
             arguments["image_url"] = urls[0]
@@ -134,6 +134,24 @@ def build_image_request(
             if value is not None:
                 arguments[name] = value
 
+    if model.kind == "edit" and model.key == "kling-image":
+        from app.services.edit_subject import subject_inputs
+        if len(prompt) > 2500:
+            raise ValueError("Kling prompts accept up to 2500 characters")
+        sources = values.get("subject_sources")
+        if sources is not None:
+            arguments["image_urls"], arguments["elements"] = subject_inputs(sources, source_urls or [])
+        mode = values.get("result_type", "single")
+        if mode not in ("single", "series"):
+            raise ValueError("Invalid Kling result type")
+        if values.get("result_type") is not None:
+            arguments["result_type"] = mode
+        if mode == "series":
+            count = values.get("series_amount")
+            if not isinstance(count, int) or not 2 <= count <= 9:
+                raise ValueError("Series requires 2–9 images")
+            arguments["series_amount"] = count
+            arguments["num_images"] = 1
     if values.get("mask_url"):
         from app.services.edit_mask import provider_mask_url
         if model.key == "ideogram-v4.5-edit":
@@ -608,6 +626,15 @@ class FalEditor(BaseEditor):
                     downloaded.append(response.content)
                     widths.append(img_info.get("width", 1024))
                     heights.append(img_info.get("height", 1024))
+
+            if fal_cost is None and self.edit_model == "kling-image" and arguments.get("result_type") == "series":
+                from app.services.pricing_engine import compute_raw_cost
+                # Settle the actual delivered count once when fal omits invoice cost.
+                raw = compute_raw_cost("fal", endpoint, "edit", {
+                    **arguments, "series_amount": len(downloaded),
+                })
+                if raw is not None:
+                    fal_cost = float(raw)
 
             result_seed = result.get("seed")
 

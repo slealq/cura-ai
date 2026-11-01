@@ -243,10 +243,10 @@ class GenerationService:
             history["seed"] = seed
             cost = self.db.query(func.sum(UsageRecord.charged_cost)).join(
                 CostDecision, UsageRecord.cost_decision_id == CostDecision.id
-            ).filter(CostDecision.resource_id == generated_image_id,
+            ).filter(CostDecision.resource_id == (gen.generation_params or {}).get("series_billing_resource", generated_image_id),
                      CostDecision.user_id == self.user_id,
                      CostDecision.operation.in_(["generate", "edit"])).scalar()
-            history["charged_cost"] = float(cost) if cost is not None else None
+            history["charged_cost"] = float(cost) / (gen.generation_params or {}).get("series_output_count", 1) if cost is not None else None
             gen.history = history
         self.db.commit()
         self.db.refresh(gen)

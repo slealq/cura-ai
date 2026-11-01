@@ -249,3 +249,17 @@ def test_edit_rejects_too_many_source_images():
     editor = FalEditor(edit_model="ideogram-v4.5-edit")
     with pytest.raises(ValueError):
         editor.build_arguments(["https://example.com/a.png"] * 6, "x")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("returned,provider_cost", [(2, None), (9, None), (3, 0.4)])
+async def test_kling_series_one_call_downloads_all_and_records_total_cost(fal_submit, returned, provider_cost):
+    response = {"images": [{"url": f"https://example.com/{index}.png", "width": 512, "height": 512} for index in range(returned)]}
+    if provider_cost is not None:
+        response["cost"] = provider_cost
+    fal_submit.return_value.get.return_value = response
+    result = await FalEditor(edit_model="kling-image").edit(["composition"], "@Image1", result_type="series", series_amount=9, resolution="4K")
+    fal_submit.assert_called_once()
+    assert len(result.images) == returned
+    assert len(result.widths) == len(result.heights) == returned
+    assert fal_provider_module.write_log.call_args.kwargs["provider_cost"] == pytest.approx(provider_cost if provider_cost is not None else 0.056 * returned)

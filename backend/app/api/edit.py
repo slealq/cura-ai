@@ -31,6 +31,8 @@ class OrderedEditSource(BaseModel):
     id: int | None = Field(None, gt=0)
     key: str | None = None
     name: str | None = None
+    role: Literal["reference", "element_main", "element_angle"] | None = None
+    element: int | None = Field(None, ge=1)
 
     @model_validator(mode="after")
     def validate_reference(self):
@@ -47,6 +49,8 @@ class EditImageRequest(BaseModel):
 
     prompt: str = Field("", max_length=8000)
     negative_prompt: str | None = Field(None, max_length=500)
+    result_type: Literal["single", "series"] | None = None
+    series_amount: int | None = Field(None, ge=2, le=9)
     object_boxes: list[ObjectBox] | None = Field(None, max_length=32)
     precision_area: Literal["none", "auto", "box"] | None = None
     precision_box: Box | None = None
@@ -113,6 +117,25 @@ async def edit_images(
     if not request.prompt.strip():
         raise HTTPException(status_code=400, detail="Prompt is required for this model")
 
+    subject_sources = [source.model_dump(exclude_none=True) for source in request.ordered_sources or []]
+    subject_options = request.result_type is not None or request.series_amount is not None or any(source.get("role") or source.get("element") for source in subject_sources)
+    if subject_options and request.edit_model != "kling-image":
+        raise HTTPException(400, "Subject controls require Kling Image")
+    if request.edit_model == "kling-image":
+        from app.services.edit_subject import subject_inputs
+        if len(request.prompt) > 2500:
+            raise HTTPException(400, "Kling prompts accept up to 2500 characters")
+        try:
+            subject_inputs(subject_sources, ["input"] * len(subject_sources))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        if request.result_type == "series":
+            if request.series_amount is None or request.num_images != 1:
+                raise HTTPException(400, "Series requires 2–9 images and num_images=1")
+        elif request.series_amount is not None:
+            raise HTTPException(400, "Series count requires series mode")
+    output_count = request.series_amount if request.result_type == "series" else request.num_images
+
     if request.num_images > (model.max_num_images or 1):
         raise HTTPException(status_code=400, detail=f"Maximum {model.max_num_images or 1} outputs for {model.label}")
     if request.ordered_sources is not None:
@@ -166,7 +189,8 @@ async def edit_images(
             raise HTTPException(status_code=400, detail="Ideogram paint requires automatic output size")
 
     max_sources = 4 if request.mask_key and request.edit_model == "ideogram-v4.5-edit" else model.max_source_images
-    if source_count > max_sources:
+    limited_count = sum(source.get("role", "reference") == "reference" for source in subject_sources) if subject_sources and request.edit_model == "kling-image" else source_count
+    if limited_count > max_sources:
         raise HTTPException(
             status_code=400,
             detail=f"Maximum {max_sources} source images allowed for {request.edit_model}",
@@ -195,6 +219,8 @@ async def edit_images(
         **({"object_boxes": [obj.model_dump(exclude_none=True) for obj in request.object_boxes]} if request.object_boxes is not None else {}),
         **({"precision_area": request.precision_area} if request.precision_area else {}),
         **({"precision_box": request.precision_box.model_dump()} if request.precision_box else {}),
+        **({"result_type": request.result_type} if request.result_type else {}),
+        **({"series_amount": request.series_amount} if request.series_amount else {}),
         "mode": "edit",
         "edit_model": request.edit_model,
         "sources": source_refs,
@@ -213,12 +239,12 @@ async def edit_images(
     # Create job
     try:
         job = Job(
-            job_type=JobType.BATCH_EDIT if request.num_images > 1 else JobType.EDIT_IMAGE,
+            job_type=JobType.BATCH_EDIT if output_count > 1 else JobType.EDIT_IMAGE,
             status=JobStatus.PENDING,
-            total_items=request.num_images,
+            total_items=output_count,
             parameters={
                 "prompt": request.prompt[:200],
-                "num_images": request.num_images,
+                "num_images": output_count,
                 "edit_model": request.edit_model,
             },
             user_id=current_user.id,
@@ -234,7 +260,7 @@ async def edit_images(
     # Create generated image records (one per num_images)
     generated_images = []
     gen_ids = []
-    for _ in range(request.num_images):
+    for _ in range(output_count):
         gen = gen_service.create_generated_image(
             prompt=request.prompt,
             negative_prompt=request.negative_prompt,
@@ -250,7 +276,13 @@ async def edit_images(
     from app.workers.generation_tasks import batch_edit
     from app.workers.generation_tasks import edit_image as edit_task
 
-    if request.num_images == 1:
+    if request.result_type == "series":
+        task = dispatch_or_fail(
+            edit_task, job, db, gen_ids[0], job.id, current_user.id,
+            series_ids=gen_ids, generated_images=generated_images,
+        )
+        job.celery_task_id = task.id
+    elif request.num_images == 1:
         task = dispatch_or_fail(
             edit_task, job, db, gen_ids[0], job.id, current_user.id, generated_images=generated_images
         )
