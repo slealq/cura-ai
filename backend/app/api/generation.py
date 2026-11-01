@@ -370,7 +370,7 @@ def _gen_to_response(gen, db: Session) -> GeneratedImageResponse:
         loras=loras_list,
         generation_params=gen.generation_params,
         status=gen.status.value,
-        error_message=gen.error_message,
+        error_message=gen.error_message[:2000] if gen.error_message else gen.error_message,
         object_key=gen.object_key,
         width=gen.width,
         height=gen.height,

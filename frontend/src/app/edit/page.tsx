@@ -229,7 +229,8 @@ function EditPageInner() {
   const { data: editedImages } = useQuery({
     queryKey: ['edited-images'],
     queryFn: () => editApi.listImages({ limit: 100 }),
-    refetchInterval: 3000,
+    // Poll only while a result is on its way; starting an edit invalidates this query.
+    refetchInterval: query => query.state.data?.items.some(image => image.status === 'pending' || image.status === 'generating') ? 3000 : false,
   });
 
   // Edit mutation

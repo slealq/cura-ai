@@ -130,7 +130,7 @@ export default function PaintCanvas({ source, value, onChange, region }: {
       </div>
       {source ? (
         <div className="paint-viewport min-h-0 flex-1 overflow-hidden">
-        <div className="paint-image relative mx-auto w-full max-w-[900px]" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`, aspectRatio: `${dimensions.width}/${dimensions.height}`, width: `min(100%, ${55 * dimensions.width / dimensions.height}vh)` }}>
+        <div className="paint-image relative mx-auto w-full max-w-[900px]" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`, '--paint-ratio': dimensions.width / dimensions.height, aspectRatio: `${dimensions.width}/${dimensions.height}`, width: `min(100%, ${55 * dimensions.width / dimensions.height}vh)` } as React.CSSProperties}>
           <LibraryImage src={source} alt="Base image to paint" className="absolute inset-0 h-full w-full" onLoad={event => {
             const image = event.currentTarget;
             setDimensions({ width: image.naturalWidth, height: image.naturalHeight });
