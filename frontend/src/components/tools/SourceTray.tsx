@@ -4,6 +4,10 @@ export interface SourceImage {
   id?: number;
   key?: string;
   previewUrl?: string;
+  fullUrl?: string;
+  largeUrl?: string;
+  width?: number;
+  height?: number;
   name?: string;
   role?: 'reference' | 'element_main' | 'element_angle';
   element?: number;

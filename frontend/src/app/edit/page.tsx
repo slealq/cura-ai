@@ -38,6 +38,10 @@ interface SourceImage {
   id?: number;
   key?: string;
   previewUrl?: string;
+  fullUrl?: string;
+  largeUrl?: string;
+  width?: number;
+  height?: number;
   name?: string;
   role?: 'reference' | 'element_main' | 'element_angle';
   element?: number;
@@ -209,12 +213,14 @@ function EditPageInner() {
       try {
         const image = await imagesApi.get(id);
         const thumbnail = image.thumbnail_uri_medium || image.thumbnail_uri_small;
-        const previewUrl = thumbnail
-          ? imagesApi.getThumbnailUrl(thumbnail.split('/').pop()!)
-          : imagesApi.getImageUrl(image.object_key.split('/').pop()!);
+        const fullUrl = imagesApi.getImageUrl(image.object_key.split('/').pop()!);
+        const previewUrl = thumbnail ? imagesApi.getThumbnailUrl(thumbnail.split('/').pop()!) : fullUrl;
+        const largeUrl = image.thumbnail_uri_large ? imagesApi.getThumbnailUrl(image.thumbnail_uri_large.split('/').pop()!) : undefined;
         if (active) {
           setSources(current => current.map(source => (
-            source.type === 'gallery' && source.id === id ? { ...source, previewUrl } : source
+            source.type === 'gallery' && source.id === id
+              ? { ...source, previewUrl, fullUrl, largeUrl, width: image.width ?? undefined, height: image.height ?? undefined }
+              : source
           )));
         }
       } catch {
@@ -386,6 +392,14 @@ function EditPageInner() {
     });
     if (files.length > remaining) toast.info(`Only ${remaining} sources can be added for this model`);
     const pending = filesToProcess.map(file => ({ file, previewUrl: URL.createObjectURL(file) }));
+    // Uploads have no stored size, so read it from the file for the slot's shape.
+    pending.forEach(({ previewUrl }) => {
+      const image = new window.Image();
+      image.onload = () => setSources(current => current.map(source => (
+        source.previewUrl === previewUrl ? { ...source, width: image.naturalWidth, height: image.naturalHeight } : source
+      )));
+      image.src = previewUrl;
+    });
     setSources(current => addSources(current, pending.map(({ file, previewUrl }) => ({ type: 'upload' as const, name: file.name, previewUrl })), slot));
     setUploading(true);
     try {
@@ -437,6 +451,10 @@ function EditPageInner() {
       type: item.type,
       id: item.id,
       previewUrl: item.previewUrl,
+      fullUrl: item.fullUrl,
+      largeUrl: item.largeUrl,
+      width: item.width,
+      height: item.height,
     }));
     setSources((prev) => addSources(prev, newSources.slice(0, pickerSlot ? slotCapacity(pickerSlot) : maxSources - prev.length), pickerSlot));
   };

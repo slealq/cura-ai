@@ -12,6 +12,10 @@ export interface PickedImage {
   type: 'gallery' | 'generated';
   id: number;
   previewUrl: string;
+  fullUrl?: string;
+  largeUrl?: string;
+  width?: number;
+  height?: number;
 }
 
 interface PickerItem {
@@ -19,6 +23,9 @@ interface PickerItem {
   type: PickedImage['type'];
   thumbnail: string;
   full: string;
+  large?: string;
+  width?: number;
+  height?: number;
 }
 
 const GRID = 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2';
@@ -112,13 +119,13 @@ export default function ImagePickerModal({
 
   const isSelectedId = (id: number) => selected.some((s) => s.id === id) || alreadySelectedIds.includes(id);
 
-  const toggleImage = (id: number, type: 'gallery' | 'generated', thumbUrl: string) => {
+  const toggleImage = (id: number, type: 'gallery' | 'generated', thumbUrl: string, item?: PickerItem) => {
     if (alreadySelectedIds.includes(id)) return;
     const existing = selected.find((s) => s.id === id && s.type === type);
     if (existing) {
       setSelected(selected.filter((s) => s !== existing));
     } else if (remaining > 0) {
-      setSelected([...selected, { type, id, previewUrl: thumbUrl }]);
+      setSelected([...selected, { type, id, previewUrl: thumbUrl, fullUrl: item?.full, largeUrl: item?.large, width: item?.width, height: item?.height }]);
     }
   };
 
@@ -170,7 +177,7 @@ export default function ImagePickerModal({
         return (
           <div key={item.id} className="group relative aspect-square">
             <button
-              onClick={() => toggleImage(item.id, item.type, item.thumbnail)}
+              onClick={() => toggleImage(item.id, item.type, item.thumbnail, item)}
               disabled={!checked && remaining <= 0}
               aria-label={`${checked ? 'Unselect' : 'Select'} image ${item.id}`}
               aria-pressed={checked}
@@ -209,7 +216,7 @@ export default function ImagePickerModal({
 
   // Render image grid for level 2 (gallery images in folder/cluster)
   const renderImageGrid = (
-    images: Array<{ id: number; object_key: string; thumbnail_uri_small?: string | null; thumbnail_uri_medium?: string | null }>,
+    images: Array<{ id: number; object_key: string; width?: number | null; height?: number | null; thumbnail_uri_small?: string | null; thumbnail_uri_medium?: string | null; thumbnail_uri_large?: string | null }>,
     total: number,
   ) => (
     <>
@@ -218,6 +225,9 @@ export default function ImagePickerModal({
         type: 'gallery' as const,
         thumbnail: galleryThumbUrl(img.thumbnail_uri_medium || img.thumbnail_uri_small),
         full: imagesApi.getImageUrl(img.object_key.split('/').pop() || ''),
+        large: galleryThumbUrl(img.thumbnail_uri_large),
+        width: img.width ?? undefined,
+        height: img.height ?? undefined,
       })))}
       {total > limit && (
         <div className="flex justify-center gap-2 mt-4">
@@ -428,6 +438,8 @@ export default function ImagePickerModal({
                     type: 'generated' as const,
                     thumbnail: generatedThumbUrl(img.thumbnail_uri_medium),
                     full: generationApi.getImageUrl(img.id),
+                    width: img.width ?? undefined,
+                    height: img.height ?? undefined,
                   })))}
                   {generatedData.total > limit && (
                     <div className="flex justify-center gap-2 mt-4">
@@ -498,7 +510,7 @@ export default function ImagePickerModal({
               <span className="text-sm text-white/70">Already added</span>
             ) : (
               <button
-                onClick={() => toggleImage(current.id, current.type, current.thumbnail)}
+                onClick={() => toggleImage(current.id, current.type, current.thumbnail, current)}
                 disabled={!isSelectedId(current.id) && remaining <= 0}
                 className="min-h-10 rounded-lg border border-white/30 px-4 text-sm hover:bg-white/10 disabled:opacity-40"
               >
