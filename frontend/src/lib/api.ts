@@ -1144,6 +1144,7 @@ export const editApi = {
     source_image_ids?: number[];
     source_generated_ids?: number[];
     source_upload_keys?: string[];
+    mask_key?: string;
     ordered_sources?: { type: 'gallery' | 'generated' | 'upload'; id?: number; key?: string; name?: string }[];
     source_upload_names?: Record<string, string>;
     edit_model?: string;
@@ -1653,7 +1654,7 @@ export interface ImageHistory {
   charged_cost: number | null;
   partial: boolean;
   loras: { name: string; strength: number; base_model: string | null; trigger_word: string | null; deleted: boolean }[];
-  inputs: { label: string; filename: string; copy_key: string | null; uploaded?: boolean; image_id: number | null; width: number | null; height: number | null }[];
+  inputs: { role?: string; label: string; filename: string; copy_key: string | null; uploaded?: boolean; image_id: number | null; width: number | null; height: number | null }[];
 }
 export const historyApi = {
   get: async (id: number) => (await api.get<{ history: ImageHistory | null; used_to_make: { id: number; filename: string; thumbnail_uri?: string | null }[] }>(`/images/${id}/history`)).data,

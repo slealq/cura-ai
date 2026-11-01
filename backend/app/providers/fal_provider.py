@@ -134,6 +134,14 @@ def build_image_request(
             if value is not None:
                 arguments[name] = value
 
+    if values.get("mask_url"):
+        from app.services.edit_mask import provider_mask_url
+        if model.key == "ideogram-v4.5-edit":
+            if len(source_urls or []) > 4:
+                raise ValueError("Ideogram paint accepts one base plus three references")
+            if arguments.get("image_size", "auto") != "auto":
+                raise ValueError("Ideogram paint requires automatic output size")
+        arguments["mask_url"] = provider_mask_url(values["mask_url"], model.key)
     arguments.update(copy.deepcopy(model.fixed_payload))
     if loras:
         arguments["loras"] = loras
