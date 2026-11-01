@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { historyApi, imagesApi } from '@/lib/api';
 import LibraryImage from './LibraryImage';
+import type { Box } from './tools/BoxCanvas';
 import { toast } from 'sonner';
 
 export default function ImageHistoryPanel({ imageId, onOpen }: { imageId: number; onOpen: (id: number) => void }) {
@@ -19,10 +20,33 @@ export default function ImageHistoryPanel({ imageId, onOpen }: { imageId: number
   </section>;
   if (!history) return usedToMake;
   const maskIndex = history.inputs.findIndex(input => input.role === 'mask');
+  const layout = (history.settings.bounding_boxes ?? []) as { label?: string; description: string; box?: Box; source_box?: Box; target_box?: Box }[];
+  const contextBox = history.settings.context_window_box as Box | undefined;
+  const base = history.inputs[0];
+  const overlays = layout.flatMap(object => [
+    ...(object.source_box ? [{ label: `${object.label} · source`, box: object.source_box }] : []),
+    ...(object.target_box || object.box ? [{ label: `${object.label} · target`, box: (object.target_box || object.box)! }] : []),
+  ]);
+  if (contextBox && base?.width && base?.height) overlays.push({ label: 'Precision area', box: { x_min: contextBox.x_min / base.width, x_max: contextBox.x_max / base.width, y_min: contextBox.y_min / base.height, y_max: contextBox.y_max / base.height } });
   const settings = { ...history.settings, Seed: history.seed ?? 'Not saved', Cost: history.charged_cost == null ? 'Not saved' : `${Math.round(history.charged_cost * 100000) / 100} sparks` };
   return <section className="space-y-5 text-sm" aria-label="How it was made">
     <div><h3 className="font-semibold">How it was made</h3><p className="text-xs text-muted-foreground">{history.job_type === 'edit' ? 'Edit' : 'Create'} · {new Date(history.date).toLocaleString()}</p></div>
     {history.partial && <p className="rounded bg-muted px-2 py-1 text-xs">Partial history</p>}
+    {!!overlays.length && base?.copy_key && (
+      <section className="space-y-2" aria-label="Saved boxes">
+        <h4 className="text-xs font-medium text-muted-foreground">Saved boxes</h4>
+        <div className="relative max-w-md overflow-hidden rounded">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={historyApi.inputUrl(imageId, 0)} alt="Original base with saved boxes" className="block w-full" />
+          {overlays.map(({ label, box }, index) => (
+            <div key={index} className="absolute border-2 border-primary bg-primary/10" style={{ left: `${box.x_min * 100}%`, top: `${box.y_min * 100}%`, width: `${(box.x_max - box.x_min) * 100}%`, height: `${(box.y_max - box.y_min) * 100}%` }}>
+              <span className="bg-background/90 px-1 text-xs">{label}</span>
+            </div>
+          ))}
+        </div>
+        {layout.map((object, index) => <p key={index} className="text-xs">&lt;{object.label}&gt;: {object.description}</p>)}
+      </section>
+    )}
     {maskIndex >= 0 && history.inputs[0]?.copy_key && history.inputs[maskIndex].copy_key && (
       <section className="space-y-2" aria-label="Painted area over base">
         <h4 className="text-xs font-medium text-muted-foreground">Painted area over base</h4>

@@ -142,6 +142,25 @@ def build_image_request(
             if arguments.get("image_size", "auto") != "auto":
                 raise ValueError("Ideogram paint requires automatic output size")
         arguments["mask_url"] = provider_mask_url(values["mask_url"], model.key)
+    if values.get("object_boxes") is not None:
+        from app.services.edit_layout import layout_payload
+        if model.key != "flux-3-klein-edit" or len(values["object_boxes"]) > 32:
+            raise ValueError("Object boxes require Klein and at most 32 boxes")
+        arguments["bounding_boxes"], arguments["prompt"] = layout_payload(values["object_boxes"], prompt)
+    if values.get("precision_area") is not None:
+        if model.key != "ideogram-v4.5-edit":
+            raise ValueError("Precision area requires Ideogram")
+        area = values["precision_area"]
+        if area not in ("none", "auto", "box"):
+            raise ValueError("Invalid precision area")
+        arguments["edit_precision"] = "regular" if area == "none" else "high"
+        arguments["context_window"] = "auto" if area == "auto" else "none"
+        if area == "auto" and not values.get("mask_url"):
+            raise ValueError("Automatic precision area requires a mask")
+        if area == "box":
+            if not values.get("context_window_box"):
+                raise ValueError("Precision box must be resolved before provider request")
+            arguments["context_window_box"] = values["context_window_box"]
     arguments.update(copy.deepcopy(model.fixed_payload))
     if loras:
         arguments["loras"] = loras
