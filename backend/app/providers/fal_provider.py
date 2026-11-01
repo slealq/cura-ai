@@ -107,6 +107,8 @@ def build_image_request(
             raise ValueError(f"{model.key!r} accepts at most {model.max_source_images} source images")
         if model.uses_single_image_url:
             arguments["image_url"] = urls[0]
+            if len(urls) > 1:
+                arguments["reference_image_urls"] = urls[1:]
         else:
             arguments["image_urls"] = urls
         if model.max_num_images:

@@ -5,13 +5,18 @@ import LibraryImage from '@/components/LibraryImage';
 import { Suspense, useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { editApi, settingsApi, billingApi } from '@/lib/api';
-import { Check, CheckSquare, Loader2, Pencil, ChevronDown, ChevronUp, Trash2, X, Upload, ImageIcon, Zap } from 'lucide-react';
+import { Loader2, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
-import Link from 'next/link';
-import GeneratedImageCard from '@/components/GeneratedImageCard';
-import ToolEntry from '@/components/ToolEntry';
+import Stage from '@/components/tools/Stage';
+import JobTabs, { jobs, type EditJob } from '@/components/tools/JobTabs';
+import Notice from '@/components/tools/Notice';
+import ModelPanel from '@/components/tools/ModelPanel';
+import Composer from '@/components/tools/Composer';
+import SourceTray from '@/components/tools/SourceTray';
+import { useSearchParams } from 'next/navigation';
+import { imagesApi } from '@/lib/api';
 import ImagePickerModal from '@/components/ImagePickerModal';
-import ModelSelector from '@/components/ModelSelector';
+
 import { useModelCatalog } from '@/hooks/useModelCatalog';
 import { cn } from '@/lib/utils';
 
@@ -46,19 +51,22 @@ function formatDuration(createdAt: string, completedAt: string | null): string |
 export default function EditPage() {
   return (
     <Suspense fallback={<div className="grid h-32 place-items-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>}>
-      <ToolEntry tool="edit"><EditPageInner /></ToolEntry>
+      <EditPageInner />
     </Suspense>
   );
 }
 
 function EditPageInner() {
   const queryClient = useQueryClient();
+  const params = useSearchParams();
+  const [job, setJob] = useState<EditJob>('describe');
+  const [notice, setNotice] = useState('');
   const hasInitEditModel = useRef(false);
+  const changedSettings = useRef(new Set<string>());
 
   // Form state
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [editModel, setEditModel] = useState('');
   const [quality, setQuality] = useState('');
   const { data: catalog } = useModelCatalog();
@@ -88,10 +96,18 @@ function EditPageInner() {
     queryFn: settingsApi.getEditModel,
   });
 
-  // Fetch edit costs
-  const { data: editCosts } = useQuery({
-    queryKey: ['edit-costs'],
-    queryFn: billingApi.getEditCosts,
+  const estimateParams = {
+    base_model: editModel, operation: 'edit' as const,
+    ...(spec.resolution && resolution ? { resolution } : {}),
+    ...(spec.quality && quality ? { quality } : {}),
+    ...(spec.image_size && imageSize ? { image_size: imageSize } : {}),
+    ...(spec.enable_web_search ? { enable_web_search: enableWebSearch } : {}),
+    ...(useCustomSize ? { width: customWidth, height: customHeight } : {}),
+  };
+  const { data: estimate } = useQuery({
+    queryKey: ['edit-estimate', estimateParams],
+    queryFn: () => billingApi.estimateGenerationCost(estimateParams),
+    enabled: !!model,
   });
 
   // Initialize edit model from settings
@@ -104,16 +120,20 @@ function EditPageInner() {
     }
   }, [editModelData, catalog, EDIT_MODELS]);
 
-  const isKling = editModel === 'kling-image';
-  const caps = { maxSources: model?.max_source_images ?? 1, maxImages: model?.max_num_images || 1,
+  const caps = {
+    maxSources: model?.max_source_images ?? 1, maxImages: model?.max_num_images || 1,
     hasNegativePrompt: !!spec.negative_prompt, hasPromptExpansion: false, hasSafetyChecker: false,
     usesResolution: !!(spec.resolution || spec.aspect_ratio), hasImageSize: !!spec.image_size,
-    hasSeed: !!spec.seed, maxPromptLen: 50000, hasSafetyTolerance: !!spec.safety_tolerance, hasWebSearch: !!spec.enable_web_search };
+    hasSeed: !!spec.seed, maxPromptLen: 8000, hasSafetyTolerance: !!spec.safety_tolerance, hasWebSearch: !!spec.enable_web_search
+  };
   useEffect(() => {
     if (!model) return;
-    setResolution(spec.resolution?.default ?? ''); setAspectRatio(spec.aspect_ratio?.default ?? '');
-    setImageSize(spec.image_size?.default ?? ''); setSafetyTolerance(spec.safety_tolerance?.default ?? '');
-    setQuality(spec.quality?.default ?? ''); setUseCustomSize(false);
+    setResolution(spec.resolution?.default ?? '');
+    setAspectRatio(spec.aspect_ratio?.default ?? '');
+    setImageSize(spec.image_size?.default ?? '');
+    setSafetyTolerance(spec.safety_tolerance?.default ?? '');
+    setQuality(spec.quality?.default ?? '');
+    setUseCustomSize(false);
   }, [model, spec.resolution?.default, spec.aspect_ratio?.default, spec.image_size?.default, spec.safety_tolerance?.default, spec.quality?.default]);
 
   // Source images state
@@ -121,14 +141,33 @@ function EditPageInner() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
 
+  useEffect(() => {
+    const ids = (params.get('sources') || '').split(',').map(Number).filter(id => Number.isInteger(id) && id > 0);
+    setSources(ids.map(id => ({ type: 'gallery', id, previewUrl: undefined })));
+    let active = true;
+    ids.forEach(async (id) => {
+      try {
+        const image = await imagesApi.get(id);
+        const thumbnail = image.thumbnail_uri_medium || image.thumbnail_uri_small;
+        const previewUrl = thumbnail
+          ? imagesApi.getThumbnailUrl(thumbnail.split('/').pop()!)
+          : imagesApi.getImageUrl(image.object_key.split('/').pop()!);
+        if (active) {
+          setSources(current => current.map(source => (
+            source.type === 'gallery' && source.id === id ? { ...source, previewUrl } : source
+          )));
+        }
+      } catch {
+        if (active) toast.error(`Could not load source ${id}`);
+      }
+    });
+    return () => { active = false; };
+  }, [params]);
+
   // Full-size modal
   const [selectedImageId, setSelectedImageId] = useState<number | null>(null);
-  const [selectMode, setSelectMode] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-
   // Fetch edited images with polling
-  const { data: editedImages, isLoading: imagesLoading } = useQuery({
+  const { data: editedImages } = useQuery({
     queryKey: ['edited-images'],
     queryFn: () => editApi.listImages({ limit: 100 }),
     refetchInterval: 3000,
@@ -138,7 +177,7 @@ function EditPageInner() {
   const editMutation = useMutation({
     mutationFn: editApi.edit,
     onSuccess: (data) => {
-      toast.success(`Edit started (${data.generated_image_ids.length} images)`);
+      toast.success(`Edit started (${data.generated_image_ids.length} images)`, { action: { label: 'View Jobs', onClick: () => { window.location.href = '/jobs'; } } });
       queryClient.invalidateQueries({ queryKey: ['edited-images'] });
       queryClient.invalidateQueries({ queryKey: ['jobs'] });
     },
@@ -156,28 +195,6 @@ function EditPageInner() {
       toast.error(`Delete failed: ${err.message}`);
     },
   });
-
-  const bulkDeleteMutation = useMutation({
-    mutationFn: editApi.bulkDelete,
-    onSuccess: (data) => {
-      toast.success(`Deleted ${data.deleted} images`);
-      queryClient.invalidateQueries({ queryKey: ['edited-images'] });
-      setSelectedIds(new Set());
-      setSelectMode(false);
-    },
-    onError: (err: Error) => {
-      toast.error(`Delete failed: ${err.message}`);
-    },
-  });
-
-  const toggleSelected = (id: number) => {
-    setSelectedIds((previous) => {
-      const next = new Set(previous);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
 
   const handleEdit = () => {
     if (!prompt.trim()) {
@@ -228,24 +245,12 @@ function EditPageInner() {
     if (caps.hasSeed && seed) params.seed = parseInt(seed);
     if (spec.quality && quality) params.quality = quality;
 
-    // Collect source IDs by type
-    const galleryIds = sources.filter((s) => s.type === 'gallery').map((s) => s.id!);
-    const generatedIds = sources.filter((s) => s.type === 'generated').map((s) => s.id!);
-    const uploadKeys = sources.filter((s) => s.type === 'upload').map((s) => s.key!);
-
-    if (galleryIds.length > 0) params.source_image_ids = galleryIds;
-    if (generatedIds.length > 0) params.source_generated_ids = generatedIds;
-    if (uploadKeys.length > 0) {
-      params.source_upload_keys = uploadKeys;
-      params.source_upload_names = Object.fromEntries(sources.filter(source => source.type === 'upload').map(source => [source.key!, source.name || source.key!]));
-    }
+    params.ordered_sources = sources.map(({ type, id, key, name }) => ({ type, id, key, name }));
 
     editMutation.mutate(params);
   };
 
-  const removeSource = (index: number) => {
-    setSources(sources.filter((_, i) => i !== index));
-  };
+
 
   const maxSources = caps.maxSources;
 
@@ -256,24 +261,26 @@ function EditPageInner() {
       return;
     }
 
-    const filesToProcess = Array.from(files).slice(0, remaining);
+    const filesToProcess = Array.from(files).slice(0, remaining).filter(file => {
+      if (file.size <= 30 * 1024 * 1024) return true;
+      toast.error(`${file.name} is too large (max 30MB)`);
+      return false;
+    });
+    if (files.length > remaining) toast.info(`Only ${remaining} sources can be added for this model`);
+    const pending = filesToProcess.map(file => ({ file, previewUrl: URL.createObjectURL(file) }));
+    setSources(current => [...current, ...pending.map(({ file, previewUrl }) => ({ type: 'upload' as const, name: file.name, previewUrl }))]);
     setUploading(true);
-
     try {
-      for (const file of filesToProcess) {
-        if (file.size > 30 * 1024 * 1024) {
-          toast.error(`${file.name} is too large (max 30MB)`);
-          continue;
+      for (const { file, previewUrl } of pending) {
+        try {
+          const result = await editApi.uploadSource(file);
+          setSources(current => current.map(source => source.previewUrl === previewUrl ? { ...source, key: result.object_key } : source));
+        } catch (err) {
+          setSources(current => current.filter(source => source.previewUrl !== previewUrl));
+          URL.revokeObjectURL(previewUrl);
+          toast.error(`Upload failed for ${file.name}: ${(err as Error).message}`);
         }
-        const result = await editApi.uploadSource(file);
-        const previewUrl = URL.createObjectURL(file);
-        setSources((prev) => [
-          ...prev,
-          { type: 'upload', key: result.object_key, previewUrl, name: file.name },
-        ]);
       }
-    } catch (err) {
-      toast.error(`Upload failed: ${(err as Error).message}`);
     } finally {
       setUploading(false);
     }
@@ -323,509 +330,363 @@ function EditPageInner() {
 
   const alreadySelectedIds = sources.filter((s) => s.type === 'gallery' || s.type === 'generated').map((s) => s.id!);
 
+  function changeModel(key: string, reason = '') {
+    if (key === editModel) return;
+    const target = catalog?.edit.find(m => m.key === key);
+    if (!target) return;
+    const notes = [reason];
+    const count = Math.min(numImages, target.max_num_images || 1);
+    if (count !== numImages) notes.push(`Results changed to ${count}.`);
+    const settings = [
+      ['Resolution', resolution, target.params.resolution?.default ?? ''],
+      ['Aspect ratio', aspectRatio, target.params.aspect_ratio?.default ?? ''],
+      ['Image size', imageSize, target.params.image_size?.default ?? ''],
+      ['Safety tolerance', safetyTolerance, target.params.safety_tolerance?.default ?? ''],
+      ['Quality', quality, target.params.quality?.default ?? ''],
+    ];
+    settings.forEach(([label, previous, next]) => {
+      if (changedSettings.current.has(label) && previous !== next) notes.push(next ? `${label} changed to ${next}.` : `${label} removed.`);
+    });
+    if (useCustomSize) notes.push('Custom size cleared.');
+    if (negativePrompt) notes.push('Negative prompt cleared.');
+    if (seed) notes.push('Seed cleared.');
+    if (enableWebSearch) notes.push('Web search turned off.');
+    setNegativePrompt('');
+    setSeed('');
+    setEnableWebSearch(false);
+    changedSettings.current.clear();
+    setNotice(notes.filter(Boolean).join(' '));
+    setNumImages(count);
+    setEditModel(key);
+  }
+
+  const results = images.length > 0 ? (
+    <div aria-label="Results" className="flex shrink-0 items-center gap-1 overflow-x-auto">
+      <span className="mr-1 text-xs text-muted-foreground">Results</span>
+      {[...images].sort((a, b) => b.id - a.id).map((image) => (
+        <button
+          key={image.id}
+          onClick={() => setSelectedImageId(image.id)}
+          aria-label={`Open edited image ${image.id}${image.status === 'completed' ? '' : `, ${image.status}`}`}
+          className={`relative h-[52px] w-[52px] shrink-0 overflow-hidden rounded-[5px] bg-muted ${image.status === 'pending' || image.status === 'processing' ? 'animate-[shimmer_1.3s_linear_infinite] bg-gradient-to-r from-muted via-accent to-muted bg-[length:220%_100%]' : ''}`}
+        >
+          {image.status === 'completed' && image.object_key ? (
+            <LibraryImage src={editApi.getImageUrl(image.id)} alt={image.prompt} className="h-full w-full object-cover" />
+          ) : image.status === 'failed' ? (
+            <span className="text-xs text-destructive">Failed</span>
+          ) : <span className="sr-only">Generating</span>}
+        </button>
+      ))}
+    </div>
+  ) : null;
+
   return (
-    <div className="max-w-7xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Edit</h1>
-        <p className="text-muted-foreground mt-1">
-          Edit images with AI using source images and prompts
-        </p>
-      </div>
-
-      {/* Edit Form */}
-      <section
-        className="bg-card rounded-xl border border-border p-6 space-y-4"
-        onPaste={handlePaste}
-      >
-        {/* Source Images */}
-        <div>
-          <label className="block text-sm font-medium mb-2">
-            Source Images
-          </label>
-          <div className="flex flex-wrap gap-3 items-start">
-            {/* Existing source previews */}
-            {sources.map((src, idx) => (
-              <div key={idx} className="relative group w-32 h-32">
-                <div className="w-full h-full rounded-lg border border-border overflow-hidden bg-muted/30">
-                  {src.previewUrl ? (
-                    <LibraryImage src={src.previewUrl} alt="" className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center">
-                      <ImageIcon className="h-8 w-8 text-muted-foreground" />
-                    </div>
-                  )}
-                </div>
-                <button
-                  onClick={() => removeSource(idx)}
-                  className="absolute -top-1.5 -right-1.5 p-0.5 rounded-full bg-red-500 text-white opacity-0 group-hover:opacity-100 transition-opacity"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-                <span className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-[10px] text-center py-0.5 rounded-b-lg">
-                  {src.type === 'gallery' ? `#${src.id}` : src.type === 'generated' ? `Gen #${src.id}` : src.name?.slice(0, 12) || 'Upload'}
-                </span>
-              </div>
-            ))}
-
-            {/* Add source buttons */}
-            {sources.length < maxSources && (
-              <>
-                {/* Drop zone / upload */}
-                <label
-                  className="w-32 h-32 rounded-lg border-2 border-dashed border-border hover:border-primary/50 flex flex-col items-center justify-center cursor-pointer transition-colors"
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={handleDrop}
-                >
-                  {uploading ? (
-                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                  ) : (
-                    <>
-                      <Upload className="h-5 w-5 text-muted-foreground" />
-                      <span className="text-xs text-muted-foreground mt-1">Upload</span>
-                    </>
-                  )}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    onChange={(e) => e.target.files && handleFileUpload(e.target.files)}
-                  />
-                </label>
-
-                {/* Browse button */}
-                <button
-                  onClick={() => setPickerOpen(true)}
-                  className="w-32 h-32 rounded-lg border-2 border-dashed border-border hover:border-primary/50 flex flex-col items-center justify-center transition-colors"
-                >
-                  <ImageIcon className="h-5 w-5 text-muted-foreground" />
-                  <span className="text-xs text-muted-foreground mt-1">Browse</span>
-                </button>
-              </>
-            )}
-          </div>
-          <p className="text-xs text-muted-foreground mt-1">
-            Add 1-{maxSources} source images. Drag &amp; drop, paste, upload, or browse gallery/generated.
-            {isKling && ' Reference images in your prompt using @Image1, @Image2, etc.'}
-          </p>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium mb-1">
-            Prompt
-            <span className="text-muted-foreground font-normal ml-2">
-              {prompt.length}/{caps.maxPromptLen}
-            </span>
-          </label>
-          <textarea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value.slice(0, caps.maxPromptLen))}
-            placeholder={isKling
-              ? "Use @Image1 to reference your source image. e.g. 'Transform @Image1 into a watercolor painting'"
-              : "Describe how you want to edit the image..."}
-            className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-y min-h-[80px]"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                handleEdit();
+    <div className="-mx-5 -my-5 h-[calc(100%+40px)] min-h-0">
+      <style jsx global>{`
+        @keyframes shimmer {
+          to { background-position: -220% 0; }
+        }
+      `}</style>
+      <Stage
+        tabs={
+          <JobTabs
+            value={job}
+            onChange={(next) => {
+              setNotice('');
+              setJob(next);
+              if (!model?.jobs.includes(next)) {
+                const target = catalog?.edit.find(m => m.jobs.includes(next));
+                if (target) changeModel(target.key, `Switched to ${target.label} for this job. Your images are kept.`);
               }
             }}
           />
-        </div>
-
-        {/* Controls row */}
-        <div className="flex flex-wrap gap-4 items-end">
-          {/* Edit model */}
-          <ModelSelector
-            label="Model"
-            models={EDIT_MODELS}
-            value={editModel}
-            onChange={(v) => {
-              setEditModel(v);
-              setSources([]);
-              setNumImages((current) => Math.min(current, catalog?.edit.find(m => m.key === v)?.max_num_images || 1));
-            }}
-            size="sm"
+        }
+        canvas={
+          <div
+            onPaste={handlePaste}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={handleDrop}
+            className="flex min-h-0 flex-1 flex-col gap-2.5"
+          >
+            {job !== 'describe' && <p className="text-muted-foreground">Coming next</p>}
+            <SourceTray
+              sources={sources}
+              model={editModel}
+              limit={maxSources}
+              onChange={setSources}
+              onAdd={() => setPickerOpen(true)}
+              onUpload={handleFileUpload}
+              onUse={(label) => setPrompt(current => `${current} ${label}`.trim())}
+            />
+            {results}
+          </div>
+        }
+        composer={
+          <Composer
+            value={prompt}
+            onChange={setPrompt}
+            onApply={handleEdit}
+            disabled={job !== 'describe' || !model || editMutation.isPending || uploading || !prompt.trim() || !sources.length || sources.length > maxSources}
+            model={model?.label}
+            count={numImages}
+            warning={job !== 'describe' ? 'Coming next' : sources.length > maxSources ? `This model takes up to ${maxSources} sources. Remove ${sources.length - maxSources}.` : !sources.length ? 'Add a source image' : uploading ? 'Uploading sources…' : undefined}
+            cost={estimate?.estimated_sparks != null ? estimate.estimated_sparks * numImages : undefined}
           />
-
-          <div className="w-24">
-            <label className="block text-xs text-muted-foreground mb-1">Images</label>
-            <select
-              value={numImages}
-              onChange={(e) => setNumImages(parseInt(e.target.value))}
-              className="w-full px-3 py-2 border border-border rounded-lg text-sm"
-            >
-              {[1, 2, 3, 4, 6, 9].filter((n) => n <= caps.maxImages).map((n) => (
-                <option key={n} value={n}>{n}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Edit button + cost */}
-          <div className="flex items-center gap-3">
-            <button
-              onClick={handleEdit}
-              disabled={editMutation.isPending || !prompt.trim() || sources.length === 0}
-              className="flex items-center gap-2 px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 font-medium"
-            >
-              {editMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Pencil className="h-4 w-4" />
+        }
+        settings={
+          <>
+            <h2 className="text-sm font-semibold">{jobs[job]}</h2>
+            <Notice>{notice}</Notice>
+            <ModelPanel
+              models={catalog?.edit ?? []}
+              job={job}
+              value={editModel}
+              onChange={changeModel}
+            />
+            <label className="block text-xs text-muted-foreground">
+              Results
+              <select
+                className="mt-1 w-full rounded-md border border-input bg-background px-2 py-1.5 text-[13px] text-foreground"
+                value={numImages}
+                onChange={(event) => setNumImages(Number(event.target.value))}
+              >
+                {Array.from({ length: caps.maxImages }, (_, i) => (
+                  <option key={i + 1}>{i + 1}</option>
+                ))}
+              </select>
+            </label>
+            <div><span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">Sources: {maxSources}</span></div>
+            <div className="space-y-3 border-t border-border pt-2.5">
+              <h3 className="text-[12.5px] font-medium">Advanced for this model</h3>
+              {/* Negative prompt */}
+              {caps.hasNegativePrompt && (
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">Negative Prompt</label>
+                  <input
+                    type="text"
+                    value={negativePrompt}
+                    onChange={(e) => setNegativePrompt(e.target.value.slice(0, 500))}
+                    placeholder="Things to avoid..."
+                    className="w-full px-3 py-2 border border-border rounded-lg text-sm"
+                  />
+                </div>
               )}
-              Edit
-            </button>
-            {editCosts?.costs[editModel] != null && editCosts.costs[editModel] > 0 && (
-              <span className="inline-flex items-center gap-0.5 text-xs text-amber-600 dark:text-amber-400">
-                <Zap className="h-3 w-3" />
-                ~{editCosts.costs[editModel] * numImages} sparks
-              </span>
-            )}
-          </div>
-        </div>
 
-        <button
-          onClick={() => setShowAdvanced(!showAdvanced)}
-          className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
-          {showAdvanced ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-          Advanced Parameters
-        </button>
+              {/* Resolution + Aspect Ratio (Kling) */}
+              {caps.usesResolution && (
+                <div className="flex flex-col gap-3">
+                  {spec.resolution && (
+                    <div>
+                      <label className="block text-xs text-muted-foreground mb-1">Resolution</label>
+                      <div className="flex flex-wrap gap-2">
+                        {KLING_RESOLUTIONS.map((r) => (
+                          <button
+                            key={r.value}
+                            onClick={() => {
+                              changedSettings.current.add('Resolution');
+                              setResolution(r.value);
+                            }}
+                            className={cn(
+                              'px-4 py-1.5 text-xs border rounded-lg transition-colors',
+                              resolution === r.value
+                                ? 'border-primary bg-primary/5 text-primary'
+                                : 'border-border hover:bg-muted'
+                            )}
+                          >
+                            {r.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {spec.aspect_ratio && (
+                    <div>
+                      <label className="block text-xs text-muted-foreground mb-1">Aspect Ratio</label>
+                      <select
+                        value={aspectRatio}
+                        onChange={(event) => {
+                          changedSettings.current.add('Aspect ratio');
+                          setAspectRatio(event.target.value);
+                        }}
+                        className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
+                      >
+                        {KLING_ASPECT_RATIOS.map((ar) => (
+                          <option key={ar.value} value={ar.value}>{ar.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              )}
 
-        {/* Advanced params */}
-        {showAdvanced && (
-          <div className="border border-border rounded-lg p-4 space-y-4">
-            {/* Negative prompt */}
-            {caps.hasNegativePrompt && (
-              <div>
-                <label className="block text-xs text-muted-foreground mb-1">Negative Prompt</label>
-                <input
-                  type="text"
-                  value={negativePrompt}
-                  onChange={(e) => setNegativePrompt(e.target.value.slice(0, 500))}
-                  placeholder="Things to avoid..."
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm"
-                />
-              </div>
-            )}
-
-            {/* Resolution + Aspect Ratio (Kling) */}
-            {caps.usesResolution && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {spec.resolution && <div>
-                  <label className="block text-xs text-muted-foreground mb-1">Resolution</label>
-                  <div className="flex gap-2">
-                    {KLING_RESOLUTIONS.map((r) => (
+              {spec.quality && (
+                <label className="block text-xs text-muted-foreground">
+                  Quality
+                  <select
+                    value={quality}
+                    onChange={(event) => {
+                      changedSettings.current.add('Quality');
+                      setQuality(event.target.value);
+                    }}
+                    className="mt-1 w-full rounded-md border border-input bg-background px-2 py-1.5 text-[13px] text-foreground"
+                  >
+                    {spec.quality.options?.map(value => (
+                      <option key={value} value={value}>{value}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {/* Size presets (Qwen/FLUX). Seedream requires its own named enum. */}
+              {caps.hasImageSize && (
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">Image Size</label>
+                  <div className="flex flex-wrap gap-2">
+                    {(spec.image_size?.options ?? []).map(value => ({ value, label: value.replaceAll("_", " ") })).map((preset) => (
                       <button
-                        key={r.value}
-                        onClick={() => setResolution(r.value)}
+                        key={preset.value}
+                        onClick={() => {
+                          changedSettings.current.add('Image size');
+                          setImageSize(preset.value);
+                          setUseCustomSize(false);
+                        }}
                         className={cn(
-                          'px-4 py-1.5 text-xs border rounded-lg transition-colors',
-                          resolution === r.value
+                          'px-3 py-1.5 text-xs border rounded-lg transition-colors',
+                          !useCustomSize && imageSize === preset.value
                             ? 'border-primary bg-primary/5 text-primary'
                             : 'border-border hover:bg-muted'
                         )}
                       >
-                        {r.label}
+                        {preset.label}
                       </button>
                     ))}
-                  </div>
-                </div>}
-                {spec.aspect_ratio && <div>
-                  <label className="block text-xs text-muted-foreground mb-1">Aspect Ratio</label>
-                  <select
-                    value={aspectRatio}
-                    onChange={(e) => setAspectRatio(e.target.value)}
-                    className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
-                  >
-                    {KLING_ASPECT_RATIOS.map((ar) => (
-                      <option key={ar.value} value={ar.value}>{ar.label}</option>
-                    ))}
-                  </select>
-                </div>}
-              </div>
-            )}
-
-            {spec.quality && <label className="block text-sm">Quality <select value={quality} onChange={e => setQuality(e.target.value)} className="ml-2 border rounded p-1">{spec.quality.options?.map(v => <option key={v} value={v}>{v}</option>)}</select></label>}
-            {/* Size presets (Qwen/FLUX). Seedream requires its own named enum. */}
-            {caps.hasImageSize && (
-              <div>
-                <label className="block text-xs text-muted-foreground mb-1">Image Size</label>
-                <div className="flex flex-wrap gap-2">
-                  {(spec.image_size?.options ?? []).map(value => ({ value, label: value.replaceAll("_", " ") })).map((preset) => (
-                    <button
-                      key={preset.value}
-                      onClick={() => {
-                        setImageSize(preset.value);
-                        setUseCustomSize(false);
-                      }}
-                      className={cn(
-                        'px-3 py-1.5 text-xs border rounded-lg transition-colors',
-                        !useCustomSize && imageSize === preset.value
-                          ? 'border-primary bg-primary/5 text-primary'
-                          : 'border-border hover:bg-muted'
-                      )}
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                  {spec.image_size?.custom_size && <button
-                    onClick={() => setUseCustomSize(true)}
-                    className={cn(
-                      'px-3 py-1.5 text-xs border rounded-lg transition-colors',
-                      useCustomSize
-                        ? 'border-primary bg-primary/5 text-primary'
-                        : 'border-border hover:bg-muted'
+                    {spec.image_size?.custom_size && (
+                      <button
+                        onClick={() => setUseCustomSize(true)}
+                        className={cn(
+                          'px-3 py-1.5 text-xs border rounded-lg transition-colors',
+                          useCustomSize
+                            ? 'border-primary bg-primary/5 text-primary'
+                            : 'border-border hover:bg-muted'
+                        )}
+                      >
+                        Custom
+                      </button>
                     )}
-                  >
-                    Custom
-                  </button>}
-                </div>
-                {useCustomSize && (
-                  <div className="flex gap-2 mt-2">
-                    <div>
-                      <label className="text-xs text-muted-foreground">Width</label>
-                      <input
-                        type="number"
-                        value={customWidth}
-                        onChange={(e) => setCustomWidth(parseInt(e.target.value) || 1024)}
-                        min={256}
-                        max={2048}
-                        className="w-24 px-2 py-1 border border-border rounded-lg text-sm"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs text-muted-foreground">Height</label>
-                      <input
-                        type="number"
-                        value={customHeight}
-                        onChange={(e) => setCustomHeight(parseInt(e.target.value) || 1024)}
-                        min={256}
-                        max={2048}
-                        className="w-24 px-2 py-1 border border-border rounded-lg text-sm"
-                      />
-                    </div>
                   </div>
-                )}
-              </div>
-            )}
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {/* Seed */}
-              {caps.hasSeed && (
-                <div>
-                  <label className="block text-xs text-muted-foreground mb-1">Seed</label>
-                  <input
-                    type="text"
-                    value={seed}
-                    onChange={(e) => setSeed(e.target.value.replace(/\D/g, ''))}
-                    placeholder="Random"
-                    className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
-                  />
+                  {useCustomSize && (
+                    <div className="flex gap-2 mt-2">
+                      <div>
+                        <label className="text-xs text-muted-foreground">Width</label>
+                        <input
+                          type="number"
+                          value={customWidth}
+                          onChange={(e) => setCustomWidth(parseInt(e.target.value) || 1024)}
+                          min={256}
+                          max={2048}
+                          className="w-full min-w-0 px-2 py-1 border border-border rounded-lg text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-muted-foreground">Height</label>
+                        <input
+                          type="number"
+                          value={customHeight}
+                          onChange={(e) => setCustomHeight(parseInt(e.target.value) || 1024)}
+                          min={256}
+                          max={2048}
+                          className="w-full min-w-0 px-2 py-1 border border-border rounded-lg text-sm"
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
-            </div>
-
-            {/* Toggles */}
-            {(caps.hasPromptExpansion || caps.hasSafetyChecker) && (
-              <div className="flex flex-wrap gap-6">
-                {caps.hasPromptExpansion && (
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={enablePromptExpansion}
-                      onChange={(e) => setEnablePromptExpansion(e.target.checked)}
-                      className="rounded"
-                    />
-                    Prompt expansion
-                  </label>
-                )}
-                {caps.hasSafetyChecker && (
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={enableSafetyChecker}
-                      onChange={(e) => setEnableSafetyChecker(e.target.checked)}
-                      className="rounded"
-                    />
-                    Safety checker
-                  </label>
-                )}
-              </div>
-            )}
-
-            {/* Safety Tolerance + Web Search */}
-            {(caps.hasSafetyTolerance || caps.hasWebSearch) && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {caps.hasSafetyTolerance && (
+              <div className="flex flex-col gap-3">
+                {/* Seed */}
+                {caps.hasSeed && (
                   <div>
-                    <label className="block text-xs text-muted-foreground mb-1">Safety Tolerance</label>
-                    <select
-                      value={safetyTolerance}
-                      onChange={(e) => setSafetyTolerance(e.target.value)}
+                    <label className="block text-xs text-muted-foreground mb-1">Seed</label>
+                    <input
+                      type="text"
+                      value={seed}
+                      onChange={(e) => setSeed(e.target.value.replace(/\D/g, ''))}
+                      placeholder="Random"
                       className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
-                    >
-                      {SAFETY_LEVELS.map((s) => (
-                        <option key={s.value} value={s.value}>{s.label}</option>
-                      ))}
-                    </select>
+                    />
                   </div>
                 )}
-                {caps.hasWebSearch && (
-                  <div className="flex items-end pb-1">
+
+              </div>
+
+              {/* Toggles */}
+              {(caps.hasPromptExpansion || caps.hasSafetyChecker) && (
+                <div className="flex flex-wrap gap-6">
+                  {caps.hasPromptExpansion && (
                     <label className="flex items-center gap-2 text-sm">
                       <input
                         type="checkbox"
-                        checked={enableWebSearch}
-                        onChange={(e) => setEnableWebSearch(e.target.checked)}
+                        checked={enablePromptExpansion}
+                        onChange={(e) => setEnablePromptExpansion(e.target.checked)}
                         className="rounded"
                       />
-                      Enable web search
+                      Prompt expansion
                     </label>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-      </section>
-
-      {/* Edited Images Grid */}
-      <section>
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="font-semibold">
-            Edited Images
-            {editedImages && <span className="text-muted-foreground font-normal ml-2">({editedImages.total})</span>}
-          </h2>
-          {images.length > 0 && (
-            <div className="flex items-center gap-2">
-              {selectMode && (
-                <button
-                  onClick={() => {
-                    const pageIds = images.map((image) => image.id);
-                    const allSelected = pageIds.every((id) => selectedIds.has(id));
-                    setSelectedIds(allSelected ? new Set() : new Set(pageIds));
-                  }}
-                  className="px-3 py-1.5 rounded-lg text-sm border border-border hover:bg-muted transition-colors"
-                >
-                  {images.every((image) => selectedIds.has(image.id))
-                    ? 'Deselect Page'
-                    : 'Select Page'}
-                </button>
+                  )}
+                  {caps.hasSafetyChecker && (
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={enableSafetyChecker}
+                        onChange={(e) => setEnableSafetyChecker(e.target.checked)}
+                        className="rounded"
+                      />
+                      Safety checker
+                    </label>
+                  )}
+                </div>
               )}
-              <button
-                onClick={() => {
-                  if (selectMode) setSelectedIds(new Set());
-                  setSelectMode((value) => !value);
-                }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-border hover:bg-muted transition-colors"
-              >
-                {selectMode ? <X className="h-3.5 w-3.5" /> : <CheckSquare className="h-3.5 w-3.5" />}
-                {selectMode ? 'Cancel' : 'Select'}
-              </button>
-            </div>
-          )}
-        </div>
-        {imagesLoading ? (
-          <div className="flex items-center justify-center h-32">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-          </div>
-        ) : images.length === 0 ? (
-          <div className="text-center py-16 text-muted-foreground">
-            <Pencil className="h-12 w-12 mx-auto mb-3 opacity-30" />
-            <p>No edited images yet</p>
-            <p className="text-sm mt-1">Add source images and a prompt above, then click Edit</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-            {images.map((img) => (
-              <div key={img.id} className="relative">
-                <GeneratedImageCard
-                  image={img}
-                  onClick={selectMode ? () => toggleSelected(img.id) : () => setSelectedImageId(img.id)}
-                  onDelete={(id) => deleteMutation.mutate(id)}
-                />
-                {selectMode && (
-                  <button
-                    type="button"
-                    onClick={() => toggleSelected(img.id)}
-                    aria-label={`${selectedIds.has(img.id) ? 'Deselect' : 'Select'} image ${img.id}`}
-                    className={cn(
-                      'absolute top-2 right-2 z-20 h-6 w-6 rounded-md border-2 flex items-center justify-center transition-colors',
-                      selectedIds.has(img.id)
-                        ? 'bg-primary border-primary text-primary-foreground'
-                        : 'bg-card/90 border-white text-transparent'
-                    )}
-                  >
-                    <Check className="h-4 w-4" />
-                  </button>
-                )}
-                {img.status === 'completed' && img.completed_at && (
-                  <div className="absolute bottom-1 right-1 z-10 pointer-events-none">
-                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-black/60 text-white">
-                      {formatDuration(img.created_at, img.completed_at)}
-                    </span>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
 
-      {selectedIds.size > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-card border border-border rounded-xl shadow-lg px-4 py-3 flex items-center gap-3 z-50">
-          <span className="text-sm font-medium">
-            {selectedIds.size} image{selectedIds.size !== 1 ? 's' : ''} selected
-          </span>
-          <button
-            onClick={() => setShowDeleteConfirm(true)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium border border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/30"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            Delete
-          </button>
-          <button
-            onClick={() => setSelectedIds(new Set())}
-            className="p-1.5 hover:bg-muted rounded-lg text-muted-foreground transition-colors"
-            aria-label="Clear selection"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      )}
-
-      {showDeleteConfirm && (
-        <>
-          <div className="fixed inset-0 bg-black/50 z-50" onClick={() => setShowDeleteConfirm(false)} />
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="bg-card rounded-xl shadow-xl max-w-sm w-full p-6 space-y-4" onClick={(event) => event.stopPropagation()}>
-              <h3 className="text-lg font-semibold">Delete Images</h3>
-              <p className="text-sm text-muted-foreground">
-                Permanently delete {selectedIds.size} image{selectedIds.size !== 1 ? 's' : ''}? This cannot be undone.
-              </p>
-              <div className="flex gap-2 justify-end">
-                <button
-                  onClick={() => setShowDeleteConfirm(false)}
-                  className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => {
-                    setShowDeleteConfirm(false);
-                    bulkDeleteMutation.mutate(Array.from(selectedIds));
-                  }}
-                  disabled={bulkDeleteMutation.isPending}
-                  className="px-4 py-2 text-sm text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50"
-                >
-                  Delete
-                </button>
-              </div>
+              {/* Safety Tolerance + Web Search */}
+              {(caps.hasSafetyTolerance || caps.hasWebSearch) && (
+                <div className="flex flex-col gap-3">
+                  {caps.hasSafetyTolerance && (
+                    <div>
+                      <label className="block text-xs text-muted-foreground mb-1">Safety Tolerance</label>
+                      <select
+                        value={safetyTolerance}
+                        onChange={(event) => {
+                          changedSettings.current.add('Safety tolerance');
+                          setSafetyTolerance(event.target.value);
+                        }}
+                        className="w-full px-3 py-1.5 border border-border rounded-lg text-sm"
+                      >
+                        {SAFETY_LEVELS.map((s) => (
+                          <option key={s.value} value={s.value}>{s.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  {caps.hasWebSearch && (
+                    <div className="flex items-end pb-1">
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={enableWebSearch}
+                          onChange={(e) => setEnableWebSearch(e.target.checked)}
+                          className="rounded"
+                        />
+                        Enable web search
+                      </label>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
-          </div>
-        </>
-      )}
+          </>
+        }
+      />
+
 
       {/* Full-size modal */}
       {selectedImage && (
@@ -841,6 +702,16 @@ function EditPageInner() {
             >
               <div className="flex items-center justify-between p-4 border-b border-border">
                 <h3 className="font-semibold">Edited Image #{selectedImage.id}</h3>
+                <button
+                  aria-label="Delete edited image"
+                  onClick={() => {
+                    deleteMutation.mutate(selectedImage.id);
+                    setSelectedImageId(null);
+                  }}
+                  className="ml-auto mr-3 rounded p-1 text-destructive hover:bg-muted"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
                 <button
                   onClick={() => setSelectedImageId(null)}
                   className="p-1 hover:bg-muted rounded-lg transition-colors"
@@ -973,7 +844,7 @@ function EditPageInner() {
         onClose={() => setPickerOpen(false)}
         onDone={handlePickerDone}
         alreadySelectedIds={alreadySelectedIds}
-        maxSelection={maxSources}
+        maxSelection={Math.max(0, maxSources - sources.filter(source => source.type === 'upload').length)}
       />
     </div>
   );

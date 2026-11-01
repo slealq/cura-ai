@@ -475,7 +475,7 @@ export default function Inspector({
           </>
         )}
         {tool === 'Create' && <Link href="/generate?advanced=1" className="block text-xs text-muted-foreground underline hover:text-foreground">Advanced creation: multiple LoRAs, seeds & model controls</Link>}
-        {tool === 'Edit' && <Link href="/edit?advanced=1" className="block text-xs text-muted-foreground underline hover:text-foreground">Upload sources & advanced editing</Link>}
+        {tool === 'Edit' && <Link href={`/edit?sources=${images.map(image => image.id).join(',')}`} className="block text-xs text-muted-foreground underline hover:text-foreground">Open in Edit Stage</Link>}
         {tool === 'Ask Vision' && <Link href="/vision?advanced=1" className="block text-xs text-muted-foreground underline hover:text-foreground">Upload a file, Tag / Describe & analysis history</Link>}
         {tool === 'Edit' && (
           <p className="text-xs text-muted-foreground">

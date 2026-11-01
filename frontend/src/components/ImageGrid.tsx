@@ -617,7 +617,7 @@ function ImageGridContent({
             <button
               className={dockButton}
               onClick={() => {
-                setToolImages(images.filter((i) => selectedIds.has(i.id)));
+                setToolImages(Array.from(selectedIds).map(id => images.find(image => image.id === id)).filter((image): image is Image => !!image));
                 setMobileInspector(true);
               }}
             >
@@ -655,6 +655,7 @@ function ImageGridContent({
             images={images}
             onNavigate={setOpenImage}
             onTool={(next, image) => {
+              if (next === 'Edit') { router.push(`/edit?sources=${image.id}`); return; }
               setSelectedIds(new Set([image.id]));
               setToolImages([image]);
               setTool(next);
@@ -693,9 +694,14 @@ function ImageGridContent({
             }
             title={title}
             total={total}
-            images={toolImages ?? images.filter((image) => selectedIds.has(image.id))}
+            images={toolImages ?? Array.from(selectedIds).map(id => images.find(image => image.id === id)).filter((image): image is Image => !!image)}
             tool={tool}
             onTool={(next) => {
+              if (next === 'Edit') {
+                const ids = toolImages ? toolImages.map(image => image.id) : Array.from(selectedIds);
+                router.push(`/edit?sources=${ids.join(',')}`);
+                return;
+              }
               setTool(next);
               if (!next) {
                 setToolImages(null);
