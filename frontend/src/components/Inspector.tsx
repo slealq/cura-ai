@@ -474,9 +474,9 @@ export default function Inspector({
             )}
           </>
         )}
-        {tool === 'Create' && <Link href="/generate?advanced=1" className="block text-xs text-muted-foreground underline hover:text-foreground">Advanced creation: multiple LoRAs, seeds & model controls</Link>}
+        {tool === 'Create' && <Link href={`/generate?sources=${images.map(image => image.id).join(',')}&prompt=${encodeURIComponent(prompt)}`} className="block text-xs text-muted-foreground underline hover:text-foreground">Advanced creation: multiple LoRAs, seeds & model controls</Link>}
         {tool === 'Edit' && <Link href={`/edit?sources=${images.map(image => image.id).join(',')}`} className="block text-xs text-muted-foreground underline hover:text-foreground">Open in Edit Stage</Link>}
-        {tool === 'Ask Vision' && <Link href="/vision?advanced=1" className="block text-xs text-muted-foreground underline hover:text-foreground">Upload a file, Tag / Describe & analysis history</Link>}
+        {tool === 'Ask Vision' && <Link href={`/vision?sources=${images.map(image => image.id).join(',')}&prompt=${encodeURIComponent(prompt)}&mode=custom`} className="block text-xs text-muted-foreground underline hover:text-foreground">Upload a file, Tag / Describe & analysis history</Link>}
         {tool === 'Edit' && (
           <p className="text-xs text-muted-foreground">
             Selected images are combined as sources for one edit. This model accepts up to {maxSources} source
