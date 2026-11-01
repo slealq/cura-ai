@@ -31,7 +31,9 @@ def subject_inputs(sources, urls):
     for element in elements.values():
         if not element["frontal_image_url"] or len(element["reference_image_urls"]) > 3:
             raise ValueError("Each element needs a main photo and up to 3 alternate angles")
-    return references, [elements[number] for number in sorted(elements)]
+    ordered = [elements[number] for number in sorted(elements)]
+    # Kling requires at least one image_urls entry, even when only elements are used.
+    return references or [ordered[0]["frontal_image_url"]] if ordered else references, ordered
 
 
 def validate_subject_media(data):
