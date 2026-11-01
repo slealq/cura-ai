@@ -51,7 +51,7 @@ export default function LoginPage() {
       setError('');
       try {
         await loginWithGoogle(response.credential);
-        router.push('/generate');
+        router.push(window.matchMedia('(max-width: 767px)').matches ? '/collection' : '/generate');
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : 'Google sign-in failed. Please try again.';
         setError(message);
@@ -114,7 +114,7 @@ export default function LoginPage() {
       } else {
         await login(email, password);
       }
-      router.push('/generate');
+      router.push(window.matchMedia('(max-width: 767px)').matches ? '/collection' : '/generate');
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : `${isSignUp ? 'Sign up' : 'Login'} failed. Please try again.`;

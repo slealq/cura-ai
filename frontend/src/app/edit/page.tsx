@@ -64,9 +64,13 @@ export default function EditPage() {
 function EditPageInner() {
   const queryClient = useQueryClient();
   const params = useSearchParams();
-  const [job, setJob] = useState<EditJob>('describe');
+  const [job, setJob] = useState<EditJob>(() => {
+    const requested = params.get('job');
+    return requested && requested in jobs ? requested as EditJob : 'describe';
+  });
   const [notice, setNotice] = useState('');
   const hasInitEditModel = useRef(false);
+  const appliedJob = useRef<string | null>(null);
   const changedSettings = useRef(new Set<string>());
 
   // Form state
@@ -129,6 +133,17 @@ function EditPageInner() {
       } else { setEditModel(catalog.defaults.edit_model); }
     }
   }, [editModelData, catalog, EDIT_MODELS]);
+
+  useEffect(() => {
+    const requested = params.get('job');
+    if (!requested || !(requested in jobs) || !catalog || !editModel || appliedJob.current === requested) return;
+    appliedJob.current = requested;
+    setJob(requested as EditJob);
+    if (!catalog.edit.find(item => item.key === editModel)?.jobs.includes(requested as EditJob)) {
+      const supported = catalog.edit.find(item => item.jobs.includes(requested as EditJob));
+      if (supported) setEditModel(supported.key);
+    }
+  }, [params, catalog, editModel]);
 
   const caps = {
     maxSources: job === 'subject' ? 10 + elementCount * 4 : job === 'paint' && editModel === 'ideogram-v4.5-edit' ? 4 : model?.max_source_images ?? 1, maxImages: model?.max_num_images || 1,

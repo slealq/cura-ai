@@ -173,7 +173,7 @@ input[type="range"]::-moz-range-track {
   .app-shell { height: 100dvh; }
   .app-header { height: calc(56px + env(safe-area-inset-top)); padding-top: env(safe-area-inset-top); padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); gap: 8px; }
   .app-main { padding: 16px max(12px, env(safe-area-inset-right)) calc(150px + env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
-  .mobile-tabs { position: fixed; inset: auto 0 0; z-index: 40; display: grid; grid-template-columns: repeat(4, 1fr); padding: 6px max(8px, env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); border-top: 1px solid hsl(var(--border)); background: hsl(var(--background)); }
+  .mobile-tabs { position: fixed; inset: auto 0 0; z-index: 40; display: grid; grid-template-columns: repeat(3, 1fr); padding: 6px max(8px, env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); border-top: 1px solid hsl(var(--border)); background: hsl(var(--background)); }
   .mobile-tabs > * { min-height: 52px; }
   .mobile-tabs [aria-current="page"] { color: hsl(var(--selection)); }
   .mobile-sheet { padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
@@ -220,4 +220,14 @@ input[type="range"]::-moz-range-track {
   .mobile-modal { max-width: calc(100vw - 24px); max-height: calc(100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); overflow-y: auto; }
   .mobile-modal-actions { position: sticky; bottom: 0; padding-block: 12px; background: hsl(var(--card)); z-index: 1; }
   .mobile-cards td > * { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+}
+
+@media (max-width: 767px) {
+  .mobile-topbar { min-height: calc(60px + env(safe-area-inset-top)); padding-top: env(safe-area-inset-top); }
+  .app-main { padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
+  .mobile-tool .mobile-tabs { display: none; }
+  .mobile-tool .app-main { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+}
+@media (max-width: 767px) {
+  .mobile-topbar h1 { min-width: 0; overflow-wrap: anywhere; }
 }
