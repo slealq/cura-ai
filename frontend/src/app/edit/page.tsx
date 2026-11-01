@@ -568,14 +568,6 @@ function EditPageInner() {
               value={editModel}
               onChange={changeModel}
             />
-            {job === 'subject' && (
-              <label className="block text-xs text-muted-foreground">Output mode
-                <select className="mt-1 w-full rounded border border-input bg-background p-2" value={resultType} onChange={event => setResultType(event.target.value as 'single' | 'series')}>
-                  <option value="single">Single images</option>
-                  <option value="series">Related-image series</option>
-                </select>
-              </label>
-            )}
             <label className="block text-xs text-muted-foreground">
               {job === 'subject' && resultType === 'series' ? 'Series images' : 'Results'}
               <select
@@ -595,6 +587,7 @@ function EditPageInner() {
               <SubjectPanel sources={sources} count={elementCount} onCount={setElementCount} onChange={setSources} onUse={label => setPrompt(current => `${current} ${label}`.trim())} />
             )}
             {job === 'paint' && editModel === 'ideogram-v4.5-edit' && (
+              <>
               <label className="block text-xs text-muted-foreground">Precision area
                 <select className="mt-1 w-full rounded-md border border-input bg-background p-2" value={region.area} onChange={event => { setDrawPrecision(event.target.value === 'box'); setRegions(current => ({ ...current, [baseKey]: { ...region, area: event.target.value as 'none' | 'auto' | 'box' } })); }}>
                   <option value="none">None</option>
@@ -602,6 +595,8 @@ function EditPageInner() {
                   <option value="box">Drawn box</option>
                 </select>
               </label>
+              <p className="text-xs text-muted-foreground">Ideogram can change more than the area you paint. Only a drawn box keeps everything outside it untouched.</p>
+              </>
             )}
             {job === 'objects' && (
               <div className="space-y-3">
