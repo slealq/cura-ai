@@ -321,7 +321,7 @@ export default function AdminPage() {
   }, [catalog]);
 
   return (
-    <div className="admin-workbench p-6 space-y-8 max-w-7xl mx-auto">
+    <div className="mobile-account admin-workbench p-6 space-y-8 max-w-7xl mx-auto">
       <div>
         <h1 className="text-2xl font-bold">Admin</h1>
         <div className="admin-tabs flex gap-1 bg-muted rounded-lg p-1 mt-4 w-fit">
@@ -364,7 +364,7 @@ export default function AdminPage() {
           <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
         ) : (manualClaims?.items?.length ?? 0) > 0 ? (
           <div className="overflow-x-auto border rounded-lg">
-            <table className="w-full text-sm">
+            <table className="mobile-cards w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/50 text-left">
                   <th className="py-2 px-3 font-medium">Date</th>
@@ -380,13 +380,13 @@ export default function AdminPage() {
               <tbody>
                 {manualClaims!.items.map((claim) => (
                   <tr key={claim.id} className="border-b last:border-0">
-                    <td className="py-2 px-3 whitespace-nowrap">{formatDateCompact(claim.created_at)}</td>
-                    <td className="py-2 px-3">{claim.user_email}</td>
-                    <td className="py-2 px-3">{claim.pack_name}</td>
-                    <td className="py-2 px-3 text-right">${(claim.amount_cents / 100).toFixed(2)}</td>
-                    <td className="py-2 px-3 text-right">{formatNumber(claim.sparks_amount)}</td>
-                    <td className="py-2 px-3 font-mono text-xs">{claim.payer_reference}</td>
-                    <td className="py-2 px-3">
+                    <td data-label="Date" className="py-2 px-3 whitespace-nowrap">{formatDateCompact(claim.created_at)}</td>
+                    <td data-label="User" className="py-2 px-3">{claim.user_email}</td>
+                    <td data-label="Pack" className="py-2 px-3">{claim.pack_name}</td>
+                    <td data-label="Amount" className="py-2 px-3 text-right">${(claim.amount_cents / 100).toFixed(2)}</td>
+                    <td data-label="Sparks" className="py-2 px-3 text-right">{formatNumber(claim.sparks_amount)}</td>
+                    <td data-label="PayPal Txn ID" className="py-2 px-3 font-mono text-xs">{claim.payer_reference}</td>
+                    <td data-label="Status" className="py-2 px-3">
                       <span className={cn(
                         'px-2 py-0.5 rounded-full text-xs font-medium',
                         claim.status === 'pending' && 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400',
@@ -396,7 +396,7 @@ export default function AdminPage() {
                         {claim.status}
                       </span>
                     </td>
-                    <td className="py-2 px-3 text-right whitespace-nowrap">
+                    <td data-label="Actions" className="py-2 px-3 text-right whitespace-nowrap">
                       {claim.status === 'pending' && (
                         <div className="inline-flex gap-2">
                           <button
@@ -665,7 +665,7 @@ export default function AdminPage() {
           <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
         ) : (
           <div className="bg-card border rounded-lg overflow-hidden">
-            <table className="w-full text-sm">
+            <table className="mobile-cards w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/50">
                   <th className="text-left px-4 py-3 font-medium">User</th>
@@ -678,18 +678,18 @@ export default function AdminPage() {
               <tbody>
                 {sortedUsers.map((u: AdminUserBalance) => (
                   <tr key={u.user_id} className="border-b last:border-0">
-                    <td className="px-4 py-3">
+                    <td data-label="User" className="px-4 py-3">
                       <p className="font-medium">{u.display_name || u.email}</p>
                       {u.display_name && <p className="text-xs text-muted-foreground">{u.email}</p>}
                     </td>
-                    <td className={cn('text-right px-4 py-3 font-medium', u.balance < 10 && 'text-red-500')}>
+                    <td data-label="Balance" className={cn('text-right px-4 py-3 font-medium', u.balance < 10 && 'text-red-500')}>
                       {formatNumber(u.balance)}
                     </td>
-                    <td className="text-right px-4 py-3">{formatNumber(u.total_spent)}</td>
-                    <td className="text-right px-4 py-3 text-muted-foreground">
+                    <td data-label="Total Spent" className="text-right px-4 py-3">{formatNumber(u.total_spent)}</td>
+                    <td data-label="Last Activity" className="text-right px-4 py-3 text-muted-foreground">
                       {u.last_activity ? formatDateCompact(u.last_activity) : '-'}
                     </td>
-                    <td className="text-right px-4 py-3">
+                    <td data-label="Actions" className="text-right px-4 py-3">
                       <button
                         onClick={() => {
                           setCreditUserId(u.user_id);
@@ -711,7 +711,7 @@ export default function AdminPage() {
         {/* Add Credits Dialog */}
         {creditUserId !== null && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setCreditUserId(null)}>
-            <div className="bg-card border rounded-lg p-6 w-96 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="mobile-modal bg-card border rounded-lg p-6 w-96 space-y-4" onClick={(e) => e.stopPropagation()}>
               <h3 className="font-semibold">Add Sparks</h3>
               <p className="text-sm text-muted-foreground">
                 User: {sortedUsers.find((u: AdminUserBalance) => u.user_id === creditUserId)?.email}
@@ -854,7 +854,7 @@ export default function AdminPage() {
         ) : (
           <>
           <div className="bg-card border rounded-lg overflow-hidden">
-            <table className="w-full text-sm">
+            <table className="mobile-cards w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/50">
                   <th className="w-8 px-2 py-3" />
@@ -883,37 +883,37 @@ export default function AdminPage() {
                         )}
                         onClick={() => hasDetail && setExpandedLogId(isExpanded ? null : entry.id)}
                       >
-                        <td className="w-8 px-2 py-2.5 text-muted-foreground">
+                        <td data-label="Details" className="w-8 px-2 py-2.5 text-muted-foreground">
                           {hasDetail && (
                             isExpanded
                               ? <ChevronDown className="h-4 w-4" />
                               : <ChevronRight className="h-4 w-4" />
                           )}
                         </td>
-                        <td className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap">
+                        <td data-label="Time" className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap">
                           {formatDateCompact(entry.created_at)}
                         </td>
-                        <td className="px-4 py-2.5">
+                        <td data-label="User" className="px-4 py-2.5">
                           <span className="text-xs">{entry.user_email}</span>
                         </td>
-                        <td className="px-4 py-2.5">
+                        <td data-label="Operation" className="px-4 py-2.5">
                           <span className="px-1.5 py-0.5 text-xs bg-muted rounded">{entry.operation}</span>
                         </td>
-                        <td className="px-4 py-2.5 font-mono text-xs">
+                        <td data-label="Provider / Model" className="px-4 py-2.5 font-mono text-xs">
                           {entry.provider}/{entry.model.length > 30 ? entry.model.slice(0, 28) + '...' : entry.model}
                         </td>
-                        <td className="text-right px-4 py-2.5 text-xs text-muted-foreground">
+                        <td data-label="Tokens" className="text-right px-4 py-2.5 text-xs text-muted-foreground">
                           {entry.input_tokens || entry.output_tokens
                             ? `${entry.input_tokens ?? 0} / ${entry.output_tokens ?? 0}`
                             : '-'}
                         </td>
-                        <td className="text-right px-4 py-2.5 font-mono text-xs">
+                        <td data-label="Raw $" className="text-right px-4 py-2.5 font-mono text-xs">
                           ${(entry.raw_cost ?? 0).toFixed(6)}
                         </td>
-                        <td className="text-right px-4 py-2.5 font-mono text-xs">
+                        <td data-label="Charged $" className="text-right px-4 py-2.5 font-mono text-xs">
                           ${(entry.charged_cost ?? 0).toFixed(6)}
                         </td>
-                        <td className="text-right px-4 py-2.5 font-mono text-xs font-medium">
+                        <td data-label="Sparks" className="text-right px-4 py-2.5 font-mono text-xs font-medium">
                           {sparks.toFixed(2)}
                         </td>
                       </tr>
@@ -1034,7 +1034,7 @@ export default function AdminPage() {
                 <div key={cat} className="space-y-3">
                   <p className="text-sm font-medium text-muted-foreground">{categoryLabels[cat]}</p>
                   <div className="bg-card border rounded-lg overflow-hidden">
-                    <table className="w-full text-sm">
+                    <table className="mobile-wide-table w-full text-sm">
                       <thead>
                         <tr className="border-b bg-muted/50">
                           <th className="w-8 px-2 py-2" />

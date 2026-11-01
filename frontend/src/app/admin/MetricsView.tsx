@@ -161,7 +161,7 @@ export default function MetricsView() {
           <div>
             <h3 className="text-sm font-medium mb-2">By Operation</h3>
             <div className="border rounded-lg overflow-hidden">
-              <table className="w-full text-sm">
+              <table className="mobile-cards w-full text-sm">
                 <thead className="bg-muted/50">
                   <tr>
                     <th className="text-left p-2 font-medium">Operation</th>
@@ -176,10 +176,10 @@ export default function MetricsView() {
                   ) : (
                     data.by_operation.map((row) => (
                       <tr key={row.operation} className="border-t">
-                        <td className="p-2">{row.operation}</td>
-                        <td className="p-2 text-right font-mono">{row.count}</td>
-                        <td className="p-2 text-right font-mono">{row.avg_sparks.toFixed(1)}</td>
-                        <td className={cn('p-2 text-right font-mono', row.failure_count > 0 ? 'text-red-600 dark:text-red-400' : '')}>
+                        <td data-label="Operation" className="p-2">{row.operation}</td>
+                        <td data-label="Count" className="p-2 text-right font-mono">{row.count}</td>
+                        <td data-label="Avg Sparks" className="p-2 text-right font-mono">{row.avg_sparks.toFixed(1)}</td>
+                        <td data-label="Failures" className={cn('p-2 text-right font-mono', row.failure_count > 0 ? 'text-red-600 dark:text-red-400' : '')}>
                           {row.failure_count}
                         </td>
                       </tr>
@@ -194,7 +194,7 @@ export default function MetricsView() {
           <div>
             <h3 className="text-sm font-medium mb-2">By Provider</h3>
             <div className="border rounded-lg overflow-hidden">
-              <table className="w-full text-sm">
+              <table className="mobile-cards w-full text-sm">
                 <thead className="bg-muted/50">
                   <tr>
                     <th className="text-left p-2 font-medium">Provider</th>
@@ -209,10 +209,10 @@ export default function MetricsView() {
                   ) : (
                     data.by_provider.map((row) => (
                       <tr key={row.provider} className="border-t">
-                        <td className="p-2">{row.provider}</td>
-                        <td className="p-2 text-right font-mono">{row.count}</td>
-                        <td className="p-2 text-right font-mono">{row.avg_sparks.toFixed(1)}</td>
-                        <td className={cn('p-2 text-right font-mono', row.failure_count > 0 ? 'text-red-600 dark:text-red-400' : '')}>
+                        <td data-label="Provider" className="p-2">{row.provider}</td>
+                        <td data-label="Count" className="p-2 text-right font-mono">{row.count}</td>
+                        <td data-label="Avg Sparks" className="p-2 text-right font-mono">{row.avg_sparks.toFixed(1)}</td>
+                        <td data-label="Failures" className={cn('p-2 text-right font-mono', row.failure_count > 0 ? 'text-red-600 dark:text-red-400' : '')}>
                           {row.failure_count}
                         </td>
                       </tr>

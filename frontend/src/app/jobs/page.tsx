@@ -112,7 +112,7 @@ export default function JobsPage() {
   );
 
   return (
-    <div className="flex items-start gap-5">
+    <div className="mobile-account flex items-start gap-5">
       <div className="min-w-0 flex-1 space-y-4">
         <h1 className="text-xl font-semibold tracking-tight">Jobs</h1>
         <div role="group" aria-label="Job status" className="inline-flex flex-wrap gap-1 rounded-lg bg-muted p-1">
@@ -239,7 +239,7 @@ function BatchImagesPill({ job }: { job: Job }) {
       </button>
 
       {open && (
-        <div className="absolute z-50 top-full mt-1 left-0 bg-card border border-border rounded-lg shadow-lg p-3 w-64 max-h-80 overflow-y-auto">
+        <div className="mobile-job-images absolute z-50 top-full mt-1 left-0 bg-card border border-border rounded-lg shadow-lg p-3 w-64 max-h-80 overflow-y-auto">
           {loading ? (
             <div className="flex items-center justify-center py-4">
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />

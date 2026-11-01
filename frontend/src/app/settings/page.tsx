@@ -248,7 +248,7 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[880px] space-y-5">
+    <div className="mobile-account mx-auto w-full max-w-[880px] space-y-5">
       <div>
         <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
         <div className="flex flex-wrap gap-1 bg-muted rounded-lg p-1 mt-4 w-fit">

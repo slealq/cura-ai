@@ -74,7 +74,7 @@ export default function OperationsMonitor() {
       <h2 className="text-lg font-semibold">Operations Monitor</h2>
 
       {/* Sub-tab bar */}
-      <div className="flex gap-1 border-b">
+      <div className="admin-tabs flex gap-1 border-b">
         {TABS.map((tab) => (
           <button
             key={tab}
@@ -153,7 +153,7 @@ export default function OperationsMonitor() {
 
       {/* Results table */}
       <div className="border rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
+        <table className="mobile-cards w-full text-sm">
           <thead className="bg-muted/50">
             <tr>
               <th className="text-left p-2 font-medium">Trace ID</th>
@@ -173,13 +173,13 @@ export default function OperationsMonitor() {
             ) : (
               data.items.map((d: CostDecisionEntry) => (
                 <tr key={d.id} className="border-t hover:bg-muted/30 cursor-pointer" onClick={() => d.trace_id && setSelectedTraceId(d.trace_id)}>
-                  <td className="p-2 font-mono text-xs">{truncate(d.trace_id, 12)}</td>
-                  <td className="p-2">{d.operation}</td>
-                  <td className="p-2 text-xs">{d.provider}/{truncate(d.model, 20)}</td>
-                  <td className="p-2"><StatusBadge status={d.status} /></td>
-                  <td className="p-2 text-right font-mono">{d.estimated_sparks ?? '-'}</td>
-                  <td className="p-2 text-right">{d.image_id ?? d.resource_id ?? '-'}</td>
-                  <td className="p-2 text-xs text-muted-foreground">{formatDateCompact(d.created_at)}</td>
+                  <td data-label="Trace ID" className="p-2 font-mono text-xs">{truncate(d.trace_id, 12)}</td>
+                  <td data-label="Operation" className="p-2">{d.operation}</td>
+                  <td data-label="Provider / Model" className="p-2 text-xs">{d.provider}/{truncate(d.model, 20)}</td>
+                  <td data-label="Status" className="p-2"><StatusBadge status={d.status} /></td>
+                  <td data-label="Est. Sparks" className="p-2 text-right font-mono">{d.estimated_sparks ?? '-'}</td>
+                  <td data-label="Image ID" className="p-2 text-right">{d.image_id ?? d.resource_id ?? '-'}</td>
+                  <td data-label="Created" className="p-2 text-xs text-muted-foreground">{formatDateCompact(d.created_at)}</td>
                 </tr>
               ))
             )}
@@ -250,7 +250,7 @@ function TraceDetailDrawer({
     <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
       <div className="absolute inset-0 bg-black/20" />
       <div
-        className="relative w-full max-w-2xl bg-background border-l shadow-xl overflow-y-auto"
+        className="mobile-trace-sheet relative w-full max-w-2xl bg-background border-l shadow-xl overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="sticky top-0 bg-background border-b p-4 flex items-center justify-between">

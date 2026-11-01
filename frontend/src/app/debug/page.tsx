@@ -61,7 +61,7 @@ export default function DebugPage() {
   const totalPages = logs ? Math.ceil(logs.total / limit) : 0;
 
   return (
-    <div className="space-y-6">
+    <div className="mobile-account space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -151,7 +151,7 @@ export default function DebugPage() {
         </div>
       ) : (
         <div className="bg-card rounded-xl border border-border overflow-hidden">
-          <table className="w-full">
+          <table className="mobile-cards w-full">
             <thead className="bg-muted/50">
               <tr>
                 <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground">
@@ -232,7 +232,7 @@ function LogRow({ log }: { log: LogEntry }) {
         )}
         onClick={() => hasDetails && setExpanded(!expanded)}
       >
-        <td className="px-3 py-2 font-mono text-muted-foreground whitespace-nowrap">
+        <td data-label="Time" className="px-3 py-2 font-mono text-muted-foreground whitespace-nowrap">
           <span className="inline-flex items-center gap-1">
             {hasDetails && (
               expanded
@@ -242,7 +242,7 @@ function LogRow({ log }: { log: LogEntry }) {
             {formatDateCompact(log.created_at)}
           </span>
         </td>
-        <td className="px-3 py-2">
+        <td data-label="Level" className="px-3 py-2">
           <span
             className={cn(
               'px-1.5 py-0.5 rounded text-[10px] font-medium uppercase',
@@ -252,13 +252,13 @@ function LogRow({ log }: { log: LogEntry }) {
             {log.level}
           </span>
         </td>
-        <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
+        <td data-label="Category" className="px-3 py-2 text-muted-foreground whitespace-nowrap">
           {CATEGORY_LABELS[log.category] || log.category}
         </td>
-        <td className="px-3 py-2 max-w-md">
+        <td data-label="Message" className="px-3 py-2 max-w-md">
           <span className="truncate block">{log.message}</span>
         </td>
-        <td className="px-3 py-2 whitespace-nowrap">
+        <td data-label="Provider / Model" className="px-3 py-2 whitespace-nowrap">
           {log.provider ? (
             <span className="font-mono text-muted-foreground">
               {log.provider}
@@ -270,14 +270,14 @@ function LogRow({ log }: { log: LogEntry }) {
             <span className="text-muted-foreground">-</span>
           )}
         </td>
-        <td className="px-3 py-2 font-mono whitespace-nowrap">
+        <td data-label="Tokens" className="px-3 py-2 font-mono whitespace-nowrap">
           {tokens != null ? (
             <span>{tokens.toLocaleString()}</span>
           ) : (
             <span className="text-muted-foreground">-</span>
           )}
         </td>
-        <td className="px-3 py-2 font-mono whitespace-nowrap">
+        <td data-label="Duration" className="px-3 py-2 font-mono whitespace-nowrap">
           {log.duration_ms != null ? (
             <span>
               {log.duration_ms >= 1000
