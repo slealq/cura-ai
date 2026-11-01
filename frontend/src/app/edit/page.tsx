@@ -472,7 +472,7 @@ function EditPageInner() {
   const results = images.length > 0 ? (
     <div aria-label="Results" className="flex shrink-0 items-center gap-1 overflow-x-auto">
       <span className="mr-1 text-xs text-muted-foreground">Results</span>
-      {[...images].sort((a, b) => b.id - a.id).map((image) => (
+      {images.filter(image => image.status !== 'failed').sort((a, b) => b.id - a.id).map((image) => (
         <button
           key={image.id}
           onClick={() => setSelectedImageId(image.id)}

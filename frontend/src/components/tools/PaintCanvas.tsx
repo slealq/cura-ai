@@ -28,6 +28,18 @@ export default function PaintCanvas({ source, value, onChange, region }: {
   const [erase, setErase] = useState(false);
   const [visible, setVisible] = useState(true);
   const [dimensions, setDimensions] = useState({ width: 1, height: 1 });
+  const viewport = useRef<HTMLDivElement>(null);
+  const [area, setArea] = useState({ width: 0, height: 0 });
+  // Painting blocks page scrolling, so on phones the whole image must fit the space it has.
+  const fitWidth = Math.min(area.width, area.height * dimensions.width / dimensions.height);
+
+  useEffect(() => {
+    if (!viewport.current) return;
+    const observer = new ResizeObserver(([entry]) => setArea({ width: entry.contentRect.width, height: entry.contentRect.height }));
+    observer.observe(viewport.current);
+    return () => observer.disconnect();
+  }, [source]);
+
 
   useEffect(() => {
     const context = canvas.current?.getContext('2d');
@@ -129,8 +141,8 @@ export default function PaintCanvas({ source, value, onChange, region }: {
         <span className="font-mono">{(value?.percent ?? 0).toFixed(1)}% selected</span>
       </div>
       {source ? (
-        <div className="paint-viewport min-h-0 flex-1 overflow-hidden">
-        <div className="paint-image relative mx-auto w-full max-w-[900px]" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`, '--paint-ratio': dimensions.width / dimensions.height, aspectRatio: `${dimensions.width}/${dimensions.height}`, width: `min(100%, ${55 * dimensions.width / dimensions.height}vh)` } as React.CSSProperties}>
+        <div ref={viewport} className="paint-viewport min-h-0 flex-1 overflow-hidden">
+        <div className="paint-image relative mx-auto w-full max-w-[900px]" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`, '--paint-width': `${fitWidth}px`, aspectRatio: `${dimensions.width}/${dimensions.height}`, width: `min(100%, ${55 * dimensions.width / dimensions.height}vh)` } as React.CSSProperties}>
           <LibraryImage src={source} alt="Base image to paint" className="absolute inset-0 h-full w-full" onLoad={event => {
             const image = event.currentTarget;
             setDimensions({ width: image.naturalWidth, height: image.naturalHeight });
