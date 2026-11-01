@@ -74,6 +74,12 @@ def _update_job_status(db: Session, job_id: int | None, status: JobStatus, **kwa
     db.commit()
 
 
+def _update_child_job_status(db, job_id: int | None, from_batch: bool, status: JobStatus, **kwargs):
+    """Children share the batch's job, so only the batch task may finish it."""
+    if not from_batch:
+        _update_job_status(db, job_id, status, **kwargs)
+
+
 def _unwrap_error(e: Exception) -> str:
     """Extract a bounded error without inline image payloads."""
     return readable_error(e)
@@ -658,7 +664,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
         ) as b_gen:
             if b_gen.skipped:
                 logger.info("Duplicate generate detected for %s, skipping", generated_image_id)
-                _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
+                _update_child_job_status(db, job_id, from_batch, JobStatus.COMPLETED, progress=1)
                 return {"status": "skipped", "generated_image_id": generated_image_id}
 
             # Store billing context for cancellation handling in except block
@@ -697,7 +703,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
             )
         )
 
-        _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
+        _update_child_job_status(db, job_id, from_batch, JobStatus.COMPLETED, progress=1)
 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(
@@ -711,7 +717,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
         return {"status": "success", "generated_image_id": generated_image_id}
 
     except InsufficientBalanceError:
-        _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
+        _update_child_job_status(db, job_id, from_batch, JobStatus.FAILED, error_message="Insufficient credits")
         gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
         if gen:
             gen.status = GenerationStatus.FAILED
@@ -719,7 +725,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
             db.commit()
         return {"status": "error", "message": "Insufficient credits"}
     except ZeroCostEstimateError as e:
-        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {_unwrap_error(e)}")
+        _update_child_job_status(db, job_id, from_batch, JobStatus.FAILED, error_message=f"Billing config error: {_unwrap_error(e)}")
         gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
         if gen:
             gen.status = GenerationStatus.FAILED
@@ -768,7 +774,7 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
             gen.status = GenerationStatus.FAILED
             gen.error_message = err_msg
             db.commit()
-        _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
+        _update_child_job_status(db, job_id, from_batch, JobStatus.FAILED, error_message=err_msg)
         raise
     finally:
         if not from_batch and job_id:
@@ -782,19 +788,24 @@ def generate_image(self, generated_image_id: int, job_id: int | None = None, use
         db.close()
 
 
-def _mark_generated_images_cancelled(db: Session, generated_image_ids: list[int]) -> None:
-    """Mark pending/generating images as failed due to cancellation."""
+def _fail_unfinished_images(db: Session, generated_image_ids: list[int], message: str) -> None:
+    """Fail images that have not finished, so a batch never waits on them."""
     db.query(GeneratedImage).filter(
         GeneratedImage.id.in_(generated_image_ids),
         GeneratedImage.status.in_([GenerationStatus.PENDING, GenerationStatus.GENERATING]),
     ).update(
         {
             GeneratedImage.status: GenerationStatus.FAILED,
-            GeneratedImage.error_message: "Cancelled by user",
+            GeneratedImage.error_message: message,
         },
         synchronize_session="fetch",
     )
     db.commit()
+
+
+def _mark_generated_images_cancelled(db: Session, generated_image_ids: list[int]) -> None:
+    """Mark pending/generating images as failed due to cancellation."""
+    _fail_unfinished_images(db, generated_image_ids, "Cancelled by user")
 
 
 @celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
@@ -838,6 +849,10 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
                 if job and job.status == JobStatus.CANCELLED:
                     _mark_generated_images_cancelled(db, generated_image_ids)
                     return {"status": "cancelled", "total": len(generated_image_ids)}
+                # A recovery sweep can fail the job; children would then never run.
+                if job and job.status == JobStatus.FAILED:
+                    _fail_unfinished_images(db, generated_image_ids, job.error_message or "Job failed")
+                    return {"status": "failed", "total": len(generated_image_ids)}
 
             done_count = (
                 db.query(GeneratedImage)
@@ -1139,7 +1154,7 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
         ) as b_edit:
             if b_edit.skipped:
                 logger.info("Duplicate edit detected for %s, skipping", generated_image_id)
-                _update_job_status(db, job_id, JobStatus.COMPLETED, progress=1)
+                _update_child_job_status(db, job_id, from_batch, JobStatus.COMPLETED, progress=1)
                 return {"status": "skipped", "generated_image_id": generated_image_id}
 
             _edit_billing_ctx = b_edit
@@ -1181,7 +1196,7 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
                 job.result = {"total": len(output_ids), "succeeded": len(result.images),
                               "failed": max(0, len(output_ids) - len(result.images))}
                 db.commit()
-        _update_job_status(db, job_id, JobStatus.COMPLETED, progress=len(result.images))
+        _update_child_job_status(db, job_id, from_batch, JobStatus.COMPLETED, progress=len(result.images))
 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(
@@ -1195,7 +1210,7 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
         return {"status": "success", "generated_image_id": generated_image_id}
 
     except InsufficientBalanceError:
-        _update_job_status(db, job_id, JobStatus.FAILED, error_message="Insufficient credits")
+        _update_child_job_status(db, job_id, from_batch, JobStatus.FAILED, error_message="Insufficient credits")
         gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
         if gen:
             gen.status = GenerationStatus.FAILED
@@ -1203,7 +1218,7 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
             db.commit()
         return {"status": "error", "message": "Insufficient credits"}
     except ZeroCostEstimateError as e:
-        _update_job_status(db, job_id, JobStatus.FAILED, error_message=f"Billing config error: {_unwrap_error(e)}")
+        _update_child_job_status(db, job_id, from_batch, JobStatus.FAILED, error_message=f"Billing config error: {_unwrap_error(e)}")
         gen = db.query(GeneratedImage).filter(GeneratedImage.id == generated_image_id).first()
         if gen:
             gen.status = GenerationStatus.FAILED
@@ -1250,7 +1265,7 @@ def edit_image(self, generated_image_id: int, job_id: int | None = None, user_id
             gen.status = GenerationStatus.FAILED
             gen.error_message = err_msg
             db.commit()
-        _update_job_status(db, job_id, JobStatus.FAILED, error_message=err_msg)
+        _update_child_job_status(db, job_id, from_batch, JobStatus.FAILED, error_message=err_msg)
         raise
     finally:
         if series_ids:
@@ -1312,6 +1327,10 @@ def batch_edit(self, generated_image_ids: list[int], job_id: int | None = None, 
                 if job and job.status == JobStatus.CANCELLED:
                     _mark_generated_images_cancelled(db, generated_image_ids)
                     return {"status": "cancelled", "total": len(generated_image_ids)}
+                # A recovery sweep can fail the job; children would then never run.
+                if job and job.status == JobStatus.FAILED:
+                    _fail_unfinished_images(db, generated_image_ids, job.error_message or "Job failed")
+                    return {"status": "failed", "total": len(generated_image_ids)}
 
             done_count = (
                 db.query(GeneratedImage)
