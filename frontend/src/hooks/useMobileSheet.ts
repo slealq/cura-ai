@@ -4,7 +4,7 @@ import { useEffect, useRef } from 'react';
 
 /** Keep keyboard focus inside a phone sheet and return it to the opener. */
 export function useMobileSheet(open: boolean, onClose: () => void) {
-  const ref = useRef<HTMLElement>(null);
+  const ref = useRef<HTMLElement | null>(null);
   const close = useRef(onClose);
   close.current = onClose;
   useEffect(() => {

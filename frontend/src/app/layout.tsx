@@ -59,7 +59,12 @@ function AppShell({ children }: { children: React.ReactNode }) {
   useJobNotifications();
   const pathname = usePathname();
   const tool = ['/edit', '/generate', '/vision', '/search'].includes(pathname);
-  const title = ({ '/collection': 'Collection', '/studio': 'Studio', '/account': 'Account', '/edit': 'Edit', '/generate': 'Create', '/vision': 'Vision', '/search': 'Search' } as Record<string, string>)[pathname] ?? pathname.split('/')[1].replace(/^./, c => c.toUpperCase());
+  // Every page under a tab goes back to that tab's hub.
+  const parent = ['/collection', '/studio', '/account'].includes(pathname) ? null
+    : ['/edit', '/generate', '/vision', '/models'].some(path => pathname.startsWith(path)) ? '/studio'
+    : ['/billing', '/jobs', '/notifications', '/settings', '/admin', '/debug'].some(path => pathname.startsWith(path)) ? '/account'
+    : '/collection';
+  const title = ({ '/images': 'All images', '/collection': 'Collection', '/studio': 'Studio', '/account': 'Account', '/edit': 'Edit', '/generate': 'Create', '/vision': 'Vision', '/search': 'Search' } as Record<string, string>)[pathname] ?? pathname.split('/')[1].replace(/^./, c => c.toUpperCase());
 
   return (
     <>
@@ -70,7 +75,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           <Header />
           <div className="mobile-topbar flex shrink-0 items-center gap-2 border-b border-border px-3 md:hidden">
-            {tool && <Link href={pathname === '/search' ? '/collection' : '/studio'} className="flex min-h-10 items-center text-sm">Back</Link>}
+            {parent && <Link href={parent} className="flex min-h-10 items-center pr-1 text-sm">Back</Link>}
             <h1 className="text-lg font-semibold">{title}</h1>
             <MobileStatus />
           </div>

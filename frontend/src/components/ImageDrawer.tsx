@@ -1,5 +1,6 @@
 'use client';
 
+import { useMobileSheet } from '@/hooks/useMobileSheet';
 import LibraryImage from '@/components/LibraryImage';
 import ImageHistoryPanel from './ImageHistoryPanel';
 
@@ -29,7 +30,14 @@ interface ImageDrawerProps {
 
 export default function ImageDrawer({ image, onClose, images, onNavigate, onTool }: ImageDrawerProps) {
   const [tab, setTab] = useState('Details');
-  const [mobileDetails, setMobileDetails] = useState(false);
+  const [detailHeight, setDetailHeight] = useState<'peek' | 'half' | 'full'>(image.source === 'generated' || image.source === 'edited' ? 'half' : 'peek');
+  const [more, setMore] = useState(false);
+  const grabStart = useRef(0);
+  const mobileRef = useMobileSheet(!!images, onClose);
+  const resizeDetails = (delta = 0) => {
+    const heights = ['peek', 'half', 'full'] as const;
+    setDetailHeight(previous => heights[delta ? Math.max(0, Math.min(2, heights.indexOf(previous) + (delta < 0 ? 1 : -1))) : (heights.indexOf(previous) + 1) % 3]);
+  };
   const touchStart = useRef({ x: 0, y: 0 });
   const index = images?.findIndex((i) => i.id === image.id) ?? -1;
   const navigate = useCallback(
@@ -60,11 +68,11 @@ export default function ImageDrawer({ image, onClose, images, onNavigate, onTool
   const [maxTokensDescribe, setMaxTokensDescribe] = useState<number | null>(null);
 
   const isViewer = !!images;
-  const viewerRef = useRef<HTMLDivElement>(null);
+  const viewerRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!isViewer) return;
     const previousFocus = document.activeElement as HTMLElement | null;
-    viewerRef.current?.querySelector<HTMLButtonElement>('[data-viewer-close]')?.focus();
+    Array.from(viewerRef.current?.querySelectorAll<HTMLButtonElement>('[data-viewer-close]') ?? []).find(button => button.getClientRects().length)?.focus();
     const previous = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
@@ -344,7 +352,7 @@ export default function ImageDrawer({ image, onClose, images, onNavigate, onTool
 
       {/* Drawer */}
       <div
-        ref={viewerRef}
+        ref={element => { viewerRef.current = element; mobileRef.current = element; }}
         onTouchStart={e => { touchStart.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; }}
         onTouchEnd={e => {
           if (window.innerWidth >= 768 || (e.target as HTMLElement).closest('[data-viewer-info]')) return;
@@ -405,18 +413,29 @@ export default function ImageDrawer({ image, onClose, images, onNavigate, onTool
             </div>
           </div>
         )}
-        {images && <div className="viewer-mobile-controls hidden max-md:flex absolute inset-x-0 top-0 z-10 items-center justify-between p-3">
-          <button aria-label="Close image" onClick={onClose} className="rounded-full bg-background p-3"><X /></button>
-          <button onClick={() => setMobileDetails(true)} className="rounded-full bg-background px-4 py-3">Details / Tags / Description</button>
-        </div>}
+        {images && (
+          <div className="viewer-mobile-controls hidden max-md:flex absolute inset-x-0 top-0 z-10 items-center justify-between p-3 text-white">
+            <button data-viewer-close onClick={onClose} className="min-h-10 px-3">Close</button>
+            <span>{index >= 0 ? `${index + 1} of ${images.length}` : 'Linked image'}</span>
+            <button className="min-h-10 px-3" disabled={index >= images.length - 1} onClick={() => navigate(1)}>Next</button>
+          </div>
+        )}
         <div
           data-viewer-info
-          data-open={mobileDetails}
-          className={
-            images ? 'viewer-info flex w-[380px] max-w-full shrink-0 flex-col border-l border-border max-md:w-full' : ''
-          }
+          data-height={detailHeight}
+          className={images ? 'viewer-info flex w-[380px] max-w-full shrink-0 flex-col border-l border-border max-md:w-full' : ''}
         >
-          {images && <button className="hidden max-md:block border-b border-border p-2" onClick={() => setMobileDetails(false)}>Close details</button>}
+          {images && (
+            <button className="viewer-grab hidden max-md:block min-h-[84px] shrink-0 px-5 text-left"
+              aria-label="Resize image details" aria-expanded={detailHeight !== 'peek'}
+              onPointerDown={e => { grabStart.current = e.clientY; e.currentTarget.setPointerCapture(e.pointerId); }}
+              onPointerUp={e => { const delta = e.clientY - grabStart.current; resizeDetails(Math.abs(delta) > 24 ? delta : 0); }}
+              onClick={e => { if (e.detail === 0) resizeDetails(); }}>
+              <span className="mx-auto mb-3 block h-1 w-10 rounded bg-muted-foreground" />
+              <b className="block">{image.source === 'generated' || image.source === 'edited' ? 'How it was made' : liveImage.original_filename}</b>
+              <small>{image.source === 'generated' || image.source === 'edited' ? image.source : 'Uploaded'} · {image.width} × {image.height}</small>
+            </button>
+          )}
           {/* Header */}
           <div className="sticky top-0 bg-card border-b border-border px-6 py-4 flex items-center justify-between">
             <h2 className="font-semibold truncate">{liveImage.original_filename || liveImage.object_key}</h2>
@@ -762,7 +781,19 @@ export default function ImageDrawer({ image, onClose, images, onNavigate, onTool
             )}
           </div>
           {images && onTool && (
-            <footer className="flex flex-wrap gap-2 border-t border-border bg-background p-3">
+            <div className="viewer-phone-actions hidden max-md:flex shrink-0 flex-wrap justify-around border-t border-border p-3">
+              <button onClick={() => onTool('Edit', liveImage)}>Edit</button>
+              <button onClick={() => onTool('Ask Vision', liveImage)}>Ask</button>
+              <button aria-expanded={more} onClick={() => setMore(!more)}>More</button>
+              <button className="text-danger" onClick={() => onTool('Delete', liveImage)}>Delete</button>
+              {more && <div className="w-full flex flex-wrap gap-4">
+                {(['Add to folder', 'Describe', 'Train model'] as InspectorTool[]).map(action => <button key={action} onClick={() => onTool(action, liveImage)}>{action}</button>)}
+                <button onClick={() => void download()}>Download</button>
+              </div>}
+            </div>
+          )}
+          {images && onTool && (
+            <footer className="viewer-desktop-actions flex flex-wrap gap-2 border-t border-border bg-background p-3">
               {(['Edit', 'Describe', 'Ask Vision', 'Add to folder', 'Delete'] as InspectorTool[]).map(
                 (tool) => (
                   <button

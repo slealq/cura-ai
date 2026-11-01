@@ -1,5 +1,6 @@
 'use client';
 
+import { useMobileSheet } from '@/hooks/useMobileSheet';
 import LibraryThumbnail from '@/components/LibraryThumbnail';
 
 import Link from 'next/link';
@@ -108,7 +109,9 @@ function Tile({
   selecting,
   onOpen,
   onToggle,
+  order,
 }: {
+  order: number;
   image: Image;
   selected: boolean;
   selecting: boolean;
@@ -131,6 +134,7 @@ function Tile({
 
   return (
     <div
+      data-image-id={image.id}
       data-selecting={selecting}
       className={cn(
         'library-tile group relative h-full overflow-hidden rounded-md bg-muted',
@@ -176,7 +180,8 @@ function Tile({
             (selecting ? 'opacity-100' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100')
         )}
       >
-        <Check className={cn('h-3 w-3', selected ? 'opacity-100' : 'opacity-0')} strokeWidth={3} />
+        <span className="md:hidden">{selected ? order : ''}</span>
+        <Check className={cn('hidden md:block h-3 w-3', selected ? 'opacity-100' : 'opacity-0')} strokeWidth={3} />
       </button>
       {(image.source === 'generated' || image.source === 'edited') && (
         <span className="pointer-events-none absolute bottom-2 left-2 rounded bg-black/45 px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wider text-white backdrop-blur">
@@ -237,7 +242,7 @@ function AppendOnlyGrid({ images, density, children }: {
     update(); media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);
   }, []);
-  const count = phone ? ({ S: 3, M: 2, L: 1 }[density]) : Math.max(1, Math.floor((width + 8) / (COLUMN_WIDTH[density] + 8)));
+  const count = phone ? ({ S: 5, M: 3, L: 2 }[density]) : Math.max(1, Math.floor((width + 8) / (COLUMN_WIDTH[density] + 8)));
   const tileWidth = (width - (count - 1) * 8) / count;
   let current = layout.current;
   if (current.count !== count || current.density !== density ||
@@ -294,7 +299,7 @@ function ImageGridContent({
   const entryTool = searchParams.get('tool');
   const entryHint = searchParams.get('hint');
   const sourceParam = searchParams.get('source') as SourceKey | null;
-  const source = showSourceFilter && SOURCE_FILTERS.some((s) => s.key === sourceParam) ? sourceParam : null;
+  const source = SOURCE_FILTERS.some((s) => s.key === sourceParam) ? sourceParam : null;
 
   const [inspectorHidden, setInspectorHidden] = useState(false);
   const [wide, setWide] = useState(false);
@@ -326,6 +331,11 @@ function ImageGridContent({
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [density, setDensity] = useState<Density>('M');
+  const [mobileMenu, setMobileMenu] = useState<'jobs' | 'more' | 'actions' | null>(null);
+  const sheetRef = useMobileSheet(!!mobileMenu, () => setMobileMenu(null));
+  const inspectorRef = useMobileSheet(mobileInspector || !!tool, () => { setMobileInspector(false); setTool(null); });
+  const gesture = useRef<{ x: number; y: number; timer?: ReturnType<typeof setTimeout>; sweeping: boolean; suppress: boolean }>({ x: 0, y: 0, sweeping: false, suppress: false });
+  useEffect(() => () => clearTimeout(gesture.current.timer), []);
   const [showDescribeAll, setShowDescribeAll] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
@@ -387,8 +397,8 @@ function ImageGridContent({
 
   const deleting = useDeletingImages();
   const images = useMemo(
-    () => (data?.pages.flatMap((p) => p.items) ?? []).filter((image) => !deleting.has(image.id)),
-    [data, deleting]
+    () => (data?.pages.flatMap((p) => p.items) ?? []).filter((image) => !deleting.has(image.id) && (!folderId || !source || image.source === source)),
+    [data, deleting, folderId, source]
   );
   const total = data?.pages[0]?.total ?? 0;
 
@@ -444,19 +454,60 @@ function ImageGridContent({
     return () => document.removeEventListener('keydown', onKey);
   }, [selecting, openImage, tool]);
 
+  useEffect(() => {
+    if (selecting) document.body.classList.add('mobile-library-selecting');
+    else document.body.classList.remove('mobile-library-selecting');
+    return () => document.body.classList.remove('mobile-library-selecting');
+  }, [selecting]);
+
+  const mobileTool = (next: InspectorTool) => {
+    setMobileMenu(null);
+    setTool(next);
+    setMobileInspector(true);
+  };
   const dockButton =
     'flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium text-primary-foreground/90 transition-colors hover:bg-primary-foreground/10 hover:text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50';
 
   return (
-    <div className="flex items-start gap-5">
+    <div className="mobile-library flex items-start gap-5"
+      onContextMenu={e => { if (window.innerWidth < 768 && (e.target as HTMLElement).closest('[data-image-id]')) e.preventDefault(); }}
+      onPointerDown={e => {
+        if (window.innerWidth >= 768 || !e.isPrimary) return;
+        const tile = (e.target as HTMLElement).closest<HTMLElement>('[data-image-id]');
+        if (!tile) return;
+        const id = Number(tile.dataset.imageId);
+        clearTimeout(gesture.current.timer);
+        gesture.current = { x: e.clientX, y: e.clientY, sweeping: false, suppress: false };
+        gesture.current.timer = setTimeout(() => {
+          gesture.current.sweeping = true;
+          gesture.current.suppress = true;
+          setSelectMode(true);
+          setSelectedIds(prev => new Set([...Array.from(prev), id]));
+        }, 450);
+      }}
+      onPointerMove={e => {
+        const g = gesture.current;
+        if (Math.hypot(e.clientX - g.x, e.clientY - g.y) > 8) clearTimeout(g.timer);
+        if (!g.sweeping) return;
+        const tile = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>('[data-image-id]');
+        if (tile) setSelectedIds(prev => new Set([...Array.from(prev), Number(tile.dataset.imageId)]));
+      }}
+      onPointerUp={() => { clearTimeout(gesture.current.timer); gesture.current.sweeping = false; }}
+      onPointerCancel={() => { clearTimeout(gesture.current.timer); gesture.current.sweeping = false; }}
+      onClickCapture={e => {
+        if (gesture.current.suppress) { e.preventDefault(); e.stopPropagation(); gesture.current.suppress = false; }
+      }}
+    >
       <div className="min-w-0 flex-1 space-y-3">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <h1 className="flex items-baseline gap-2 text-xl font-semibold tracking-tight">
+          <h1 className={`flex items-baseline gap-2 text-xl font-semibold tracking-tight ${title === 'All images' ? 'max-md:hidden' : ''}`}>
             {title}
             <span className="font-mono text-[13px] font-normal tabular-nums text-muted-foreground">
               {total}
             </span>
           </h1>
+          <button className="md:hidden ml-auto min-h-10" onClick={() => selecting ? clearSelection() : setSelectMode(true)}>{selecting ? `Done · ${selectedIds.size}` : 'Select'}</button>
+          {(headerActions || inspectorOverview) && <button className="md:hidden min-h-10" onClick={() => setMobileMenu('actions')}>Options</button>}
           <button
             aria-pressed={inspectorVisible}
             onClick={() => {
@@ -471,7 +522,7 @@ function ImageGridContent({
             {inspectorVisible ? 'Hide inspector' : 'Show inspector'}
           </button>
           {headerActions && (
-            <div className="ml-auto flex flex-wrap items-center gap-1.5">{headerActions}</div>
+            <div className="ml-auto hidden md:flex flex-wrap items-center gap-1.5">{headerActions}</div>
           )}
         </div>
         {!inspectorVisible && (
@@ -480,7 +531,7 @@ function ImageGridContent({
               setMobileInspector(true);
               setTool('Create');
             }}
-            className="rounded-md border border-border px-3 py-1.5 text-sm"
+            className="hidden md:block rounded-md border border-border px-3 py-1.5 text-sm"
           >
             Create
           </button>
@@ -498,11 +549,12 @@ function ImageGridContent({
         )}
 
         <div className="library-filters flex flex-wrap items-center gap-2">
-          <button className="hidden max-md:block rounded-md border border-border px-3 text-sm" aria-pressed={selectMode} onClick={() => { setSelectMode(!selectMode); setSelectedIds(new Set()); }}>{selectMode ? 'Done' : 'Select'}</button>
-          {showSourceFilter && (
+          <button className="hidden rounded-md border border-border px-3 text-sm" aria-pressed={selectMode} onClick={() => { setSelectMode(!selectMode); setSelectedIds(new Set()); }}>{selectMode ? 'Done' : 'Select'}</button>
+          <button className="md:hidden min-h-10 rounded-full border border-border px-4" onClick={() => setDensity(density === 'L' ? 'M' : density === 'M' ? 'S' : 'L')}>Size · {({ S: 5, M: 3, L: 2 })[density]}</button>
+          <div className={showSourceFilter ? '' : 'md:hidden'}>
             <Segmented label="Source" options={SOURCE_FILTERS} value={source} onChange={changeSource} />
-          )}
-          <div className="ml-auto flex items-center gap-1.5">
+          </div>
+          <div className="ml-auto hidden md:flex items-center gap-1.5">
             {folderId && (
               <button
                 onClick={() => setShowDescribeAll(true)}
@@ -568,6 +620,7 @@ function ImageGridContent({
                 <Tile
                   key={image.id}
                   image={image}
+                  order={Array.from(selectedIds).indexOf(image.id) + 1}
                   selected={selectedIds.has(image.id)}
                   selecting={selecting}
                   onOpen={() => setOpenImage(image)}
@@ -575,18 +628,44 @@ function ImageGridContent({
                 />
               )}
             </AppendOnlyGrid>
-            <div ref={sentinelRef} className="flex h-10 items-center justify-center">
-              {isFetchingNextPage && <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />}
-            </div>
+
           </>
         )}
 
+        <div ref={sentinelRef} className="flex h-10 items-center justify-center">
+          {isFetchingNextPage && <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />}
+        </div>
+        {selecting && (
+          <div className="mobile-selection-bar md:hidden" role="toolbar" aria-label="Selection actions">
+            <button disabled={!selectedIds.size} onClick={() => setMobileMenu('jobs')}>Edit</button>
+            <button disabled={!selectedIds.size} onClick={() => mobileTool('Ask Vision')}>Ask</button>
+            <button disabled={!selectedIds.size} onClick={() => mobileTool('Add to folder')}>Folder</button>
+            <button disabled={!selectedIds.size} onClick={() => mobileTool('Train model')}>Train</button>
+            <button onClick={() => setMobileMenu('more')}>More</button>
+          </div>
+        )}
+        {mobileMenu && (
+          <div className="md:hidden fixed inset-0 z-[60] bg-black/50" onClick={() => setMobileMenu(null)}>
+            <section ref={sheetRef} role="dialog" aria-modal="true" aria-label="Library actions" className="mobile-sheet absolute inset-x-0 bottom-0 max-h-[85dvh] overflow-y-auto rounded-t-2xl bg-background p-4 space-y-3" onClick={e => e.stopPropagation()}>
+              <button className="min-h-10" onClick={() => setMobileMenu(null)}>Close</button>
+              {mobileMenu === 'jobs' ? <>
+                <h2 className="font-semibold">What do you want to do?</h2>
+                {([['describe', 'Describe the change'], ['paint', 'Paint an area'], ['objects', 'Arrange objects'], ['subject', 'Keep a subject']] as const).map(([job, label]) => (
+                  <button key={job} className="block min-h-12 w-full text-left" onClick={() => router.push(`/edit?job=${job}&sources=${Array.from(selectedIds).join(',')}`)}>{label}</button>
+                ))}
+              </> : mobileMenu === 'actions' ? <>{headerActions}{inspectorOverview}</> : <>
+                <button className="block min-h-12" onClick={() => setSelectedIds(previous => new Set([...Array.from(previous), ...images.map(image => image.id)]))}>Select all loaded</button>
+                {(['Describe', 'Recluster library', 'Remove from folder', 'Delete'] as InspectorTool[]).filter(next => next !== 'Remove from folder' || folderId).map(next => <button key={next} className="block min-h-12" disabled={!selectedIds.size} onClick={() => mobileTool(next)}>{next}</button>)}
+              </>}
+            </section>
+          </div>
+        )}
         {/* Compact fallback when the inspector is hidden. */}
         {selecting && !inspectorVisible && (
           <div
             role="toolbar"
             aria-label="Selection actions"
-            className="selection-actions fixed bottom-5 left-1/2 z-40 flex max-w-[calc(100vw-24px)] -translate-x-1/2 overflow-x-auto items-center gap-0.5 whitespace-nowrap rounded-xl bg-primary p-1.5 text-primary-foreground shadow-[0_18px_40px_-12px_rgb(0_0_0/0.45)]"
+            className="hidden md:flex selection-actions fixed bottom-5 left-1/2 z-40 flex max-w-[calc(100vw-24px)] -translate-x-1/2 overflow-x-auto items-center gap-0.5 whitespace-nowrap rounded-xl bg-primary p-1.5 text-primary-foreground shadow-[0_18px_40px_-12px_rgb(0_0_0/0.45)]"
           >
             <button onClick={clearSelection} className={cn(dockButton, 'px-2')} aria-label="Clear selection">
               <X className="h-4 w-4" />
@@ -655,7 +734,11 @@ function ImageGridContent({
             images={images}
             onNavigate={setOpenImage}
             onTool={(next, image) => {
-              if (next === 'Edit') { router.push(`/edit?sources=${image.id}`); return; }
+              if (next === 'Edit') {
+                if (window.innerWidth < 768) { setSelectedIds(new Set([image.id])); setSelectMode(true); setOpenImage(null); setMobileMenu('jobs'); }
+                else router.push(`/edit?sources=${image.id}`);
+                return;
+              }
               setSelectedIds(new Set([image.id]));
               setToolImages([image]);
               setTool(next);
@@ -674,6 +757,7 @@ function ImageGridContent({
       </div>
       {(inspectorVisible || tool || mobileInspector) && (
         <div
+          ref={inspectorRef as React.RefObject<HTMLDivElement>}
           className={cn(
             'library-inspector sticky top-4 h-[calc(100vh-120px)] w-[340px] shrink-0',
             !inspectorVisible && 'fixed inset-0 z-50 h-full w-full bg-background sm:left-auto sm:w-[340px]'

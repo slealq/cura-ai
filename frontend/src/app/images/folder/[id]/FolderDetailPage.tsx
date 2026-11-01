@@ -1,7 +1,8 @@
 'use client';
 
+import { useMobileSheet } from '@/hooks/useMobileSheet';
 import { useState } from 'react';
-import { useParams, useRouter, usePathname } from 'next/navigation';
+import { useParams, useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Pencil, Trash2, Box } from 'lucide-react';
 import { toast } from 'sonner';
@@ -22,8 +23,10 @@ export default function FolderDetailPage() {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState('');
   const [editDescription, setEditDescription] = useState('');
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const searchParams = useSearchParams();
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(searchParams.get('folder_actions') === 'delete');
   const [deleteWithImages, setDeleteWithImages] = useState(false);
+  const deleteRef = useMobileSheet(showDeleteConfirm, () => setShowDeleteConfirm(false));
 
   const { data: folder, isLoading } = useQuery({
     queryKey: ['folders', folderId],
@@ -188,7 +191,9 @@ export default function FolderDetailPage() {
           />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div
-              className="bg-card rounded-xl shadow-xl max-w-sm w-full p-6 space-y-4"
+              ref={deleteRef as React.RefObject<HTMLDivElement>}
+              role="dialog" aria-modal="true" aria-label="Delete folder"
+              className="folder-delete-sheet bg-card rounded-xl shadow-xl max-w-sm w-full p-6 space-y-4"
               onClick={(e) => e.stopPropagation()}
             >
               <h3 className="text-lg font-semibold">Delete Folder</h3>

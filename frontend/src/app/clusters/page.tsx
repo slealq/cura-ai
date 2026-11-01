@@ -1,5 +1,6 @@
 'use client';
 
+import { useMobileSheet } from '@/hooks/useMobileSheet';
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -22,6 +23,8 @@ export default function ClustersPage() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [showRun, setShowRun] = useState(false);
   const [jobId, setJobId] = useState<number | null>(null);
+  const [options, setOptions] = useState(false);
+  const optionsRef = useMobileSheet(options, () => setOptions(false));
   const [mobilePanel, setMobilePanel] = useState(false);
   const [wide, setWide] = useState(false);
   const sentinel = useRef<HTMLDivElement>(null);
@@ -66,7 +69,8 @@ export default function ClustersPage() {
         <h1 className="mr-1 text-xl font-semibold">Clusters</h1><span className="font-mono text-sm text-muted-foreground">{overview?.clusters ?? '—'}</span>
         <input aria-label="Search clusters" type="search" placeholder="Search clusters" value={search} onChange={e => setSearch(e.target.value)} className="order-last w-full min-w-0 basis-full rounded-md border border-input px-3 py-1.5 text-sm md:order-none md:ml-auto md:w-auto md:flex-1 md:basis-auto md:max-w-52" />
         <div className="flex rounded-md bg-muted p-0.5" role="group" aria-label="Sort clusters">{([['size', 'Largest'], ['name', 'A–Z']] as const).map(([value, label]) => <button key={value} aria-pressed={sort === value} onClick={() => setSort(value)} className={cn('rounded px-2 py-1 text-xs', sort === value && 'bg-background shadow-sm')}>{label}</button>)}</div>
-        <button className={button} onClick={() => setShowRun(true)} disabled={jobId !== null}>Recluster</button>
+        <button className={cn(button, 'hidden md:block')} onClick={() => setShowRun(true)} disabled={jobId !== null}>Recluster</button>
+        <button className="md:hidden min-h-10" onClick={() => setOptions(true)}>Options</button>
         {!wide && <button className={button} onClick={() => setMobilePanel(true)}>Inspector{selection.length ? ` · ${selection.length}` : ''}</button>}
       </header>
       {jobId !== null ? <div className="grid h-64 place-content-center gap-3 text-center text-sm text-muted-foreground"><Loader2 className="mx-auto h-6 w-6 animate-spin" /><p>Clustering in progress…</p><p>New clusters will appear automatically when complete</p></div> : <>
@@ -85,6 +89,15 @@ export default function ClustersPage() {
         <ClusterInspector selected={selection} overview={overview} onClear={clear} onDismiss={!wide ? () => setMobilePanel(false) : undefined} />
       </div>
     </>}
+    {options && (
+      <div className="md:hidden fixed inset-0 z-50 bg-black/50" onClick={() => setOptions(false)}>
+        <section ref={optionsRef} role="dialog" aria-modal="true" aria-label="Cluster options" className="mobile-sheet absolute inset-x-0 bottom-0 rounded-t-2xl bg-background p-5 space-y-3" onClick={e => e.stopPropagation()}>
+          <button className="block min-h-10" onClick={() => setOptions(false)}>Close</button>
+          <button className="block min-h-12" disabled={jobId !== null} onClick={() => { setOptions(false); setShowRun(true); }}>Recluster library / Run settings</button>
+          <button className="block min-h-12" onClick={() => { setOptions(false); setMobilePanel(true); }}>Cluster actions</button>
+        </section>
+      </div>
+    )}
     {showRun && <ClusteringRunDialog hasClusters={(overview?.clusters || 0) > 0 || !!overview?.unclustered} onClose={() => setShowRun(false)} onStarted={id => { setShowRun(false); setJobId(id); clear(); toast.success('Clustering job started', { action: { label: 'View Jobs', onClick: () => { window.location.href = '/jobs'; } } }); }} />}
   </div>;
 }
