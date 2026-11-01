@@ -933,6 +933,14 @@ def _to_data_uri(image_data: bytes, mime_type: str = "image/jpeg") -> str:
 def _resolve_edit_sources(db: Session, gen_params: dict, user_id: int, history_inputs: list | None = None) -> list[str]:
     """Resolve source image references to data URIs for the edit provider."""
     sources = gen_params.get("sources", {})
+    if "ordered" in sources:
+        result = []
+        for source in sources["ordered"]:
+            group = {"gallery": "image_ids", "generated": "generated_ids", "upload": "upload_keys"}[source["type"]]
+            refs = {group: [source.get("key") if source["type"] == "upload" else source["id"]],
+                    "upload_names": {source.get("key"): source.get("name") or source.get("key")}}
+            result.extend(_resolve_edit_sources(db, {"sources": refs, "edit_model": gen_params.get("edit_model")}, user_id, history_inputs))
+        return result
     data_uris: list[str] = []
 
     from app.services.image_history import input_snapshot
@@ -942,7 +950,11 @@ def _resolve_edit_sources(db: Session, gen_params: dict, user_id: int, history_i
     def remember(data, filename, source_key=None, uploaded=False):
         if history_inputs is not None:
             item = _run_async(input_snapshot(storage, user_id, data, filename, source_key, uploaded=uploaded))
-            item["label"] = f"Image {len(history_inputs) + 1}"
+            index = len(history_inputs)
+            model = gen_params.get("edit_model")
+            item["label"] = (f"@Image{index + 1}" if model == "kling-image" else
+                             ("Base" if index == 0 else f"Reference {index}") if model == "ideogram-v4.5-edit" else
+                             f"Image {index + 1}")
             history_inputs.append(item)
 
     # Gallery images

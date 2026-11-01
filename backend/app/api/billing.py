@@ -2,7 +2,7 @@
 import logging
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -134,6 +134,7 @@ class GenerationCostsResponse(BaseModel):
 class GenerationEstimateRequest(BaseModel):
     """Request body for dynamic generation cost estimate."""
     base_model: str
+    operation: Literal["generate", "edit"] = "generate"
     resolution: str | None = None
     enable_web_search: bool = False
     width: int | None = None
@@ -443,7 +444,7 @@ def estimate_generation_cost(
 
     # Resolve short model name to catalog triple
     provider, model, operation = resolve_catalog_model(
-        "fal", body.base_model, "generate", with_lora=body.with_lora,
+        "fal", body.base_model, body.operation, with_lora=body.with_lora,
     )
 
     # Build params dict for pricing engine

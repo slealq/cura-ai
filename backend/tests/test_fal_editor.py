@@ -248,4 +248,4 @@ def test_edit_rejects_unknown_and_removed_models():
 def test_edit_rejects_too_many_source_images():
     editor = FalEditor(edit_model="ideogram-v4.5-edit")
     with pytest.raises(ValueError):
-        editor.build_arguments(["https://example.com/a.png", "https://example.com/b.png"], "x")
+        editor.build_arguments(["https://example.com/a.png"] * 6, "x")

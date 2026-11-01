@@ -1144,6 +1144,7 @@ export const editApi = {
     source_image_ids?: number[];
     source_generated_ids?: number[];
     source_upload_keys?: string[];
+    ordered_sources?: { type: 'gallery' | 'generated' | 'upload'; id?: number; key?: string; name?: string }[];
     source_upload_names?: Record<string, string>;
     edit_model?: string;
     image_size?: string | { width: number; height: number };
@@ -1344,6 +1345,7 @@ export const billingApi = {
 
   estimateGenerationCost: async (params: {
     base_model: string;
+    operation?: 'generate' | 'edit';
     resolution?: string;
     enable_web_search?: boolean;
     width?: number;

@@ -962,6 +962,7 @@ export interface CatalogImageParam { options?: string[]; default?: string | null
 export interface CatalogImageModel {
   key: string; label: string; vendor: string; kind: 'generate' | 'edit'; endpoint: string;
   supports_lora: boolean; trainable: boolean; params: Record<string, CatalogImageParam>;
+  jobs: ('describe' | 'paint' | 'objects' | 'subject')[];
   max_source_images: number; max_num_images: number; base_price: number; is_default: boolean;
 }
 export interface ModelCatalog {

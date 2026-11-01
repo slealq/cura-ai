@@ -41,7 +41,7 @@ def snapshot(db, gen, inputs=None, partial=False):
             values = {"width": 1024, "height": 1024, "num_inference_steps": 28, "guidance_scale": 3.5, **values}
         _, arguments = build_image_request(model, gen.prompt, values,
                                             source_urls=["input"] * len(inputs or []) if kind == "edit" else None)
-        settings = {k: v for k, v in arguments.items() if k not in ("prompt", "negative_prompt", "image_url", "image_urls", "loras")}
+        settings = {k: v for k, v in arguments.items() if k not in ("prompt", "negative_prompt", "image_url", "image_urls", "reference_image_urls", "loras")}
     return {"version": 1, "job_type": kind, "date": gen.created_at.isoformat() + ("Z" if gen.created_at.tzinfo is None else ""),
             "prompt": gen.prompt, "negative_prompt": gen.negative_prompt,
             "model": {"key": key, "name": model.label if model else key}, "provider": gen.generation_provider,

@@ -152,6 +152,7 @@ class ImageModel:
     """Declarative request params the model accepts (JSON-serializable)."""
     fixed_payload: dict = field(default_factory=dict)
     """Keys always sent with the request."""
+    jobs: tuple[str, ...] = ()
     max_source_images: int = 0
     uses_single_image_url: bool = False
     max_num_images: int = 0
@@ -178,8 +179,9 @@ class ImageModel:
             "trainable": self.trainable,
             "params": self.params,
             "fixed_payload": self.fixed_payload,
+            "jobs": list(self.jobs),
             "max_source_images": self.max_source_images,
-            "max_num_images": self.max_num_images if self.kind == "edit" else 8,
+            "max_num_images": (self.max_num_images or 1) if self.kind == "edit" else 8,
             "uses_single_image_url": self.uses_single_image_url,
             "base_price": self.base_price,
             "price_param": self.price_param,
@@ -244,7 +246,14 @@ def _gen(key, label, vendor, endpoint, params, base_price, **kw) -> ImageModel:
 
 
 def _edit(key, label, vendor, endpoint, params, base_price, max_sources, max_num_images=4, **kw) -> ImageModel:
-    return ImageModel(key=key, label=label, vendor=vendor, kind=_EDIT, endpoint=endpoint, params=params,
+    jobs = ["describe"]
+    if key in ("gpt-image-2-edit", "gpt-image-2.5-flare-edit", "gpt-image-2.5-sunburst-edit", "ideogram-v4.5-edit"):
+        jobs.append("paint")
+    if key == "flux-3-klein-edit":
+        jobs.append("objects")
+    if key == "kling-image":
+        jobs.append("subject")
+    return ImageModel(jobs=tuple(jobs), key=key, label=label, vendor=vendor, kind=_EDIT, endpoint=endpoint, params=params,
                       base_price=base_price, max_source_images=max_sources, max_num_images=max_num_images, **kw)
 
 
@@ -347,10 +356,10 @@ IMAGE_MODELS: tuple[ImageModel, ...] = (
     _edit("seedream-5-flash-edit", "Seedream 5 Flash", "bytedance", "bytedance/seedream/v5/flash/edit",
           {"image_size": _size_param("auto_2K", presets=SEEDREAM_SIZES)}, 0.027, 10, fixed_payload=_SAFE),
     _edit("qwen-image-3-edit", "Qwen Image 3", "alibaba", "alibaba/qwen-image-3/edit",
-          {"image_size": _size_param(None), "negative_prompt": {}, "seed": {}}, 0.04, 6,
+          {"image_size": _size_param(None), "negative_prompt": {}, "seed": {}}, 0.04, 3,
           fixed_payload=_SAFE_NOEXP),
     _edit("grok-imagine-quality-edit", "Grok Imagine Quality", "xai", "xai/grok-imagine-image/quality/edit",
-          {"aspect_ratio": _opt(["auto"] + GROK_ASPECTS, "auto"), "resolution": _opt(["1k", "2k"], "1k")}, 0.06, 4,
+          {"aspect_ratio": _opt(["auto"] + GROK_ASPECTS, "auto"), "resolution": _opt(["1k", "2k"], "1k")}, 0.06, 3,
           price_param="resolution", price_table={"1k": 0.06, "2k": 0.08}),
     _edit("grok-imagine-v2-edit", "Grok Imagine v2", "xai", "xai/grok-imagine-image/v2.0/edit",
           {"aspect_ratio": _opt(["auto"] + GROK_ASPECTS, "auto"), "resolution": _opt(["1k", "2k"], "1k")}, 0.07, 4,
@@ -361,7 +370,7 @@ IMAGE_MODELS: tuple[ImageModel, ...] = (
     # The singular image_url endpoint takes exactly one source image.
     _edit("ideogram-v4.5-edit", "Ideogram v4.5", "ideogram", "ideogram/v4.5/edit",
           {"image_size": _size_param("auto", ["auto"]), "quality": _opt(_GPT2_QUALITY, "medium"), "seed": {}},
-          0.06, 1, uses_single_image_url=True, supports_output_format=False,
+          0.06, 5, uses_single_image_url=True, supports_output_format=False,
           price_param="quality", price_table=_IDEOGRAM_TABLE, fixed_payload=_SAFE),
 )
 

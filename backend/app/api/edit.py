@@ -1,9 +1,10 @@
 """Edit API endpoints for AI-powered image editing."""
 import logging
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.api.model_validation import require_image_model, validate_model_params
@@ -24,11 +25,28 @@ SUPPORTED_EDIT_MODELS = set(offered_keys("edit"))
 # --- Schemas ---
 
 
+class OrderedEditSource(BaseModel):
+    type: Literal["gallery", "generated", "upload"]
+    id: int | None = Field(None, gt=0)
+    key: str | None = None
+    name: str | None = None
+
+    @model_validator(mode="after")
+    def validate_reference(self):
+        if self.type == "upload":
+            if not self.key or not self.key.startswith("edit-sources/") or ".." in self.key:
+                raise ValueError("Invalid uploaded source key")
+        elif self.id is None:
+            raise ValueError("Source id is required")
+        return self
+
+
 class EditImageRequest(BaseModel):
     """Request to edit images."""
 
     prompt: str = Field("", max_length=8000)
     negative_prompt: str | None = Field(None, max_length=500)
+    ordered_sources: list[OrderedEditSource] | None = None
     source_image_ids: list[int] | None = None
     source_generated_ids: list[int] | None = None
     source_upload_keys: list[str] | None = None
@@ -90,6 +108,14 @@ async def edit_images(
     if not request.prompt.strip():
         raise HTTPException(status_code=400, detail="Prompt is required for this model")
 
+    if request.num_images > (model.max_num_images or 1):
+        raise HTTPException(status_code=400, detail=f"Maximum {model.max_num_images or 1} outputs for {model.label}")
+    if request.ordered_sources is not None:
+        request.source_image_ids = [s.id for s in request.ordered_sources if s.type == "gallery"]
+        request.source_generated_ids = [s.id for s in request.ordered_sources if s.type == "generated"]
+        request.source_upload_keys = [s.key for s in request.ordered_sources if s.type == "upload"]
+        request.source_upload_names = {s.key: s.name or s.key for s in request.ordered_sources if s.type == "upload"}
+
     # Collect and validate source images
     source_count = 0
     source_refs: dict = {}
@@ -106,6 +132,9 @@ async def edit_images(
         source_count += len(request.source_upload_keys)
         source_refs["upload_keys"] = request.source_upload_keys
         source_refs["upload_names"] = request.source_upload_names or {}
+
+    if request.ordered_sources is not None:
+        source_refs["ordered"] = [s.model_dump(exclude_none=True) for s in request.ordered_sources]
 
     if source_count == 0:
         raise HTTPException(status_code=400, detail="At least one source image is required")
