@@ -553,14 +553,6 @@ function EditPageInner() {
               value={editModel}
               onChange={changeModel}
             />
-            {job === 'subject' && (
-              <label className="block text-xs text-muted-foreground">Output mode
-                <select className="mt-1 w-full rounded border border-input bg-background p-2" value={resultType} onChange={event => setResultType(event.target.value as 'single' | 'series')}>
-                  <option value="single">Single images</option>
-                  <option value="series">Related-image series</option>
-                </select>
-              </label>
-            )}
             <label className="block text-xs text-muted-foreground">
               {job === 'subject' && resultType === 'series' ? 'Series images' : 'Results'}
               <select
