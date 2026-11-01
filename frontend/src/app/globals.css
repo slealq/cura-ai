@@ -298,3 +298,23 @@ input[type="range"]::-moz-range-track {
   .tool-composer > div > div:first-child { min-width: 0; max-width: 100%; }
   .tool-composer > div > div:first-child > button { max-width: 55vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
+
+/* Keep confirmations and job banners above the phone's working area. */
+@media (max-width: 767px) {
+  [data-sonner-toaster][data-x-position='right'] {
+    left: 0 !important;
+    right: 0 !important;
+    top: env(safe-area-inset-top, 0px) !important;
+    width: 100% !important;
+    --width: 100% !important;
+  }
+
+  [data-sonner-toast] {
+    width: 100% !important;
+  }
+}
+
+[data-sonner-toast] [data-button] {
+  min-height: 40px;
+  min-width: 40px;
+}
