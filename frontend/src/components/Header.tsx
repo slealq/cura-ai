@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import SightLabLogo from './SightLabLogo';
 import { Activity, Search, Zap } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { billingApi, jobsApi } from '@/lib/api';
@@ -164,9 +163,7 @@ export default function Header() {
   };
 
   return (
-    <header className="app-header flex h-[52px] shrink-0 items-center gap-3 border-b border-border bg-background px-4">
-      <Link href="/images" aria-label="SightLab library" className="hidden max-md:flex items-center"><SightLabLogo /></Link>
-      <Link href="/search" aria-label="Search" className="hidden max-md:flex items-center justify-center"><Search size={20} /></Link>
+    <header className="app-header hidden md:flex h-[52px] shrink-0 items-center gap-3 border-b border-border bg-background px-4">
       <form onSubmit={handleSearch} className="w-full max-w-md max-md:hidden" role="search">
         <label className="flex h-8 items-center gap-2 rounded-lg border border-border bg-muted px-2.5 text-muted-foreground focus-within:border-selection focus-within:ring-2 focus-within:ring-selection/20">
           <Search className="h-4 w-4 shrink-0" />

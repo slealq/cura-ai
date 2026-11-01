@@ -6,6 +6,8 @@ import { useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { AxiosError } from 'axios';
 import { Toaster, toast } from 'sonner';
+import MobileStatus from '@/components/MobileStatus';
+import Link from 'next/link';
 import MobileNavigation from '@/components/MobileNavigation';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
@@ -55,15 +57,23 @@ function SentryUserSync() {
 function AppShell({ children }: { children: React.ReactNode }) {
   const { resolvedTheme } = useTheme();
   useJobNotifications();
+  const pathname = usePathname();
+  const tool = ['/edit', '/generate', '/vision', '/search'].includes(pathname);
+  const title = ({ '/collection': 'Collection', '/studio': 'Studio', '/account': 'Account', '/edit': 'Edit', '/generate': 'Create', '/vision': 'Vision', '/search': 'Search' } as Record<string, string>)[pathname] ?? pathname.split('/')[1].replace(/^./, c => c.toUpperCase());
 
   return (
     <>
       <SentryUserSync />
-      <div className="app-shell flex h-screen">
+      <div className={`app-shell flex h-screen ${tool ? 'mobile-tool' : ''}`}>
         <Sidebar />
         <MobileNavigation />
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           <Header />
+          <div className="mobile-topbar flex shrink-0 items-center gap-2 border-b border-border px-3 md:hidden">
+            {tool && <Link href={pathname === '/search' ? '/collection' : '/studio'} className="flex min-h-10 items-center text-sm">Back</Link>}
+            <h1 className="text-lg font-semibold">{title}</h1>
+            <MobileStatus />
+          </div>
           <main className="app-main flex-1 overflow-auto px-5 py-5">{children}</main>
         </div>
       </div>
@@ -85,10 +95,14 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   const isPublic = PUBLIC_ROUTES.includes(normalizedPath);
 
   useEffect(() => {
+    if (!isLoading && normalizedPath === '/' && window.matchMedia('(max-width: 767px)').matches) {
+      router.replace(isAuthenticated ? '/collection' : '/login');
+      return;
+    }
     if (!isLoading && !isAuthenticated && !isPublic) {
       router.replace('/login');
     }
-  }, [isLoading, isAuthenticated, isPublic, router]);
+  }, [isLoading, isAuthenticated, isPublic, normalizedPath, router]);
 
   if (isLoading) {
     return (
