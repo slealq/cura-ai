@@ -518,7 +518,7 @@ function EditPageInner() {
   const results = images.length > 0 ? (
     <div aria-label="Results" className="flex shrink-0 items-center gap-1 overflow-x-auto">
       <span className="mr-1 text-xs text-muted-foreground">Results</span>
-      {images.filter(image => image.status !== 'failed').sort((a, b) => b.id - a.id).map((image) => (
+      {[...images].sort((a, b) => b.id - a.id).map((image) => (
         <button
           key={image.id}
           onClick={() => setSelectedImageId(image.id)}
@@ -528,7 +528,9 @@ function EditPageInner() {
           {image.status === 'completed' && image.object_key ? (
             <LibraryImage src={editApi.getImageUrl(image.id)} alt={image.prompt} className="h-full w-full object-cover" />
           ) : image.status === 'failed' ? (
-            <span className="text-xs text-destructive">Failed</span>
+            <span className="flex h-full items-center justify-center p-1 text-center text-[10px] leading-tight text-destructive">
+              {image.error_message?.toLowerCase().includes('content_policy_violation') ? 'Content policy' : 'Failed'}
+            </span>
           ) : <span className="sr-only">Generating</span>}
         </button>
       ))}
@@ -981,7 +983,9 @@ function EditPageInner() {
                 ) : (
                   <div className="flex items-center justify-center h-64 bg-muted/30 rounded-lg">
                     {selectedImage.status === 'failed' ? (
-                      <p className="text-red-600 text-sm">{selectedImage.error_message || 'Edit failed'}</p>
+                      <p className="text-red-600 text-sm">{selectedImage.error_message?.toLowerCase().includes('content_policy_violation')
+                        ? 'The image provider rejected the request due to its content policy.'
+                        : selectedImage.error_message || 'Edit failed'}</p>
                     ) : (
                       <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
                     )}

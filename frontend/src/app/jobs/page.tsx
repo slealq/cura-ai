@@ -132,7 +132,7 @@ export default function JobsPage() {
                   <td data-label="Job" className="px-3 py-2"><button onClick={event => { event.stopPropagation(); setSelectedId(job.id); setShowResults(false); }} className="text-left hover:underline" aria-label={`Inspect job ${job.id}`}><span className="font-mono text-xs text-muted-foreground">#{job.id}</span> <span className="capitalize">{jobTypeLabel(job.job_type)}</span></button></td>
                   <td data-label="Status" className="whitespace-nowrap px-3 py-2"><JobStatus status={job.status} /></td>
                   <td data-label="Progress" className="min-w-[130px] px-3 py-2"><JobProgress job={job} /></td>
-                  <td data-label="Result / error" className="max-w-[220px] truncate px-3 py-2 text-muted-foreground" title={job.error_message || job.image_filename || undefined}>{job.error_message ? <span className="text-danger">{job.error_message}</span> : job.image_filename || (job.status === 'completed' ? 'View results' : '—')}</td>
+                  <td data-label="Result / error" className="max-w-[220px] truncate px-3 py-2 text-muted-foreground" title={job.error_message || job.image_filename || undefined}>{job.error_message ? <span className="text-danger">{job.error_message}</span> : job.image_filename || (typeof job.result?.failed === 'number' && job.result.failed > 0 ? `${job.result.failed} failed` : job.status === 'completed' ? 'View results' : '—')}</td>
                   <td data-label="Cost" className="px-3 py-2"><JobCost job={job} /></td>
                   <td data-label="Started" className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">{job.started_at ? formatDate(job.started_at) : 'Queued'}</td>
                 </tr>)}
