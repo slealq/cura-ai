@@ -526,7 +526,9 @@ function GeneratePageInner() {
                         {image.status === 'completed' && image.object_key ? (
                           <LibraryImage src={generationApi.getImageUrl(image.id)} alt={image.prompt} className="h-full w-full object-contain" />
                         ) : image.status === 'failed' ? (
-                          <span className="block max-w-64 p-3 text-sm text-destructive">{image.error_message || 'Generation failed'}</span>
+                          <span className="block max-w-64 p-3 text-sm text-destructive">{image.error_message?.toLowerCase().includes('content_policy_violation')
+                              ? 'The image provider rejected the request due to its content policy.'
+                              : image.error_message || 'Generation failed'}</span>
                         ) : <span className="block h-full w-full bg-[linear-gradient(100deg,transparent_20%,hsl(var(--muted-foreground)/0.12)_45%,transparent_70%)] bg-[length:220%_100%] motion-safe:animate-[create-shimmer_1.4s_linear_infinite]" />}
                       </button>
                     ))}
@@ -770,7 +772,9 @@ function GeneratePageInner() {
                 ) : (
                   <div className="flex items-center justify-center h-64 bg-muted/30 rounded-lg">
                     {selectedImage.status === 'failed' ? (
-                      <p className="text-red-600 text-sm">{selectedImage.error_message || 'Generation failed'}</p>
+                      <p className="text-red-600 text-sm">{selectedImage.error_message?.toLowerCase().includes('content_policy_violation')
+                        ? 'The image provider rejected the request due to its content policy.'
+                        : selectedImage.error_message || 'Generation failed'}</p>
                     ) : (
                       <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
                     )}
