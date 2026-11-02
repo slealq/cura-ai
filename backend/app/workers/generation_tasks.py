@@ -808,6 +808,25 @@ def _mark_generated_images_cancelled(db: Session, generated_image_ids: list[int]
     _fail_unfinished_images(db, generated_image_ids, "Cancelled by user")
 
 
+def _batch_failure_reason(db: Session, generated_image_ids: list[int]) -> str:
+    """Summarize known provider failures without exposing raw provider errors."""
+    rows = (
+        db.query(GeneratedImage.error_message)
+        .filter(
+            GeneratedImage.id.in_(generated_image_ids),
+            GeneratedImage.status == GenerationStatus.FAILED,
+        )
+        .all()
+    )
+    messages = [row[0].lower() for row in rows if row[0]]
+    if messages and len(messages) == len(generated_image_ids) and all(
+        "content_policy_violation" in msg or "content policy" in msg
+        for msg in messages
+    ):
+        return "The image provider rejected the request due to its content policy."
+    return "All generated images failed. Check individual image errors for details."
+
+
 @celery_app.task(bind=True, acks_late=False, max_retries=0, reject_on_worker_lost=False)
 def batch_generate(self, generated_image_ids: list[int], job_id: int | None = None, user_id: int | None = None, trace_id: str | None = None, session_id: str | None = None) -> dict:
     """
@@ -883,9 +902,14 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
         )
         succeeded = len(generated_image_ids) - failed_count
 
+        all_failed = bool(generated_image_ids) and succeeded == 0
+
         if job:
-            job.status = JobStatus.COMPLETED
+            job.status = JobStatus.FAILED if all_failed else JobStatus.COMPLETED
             job.completed_at = datetime.utcnow()
+            job.error_message = (
+                _batch_failure_reason(db, generated_image_ids) if all_failed else None
+            )
             job.result = {
                 "total": len(generated_image_ids),
                 "succeeded": succeeded,
@@ -896,13 +920,13 @@ def batch_generate(self, generated_image_ids: list[int], job_id: int | None = No
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(
             category=LogCategory.TASK,
-            message=f"Task batch_generate completed in {elapsed:.0f}ms ({succeeded} succeeded, {failed_count} failed)",
+            message=f"Task batch_generate finished in {elapsed:.0f}ms ({succeeded} succeeded, {failed_count} failed)",
             task_name="batch_generate",
             job_id=job_id,
             duration_ms=round(elapsed, 1),
             user_id=user_id,
         )
-        return {"status": "success", "total": len(generated_image_ids), "succeeded": succeeded, "failed": failed_count}
+        return {"status": "failed" if all_failed else "success", "total": len(generated_image_ids), "succeeded": succeeded, "failed": failed_count}
 
     except Exception as e:
         # A failed SQL transaction must be rolled back before recording failure.
@@ -1361,9 +1385,14 @@ def batch_edit(self, generated_image_ids: list[int], job_id: int | None = None, 
         )
         succeeded = len(generated_image_ids) - failed_count
 
+        all_failed = bool(generated_image_ids) and succeeded == 0
+
         if job:
-            job.status = JobStatus.COMPLETED
+            job.status = JobStatus.FAILED if all_failed else JobStatus.COMPLETED
             job.completed_at = datetime.utcnow()
+            job.error_message = (
+                _batch_failure_reason(db, generated_image_ids) if all_failed else None
+            )
             job.result = {
                 "total": len(generated_image_ids),
                 "succeeded": succeeded,
@@ -1374,13 +1403,13 @@ def batch_edit(self, generated_image_ids: list[int], job_id: int | None = None, 
         elapsed = (time.monotonic() - task_start) * 1000
         write_log(
             category=LogCategory.TASK,
-            message=f"Task batch_edit completed in {elapsed:.0f}ms ({succeeded} succeeded, {failed_count} failed)",
+            message=f"Task batch_edit finished in {elapsed:.0f}ms ({succeeded} succeeded, {failed_count} failed)",
             task_name="batch_edit",
             job_id=job_id,
             duration_ms=round(elapsed, 1),
             user_id=user_id,
         )
-        return {"status": "success", "total": len(generated_image_ids), "succeeded": succeeded, "failed": failed_count}
+        return {"status": "failed" if all_failed else "success", "total": len(generated_image_ids), "succeeded": succeeded, "failed": failed_count}
 
     except Exception as e:
         # A failed SQL transaction must be rolled back before recording failure.
